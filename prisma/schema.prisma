@@ -1,0 +1,457 @@
+// ============================================================
+// PRISMA SCHEMA — Portfolio Manager (Argentina)
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum CostMethod {
+  PPP
+  FIFO
+  LIFO
+}
+
+enum VenueType {
+  EXCHANGE
+  OTC
+  CRYPTO
+  BROKER_INTERNAL
+}
+
+enum AssetType {
+  EQUITY
+  BOND
+  COMMODITY
+  INDEX
+  CRYPTO
+  FUND
+  CASH
+}
+
+enum InstrumentType {
+  CEDEAR
+  STOCK_AR
+  BOND_AR
+  LETRA
+  ON
+  FCI
+  STOCK_US
+  ETF
+  CRYPTO
+  STABLECOIN
+  CASH
+  OPTION
+  FUTURE
+}
+
+enum TransactionType {
+  BUY
+  SELL
+  DIVIDEND_CASH
+  DIVIDEND_STOCK
+  COUPON
+  AMORTIZATION
+  INTEREST
+  FEE
+  TAX_WITHHOLDING
+  DEPOSIT
+  WITHDRAWAL
+  FX_CONVERSION
+  SPLIT
+  REVERSE_SPLIT
+  SPINOFF
+  MERGER
+  TRANSFER_IN
+  TRANSFER_OUT
+  ADJUSTMENT
+}
+
+enum TransactionSource {
+  MANUAL
+  IMPORT
+  API
+}
+
+enum ImportStatus {
+  PENDING
+  PREVIEW
+  COMMITTED
+  REVERTED
+  FAILED
+}
+
+enum FxSource {
+  CCL
+  MEP
+  OFICIAL
+  BLUE
+  MAYORISTA
+  CRYPTO
+  BROKER
+}
+
+enum MacroCode {
+  IPC_AR
+  CPI_US
+  MERVAL
+  SP500
+  RIESGO_PAIS
+  UVA
+  CER
+  BADLAR
+}
+
+// ============================================================
+// CATÁLOGOS / DICCIONARIOS
+// ============================================================
+
+model Currency {
+  code     String  @id // "ARS", "USD", "EUR", "USDT", "BTC"
+  name     String
+  symbol   String?
+  decimals Int     @default(2)
+  isCrypto Boolean @default(false)
+  isFiat   Boolean @default(true)
+
+  // relaciones inversas
+  instrumentsByCurrency       Instrument[]
+  portfoliosAsBase            Portfolio[]      @relation("PortfolioBaseCurrency")
+  usersAsDisplay              User[]           @relation("UserDisplayCurrency")
+  brokerAccountsByCurrency    BrokerAccount[]
+  transactionsByCurrency      Transaction[]
+  fxRatesAsBase               FxRate[]         @relation("FxRateBase")
+  fxRatesAsQuote              FxRate[]         @relation("FxRateQuote")
+}
+
+model Venue {
+  code     String    @id // "BYMA", "NYSE", "NASDAQ", "BINANCE"
+  name     String
+  country  String?
+  timezone String
+  type     VenueType
+
+  instruments Instrument[]
+}
+
+model UnderlyingAsset {
+  id      String    @id @default(cuid())
+  ticker  String    @unique // "AAPL", "GGAL", "BTC" — canónico
+  name    String
+  type    AssetType
+  sector  String?
+  country String?
+  isin    String?
+
+  instruments Instrument[]
+
+  @@index([type])
+}
+
+// ============================================================
+// USUARIOS Y PORTFOLIOS
+// ============================================================
+
+model User {
+  id                  String     @id @default(cuid())
+  email               String     @unique
+  passwordHash        String
+  name                String?
+  displayCurrencyCode String     @default("ARS")
+  displayCurrency     Currency   @relation("UserDisplayCurrency", fields: [displayCurrencyCode], references: [code])
+  defaultCostMethod   CostMethod @default(PPP)
+  timezone            String     @default("America/Argentina/Buenos_Aires")
+  emailVerified       DateTime?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  portfolios     Portfolio[]
+  brokerAccounts BrokerAccount[]
+  imports        ImportBatch[]
+  auditLogs      AuditLog[]
+  tags           Tag[]
+}
+
+model Portfolio {
+  id               String     @id @default(cuid())
+  userId           String
+  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name             String
+  description      String?
+  baseCurrencyCode String     @default("ARS")
+  baseCurrency     Currency   @relation("PortfolioBaseCurrency", fields: [baseCurrencyCode], references: [code])
+  costMethod       CostMethod @default(PPP)
+  inceptionDate    DateTime   @default(now())
+  isDefault        Boolean    @default(false)
+  archivedAt       DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  transactions Transaction[]
+  snapshots    PortfolioSnapshot[]
+
+  @@index([userId])
+}
+
+// ============================================================
+// BROKERS Y CUENTAS
+// ============================================================
+
+model Broker {
+  id      String  @id @default(cuid())
+  code    String  @unique // "BALANZ", "IOL", "PPI"
+  name    String
+  enabled Boolean @default(false)
+
+  accounts BrokerAccount[]
+  imports  ImportBatch[]
+}
+
+model BrokerAccount {
+  id                String    @id @default(cuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brokerId          String
+  broker            Broker    @relation(fields: [brokerId], references: [id])
+  name              String
+  currencyCode      String
+  currency          Currency  @relation(fields: [currencyCode], references: [code])
+  externalAccountId String? // ID del broker (si lo expone, útil para imports)
+  archivedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  transactions             Transaction[] @relation("PrimaryAccount")
+  counterpartyTransactions Transaction[] @relation("CounterpartyAccount")
+
+  @@index([userId])
+  @@index([brokerId])
+}
+
+// ============================================================
+// INSTRUMENTOS
+// ============================================================
+
+model Instrument {
+  id                String           @id @default(cuid())
+  ticker            String // ticker como se opera (puede repetirse en distintos venues/currencies)
+  name              String
+  type              InstrumentType
+  venueCode         String?
+  venue             Venue?           @relation(fields: [venueCode], references: [code])
+  currencyCode      String
+  currency          Currency         @relation(fields: [currencyCode], references: [code])
+  underlyingAssetId String?
+  underlyingAsset   UnderlyingAsset? @relation(fields: [underlyingAssetId], references: [id])
+  conversionRatio   Decimal?         @db.Decimal(20, 8) // para CEDEARs
+  isin              String?
+  taxJurisdiction   String? // "AR" | "US" | etc — para reporting impositivo futuro
+  taxExempt         Boolean          @default(false)
+  active            Boolean          @default(true)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  transactions Transaction[]
+  prices       PriceCache[]
+
+  @@unique([ticker, type, venueCode, currencyCode])
+  @@index([type])
+  @@index([underlyingAssetId])
+}
+
+// ============================================================
+// TRANSACCIONES
+// ============================================================
+
+model Transaction {
+  id                    String            @id @default(cuid())
+  portfolioId           String
+  portfolio             Portfolio         @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  brokerAccountId       String
+  brokerAccount         BrokerAccount     @relation("PrimaryAccount", fields: [brokerAccountId], references: [id])
+  instrumentId          String?
+  instrument            Instrument?       @relation(fields: [instrumentId], references: [id])
+  type                  TransactionType
+  tradeDate             DateTime
+  settlementDate        DateTime?
+  quantity              Decimal           @db.Decimal(20, 8)
+  price                 Decimal           @db.Decimal(20, 8)
+  currencyCode          String
+  currency              Currency          @relation(fields: [currencyCode], references: [code])
+  grossAmount           Decimal           @db.Decimal(20, 8)
+  fees                  Decimal           @default(0) @db.Decimal(20, 8)
+  taxes                 Decimal           @default(0) @db.Decimal(20, 8)
+  marketRights          Decimal           @default(0) @db.Decimal(20, 8)
+  netAmount             Decimal           @db.Decimal(20, 8)
+  // FX genérico: cuántas unidades de portfolio.baseCurrency vale 1 unidad de currency
+  fxRateToBaseCurrency  Decimal?          @db.Decimal(20, 8)
+  // Para FX_CONVERSION o TRANSFER entre cuentas (el otro lado de la operación)
+  counterpartyAccountId String?
+  counterpartyAccount   BrokerAccount?    @relation("CounterpartyAccount", fields: [counterpartyAccountId], references: [id])
+  notes                 String?
+  source                TransactionSource @default(MANUAL)
+  importBatchId         String?
+  importBatch           ImportBatch?      @relation(fields: [importBatchId], references: [id])
+  externalId            String? // ID del broker si el reporte lo provee
+  idempotencyHash       String
+  idempotencyVersion    Int               @default(1)
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  tags TransactionTag[]
+
+  @@unique([idempotencyHash, idempotencyVersion])
+  @@index([portfolioId, tradeDate])
+  @@index([instrumentId])
+  @@index([brokerAccountId])
+}
+
+// ============================================================
+// SNAPSHOTS DE PORTFOLIO (histórico EOD)
+// ============================================================
+
+model PortfolioSnapshot {
+  id                String    @id @default(cuid())
+  portfolioId       String
+  portfolio         Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  date              DateTime // EOD UTC
+  totalValueArs     Decimal   @db.Decimal(20, 8)
+  totalValueUsd     Decimal   @db.Decimal(20, 8)
+  cashArs           Decimal   @default(0) @db.Decimal(20, 8)
+  cashUsd           Decimal   @default(0) @db.Decimal(20, 8)
+  netDepositsArs    Decimal   @default(0) @db.Decimal(20, 8) // aportes netos acumulados desde inicio
+  netDepositsUsd    Decimal   @default(0) @db.Decimal(20, 8)
+  twrSinceInception Decimal?  @db.Decimal(20, 8)
+  positions         Json // snapshot completo de posiciones del día
+  createdAt         DateTime  @default(now())
+
+  @@unique([portfolioId, date])
+  @@index([portfolioId, date])
+}
+
+// ============================================================
+// IMPORTS
+// ============================================================
+
+model ImportBatch {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brokerId     String
+  broker       Broker       @relation(fields: [brokerId], references: [id])
+  fileName     String
+  fileHash     String
+  status       ImportStatus @default(PENDING)
+  rowsTotal    Int          @default(0)
+  rowsImported Int          @default(0)
+  rowsSkipped  Int          @default(0)
+  rawSummary   Json?
+  createdAt    DateTime     @default(now())
+  committedAt  DateTime?
+
+  transactions Transaction[]
+
+  @@index([userId])
+}
+
+// ============================================================
+// PRECIOS Y FX
+// ============================================================
+
+model PriceCache {
+  id           String     @id @default(cuid())
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  datetime     DateTime
+  open         Decimal?   @db.Decimal(20, 8)
+  high         Decimal?   @db.Decimal(20, 8)
+  low          Decimal?   @db.Decimal(20, 8)
+  close        Decimal    @db.Decimal(20, 8)
+  volume       Decimal?   @db.Decimal(20, 8)
+  source       String
+
+  @@unique([instrumentId, datetime, source])
+  @@index([instrumentId, datetime])
+}
+
+model FxRate {
+  id                String   @id @default(cuid())
+  date              DateTime
+  baseCurrencyCode  String // "USD"
+  baseCurrency      Currency @relation("FxRateBase", fields: [baseCurrencyCode], references: [code])
+  quoteCurrencyCode String // "ARS"  → 1 USD = mid ARS
+  quoteCurrency     Currency @relation("FxRateQuote", fields: [quoteCurrencyCode], references: [code])
+  source            FxSource
+  buy               Decimal? @db.Decimal(20, 8)
+  sell              Decimal? @db.Decimal(20, 8)
+  mid               Decimal  @db.Decimal(20, 8)
+
+  @@unique([date, baseCurrencyCode, quoteCurrencyCode, source])
+  @@index([baseCurrencyCode, quoteCurrencyCode, date])
+}
+
+// ============================================================
+// MACRO
+// ============================================================
+
+model MacroSeries {
+  id    String    @id @default(cuid())
+  code  MacroCode
+  date  DateTime
+  value Decimal   @db.Decimal(20, 8)
+
+  @@unique([code, date])
+  @@index([code, date])
+}
+
+// ============================================================
+// TAGS
+// ============================================================
+
+model Tag {
+  id     String  @id @default(cuid())
+  userId String
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name   String
+  color  String?
+
+  transactions TransactionTag[]
+
+  @@unique([userId, name])
+}
+
+model TransactionTag {
+  transactionId String
+  tagId         String
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  tag           Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([transactionId, tagId])
+}
+
+// ============================================================
+// AUDITORÍA
+// ============================================================
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
