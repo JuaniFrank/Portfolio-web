@@ -1,11 +1,11 @@
 "use server";
 
 import { getCurrentUser } from "@/lib/auth";
+import { refreshLatestQuotes, type InstrumentForQuote } from "@/lib/market/quotes";
 import { prisma } from "@/lib/prisma";
 import {
   buildHoldings,
   computePortfolioSummary,
-  type PriceByInstrument,
 } from "@/lib/transactions/holdings";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
 import type { TradeHistoryRow, TransactionsPageData } from "@/lib/transactions/types";
@@ -97,20 +97,17 @@ export async function getTransactionsPageDataAction(): Promise<
     });
   }
 
-  const instrumentIds = [...new Set(tradesForHoldings.map((t) => t.instrumentId))];
-  const latestPrices: PriceByInstrument = new Map();
-
-  if (instrumentIds.length > 0) {
-    const prices = await prisma.priceCache.findMany({
-      where: { instrumentId: { in: instrumentIds } },
-      orderBy: { datetime: "desc" },
-      distinct: ["instrumentId"],
-      select: { instrumentId: true, close: true },
-    });
-    for (const p of prices) {
-      latestPrices.set(p.instrumentId, p.close.toString());
+  const uniqueInstruments = new Map<string, InstrumentForQuote>();
+  for (const t of tradesForHoldings) {
+    if (!uniqueInstruments.has(t.instrumentId)) {
+      uniqueInstruments.set(t.instrumentId, {
+        id: t.instrumentId,
+        ticker: t.ticker,
+        type: t.instrumentType,
+      });
     }
   }
+  const { prices: latestPrices } = await refreshLatestQuotes([...uniqueInstruments.values()]);
 
   const holdings = buildHoldings(tradesForHoldings, latestPrices);
   const summaryBase = computePortfolioSummary(holdings);
