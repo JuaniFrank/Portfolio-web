@@ -170,7 +170,6 @@ function MonthStrip({
 }
 
 function MonthDetail({ month, currency }: { month: DividendMonth; currency: ViewCurrency }) {
-  console.log({ month });
   const isArs = currency === "ARS";
   if (month.received.length === 0 && month.upcoming.length === 0) {
     return (
