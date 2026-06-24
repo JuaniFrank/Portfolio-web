@@ -1,7 +1,12 @@
 import Decimal from "decimal.js";
 import type { InstrumentType } from "@/lib/generated/prisma";
 import type { DividendCurrency, UpcomingDividend } from "./types";
-import { buildYahooSymbol, fetchYahooDividends, type YahooDividendEvent } from "@/lib/market/yahoo";
+import {
+  buildYahooSymbol,
+  fetchYahooDividends,
+  fetchYahooQuote,
+  type YahooDividendEvent,
+} from "@/lib/market/yahoo";
 
 export type HoldingForForecast = {
   ticker: string;
@@ -13,7 +18,6 @@ export type HoldingForForecast = {
 
 const MS_PER_DAY = 86_400_000;
 const ARGENTINIAN_TYPES = new Set<InstrumentType>([
-  "CEDEAR",
   "STOCK_AR",
   "BOND_AR",
   "LETRA",
@@ -46,8 +50,147 @@ export type ForecastResult = {
   errors: string[];
 };
 
+/**
+ * Para CEDEARs derivamos el ratio (cuántos CEDEARs equivalen a 1 acción USA)
+ * a partir del arbitraje vigente: ratio = (priceUsd × cclToday) / priceArs.
+ *
+ * Esto evita mantener tablas hardcodeadas y se auto-corrige si la relación
+ * cambia. Si falta cualquier insumo (CCL, quotes) caemos al método legacy
+ * (PM.BA en ARS) para no perder la estimación.
+ */
+async function forecastCedear(
+  h: HoldingForForecast,
+  qty: Decimal,
+  cclToday: number | null,
+  now: number,
+  horizonMs: number
+): Promise<UpcomingDividend[]> {
+  const usaSymbol = h.ticker.trim().toUpperCase();
+  const baSymbol = `${usaSymbol}.BA`;
+
+  const [usaDivResult, usaQuoteResult, baQuoteResult] = await Promise.allSettled([
+    fetchYahooDividends(usaSymbol),
+    fetchYahooQuote(usaSymbol),
+    fetchYahooQuote(baSymbol),
+  ]);
+
+  if (
+    usaDivResult.status !== "fulfilled" ||
+    usaQuoteResult.status !== "fulfilled" ||
+    baQuoteResult.status !== "fulfilled" ||
+    !cclToday ||
+    cclToday <= 0
+  ) {
+    // No tenemos data suficiente para el path nuevo — caemos al legacy.
+    return forecastFromArsCedear(h, qty, now, horizonMs);
+  }
+
+  const usaDivs = usaDivResult.value.dividends;
+  if (usaDivs.length === 0) return [];
+
+  const priceUsd = usaQuoteResult.value.price;
+  const priceArs = baQuoteResult.value.price;
+  if (priceUsd <= 0 || priceArs <= 0) return [];
+
+  const ratio = Math.round((priceUsd * cclToday) / priceArs);
+  if (!Number.isFinite(ratio) || ratio < 1) return [];
+
+  const last = usaDivs[usaDivs.length - 1]!;
+  const lastUsdPerShare = new Decimal(last.amount);
+  const perCedearUsd = lastUsdPerShare.div(ratio);
+  const cadenceDays = averageIntervalDays(usaDivs);
+
+  return projectFutureDividends({
+    ticker: usaSymbol,
+    instrumentName: h.instrumentName,
+    amountPerUnit: perCedearUsd,
+    qty,
+    lastTimestampMs: last.timestamp * 1000,
+    cadenceDays,
+    currency: "USD",
+    now,
+    horizonMs,
+  });
+}
+
+/** Camino legacy para STOCK_AR/USA o cuando falla el path con ratio derivado. */
+async function forecastFromArsCedear(
+  h: HoldingForForecast,
+  qty: Decimal,
+  now: number,
+  horizonMs: number
+): Promise<UpcomingDividend[]> {
+  const symbol = buildYahooSymbol(h.ticker, ARGENTINIAN_TYPES.has(h.instrumentType));
+  const { dividends, currency } = await fetchYahooDividends(symbol);
+  if (dividends.length === 0) return [];
+
+  const last = dividends[dividends.length - 1]!;
+  const cadenceDays = averageIntervalDays(dividends);
+  return projectFutureDividends({
+    ticker: h.ticker.toUpperCase(),
+    instrumentName: h.instrumentName,
+    amountPerUnit: new Decimal(last.amount),
+    qty,
+    lastTimestampMs: last.timestamp * 1000,
+    cadenceDays,
+    currency: pickCurrency(currency),
+    now,
+    horizonMs,
+  });
+}
+
+function projectFutureDividends(args: {
+  ticker: string;
+  instrumentName: string | null;
+  amountPerUnit: Decimal;
+  qty: Decimal;
+  lastTimestampMs: number;
+  cadenceDays: number | null;
+  currency: DividendCurrency;
+  now: number;
+  horizonMs: number;
+}): UpcomingDividend[] {
+  const { amountPerUnit, qty, lastTimestampMs, cadenceDays, now, horizonMs } = args;
+  const projections: UpcomingDividend[] = [];
+
+  if (!cadenceDays) {
+    const nextTs = lastTimestampMs + 365 * MS_PER_DAY;
+    if (nextTs > now && nextTs - now <= horizonMs) {
+      projections.push(makeProjection(args, amountPerUnit, qty, nextTs));
+    }
+    return projections;
+  }
+
+  let nextTs = lastTimestampMs + cadenceDays * MS_PER_DAY;
+  while (nextTs <= now) nextTs += cadenceDays * MS_PER_DAY;
+  while (nextTs - now <= horizonMs) {
+    projections.push(makeProjection(args, amountPerUnit, qty, nextTs));
+    nextTs += cadenceDays * MS_PER_DAY;
+  }
+  return projections;
+}
+
+function makeProjection(
+  args: { ticker: string; instrumentName: string | null; currency: DividendCurrency },
+  amountPerUnit: Decimal,
+  qty: Decimal,
+  ts: number
+): UpcomingDividend {
+  return {
+    ticker: args.ticker,
+    instrumentName: args.instrumentName,
+    estimatedDate: new Date(ts).toISOString(),
+    estimatedAmountPerShare: amountPerUnit.toFixed(4),
+    quantity: qty.toFixed(4).replace(/\.?0+$/, ""),
+    estimatedTotal: amountPerUnit.mul(qty).toFixed(2),
+    currencyCode: args.currency,
+    isEstimate: true,
+  };
+}
+
 export async function forecastUpcomingDividends(
   holdings: HoldingForForecast[],
+  cclToday: number | null,
   horizonMonths = 6
 ): Promise<ForecastResult> {
   const errors: string[] = [];
@@ -58,55 +201,13 @@ export async function forecastUpcomingDividends(
     const qty = new Decimal(h.quantity);
     if (qty.lte(0)) return [];
 
-    const symbol = buildYahooSymbol(h.ticker, ARGENTINIAN_TYPES.has(h.instrumentType));
     try {
-      const { dividends, currency } = await fetchYahooDividends(symbol);
-      if (dividends.length === 0) return [];
-
-      const last = dividends[dividends.length - 1]!;
-      const cadenceDays = averageIntervalDays(dividends);
-      const lastAmount = new Decimal(last.amount);
-      const ccy = pickCurrency(currency);
-
-      const projections: UpcomingDividend[] = [];
-      if (!cadenceDays) {
-        const nextTs = last.timestamp * 1000 + 365 * MS_PER_DAY;
-        if (nextTs > now && nextTs - now <= horizonMs) {
-          projections.push({
-            ticker: h.ticker.toUpperCase(),
-            instrumentName: h.instrumentName,
-            estimatedDate: new Date(nextTs).toISOString(),
-            estimatedAmountPerShare: lastAmount.toFixed(4),
-            quantity: qty.toFixed(4).replace(/\.?0+$/, ""),
-            estimatedTotal: lastAmount.mul(qty).toFixed(2),
-            currencyCode: ccy,
-            isEstimate: true,
-          });
-        }
-        return projections;
+      if (h.instrumentType === "CEDEAR") {
+        return await forecastCedear(h, qty, cclToday, now, horizonMs);
       }
-
-      let nextTs = last.timestamp * 1000 + cadenceDays * MS_PER_DAY;
-      let amount = lastAmount;
-      while (nextTs <= now) {
-        nextTs += cadenceDays * MS_PER_DAY;
-      }
-      while (nextTs - now <= horizonMs) {
-        projections.push({
-          ticker: h.ticker.toUpperCase(),
-          instrumentName: h.instrumentName,
-          estimatedDate: new Date(nextTs).toISOString(),
-          estimatedAmountPerShare: amount.toFixed(4),
-          quantity: qty.toFixed(4).replace(/\.?0+$/, ""),
-          estimatedTotal: amount.mul(qty).toFixed(2),
-          currencyCode: ccy,
-          isEstimate: true,
-        });
-        nextTs += cadenceDays * MS_PER_DAY;
-      }
-      return projections;
+      return await forecastFromArsCedear(h, qty, now, horizonMs);
     } catch (err) {
-      errors.push(`${symbol}: ${err instanceof Error ? err.message : String(err)}`);
+      errors.push(`${h.ticker}: ${err instanceof Error ? err.message : String(err)}`);
       return [];
     }
   });

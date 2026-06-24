@@ -104,7 +104,7 @@ export async function getDividendsPageDataAction(): Promise<
     quantity: h.quantity,
   }));
 
-  const { upcoming, errors } = await forecastUpcomingDividends(holdings, 6);
+  const { upcoming, errors } = await forecastUpcomingDividends(holdings, cclToday, 6);
 
   return buildDividendsPageData({
     received,
