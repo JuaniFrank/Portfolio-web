@@ -306,6 +306,10 @@ model Transaction {
   netAmount             Decimal           @db.Decimal(20, 8)
   // FX genérico: cuántas unidades de portfolio.baseCurrency vale 1 unidad de currency
   fxRateToBaseCurrency  Decimal?          @db.Decimal(20, 8)
+  // Código de especie reportado por el broker en la columna "Moneda" (ej. Balanz exporta
+  // "Dólares C.V. 7000" para dólares cable de origen exterior). NO es una tasa de cambio;
+  // se persiste para trazabilidad y posible uso futuro.
+  brokerFxRate          Decimal?          @db.Decimal(20, 8)
   // Para FX_CONVERSION o TRANSFER entre cuentas (el otro lado de la operación)
   counterpartyAccountId String?
   counterpartyAccount   BrokerAccount?    @relation("CounterpartyAccount", fields: [counterpartyAccountId], references: [id])

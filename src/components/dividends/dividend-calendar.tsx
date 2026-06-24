@@ -93,21 +93,24 @@ function MonthStrip({
   onSelect: (i: number) => void;
   todayKey: string;
 }) {
+  const isArs = currency === "ARS";
+  const netField = isArs ? ("netArs" as const) : ("netUsd" as const);
+
   const maxIntensity = useMemo(() => {
     let max = 0;
     for (const m of months) {
       const total =
-        m.received.reduce((s, r) => s + Number(r.netAmount), 0) +
+        m.received.reduce((s, r) => s + Number(r[netField]), 0) +
         m.upcoming.reduce((s, u) => s + Number(u.estimatedTotal), 0);
       if (total > max) max = total;
     }
     return max;
-  }, [months]);
+  }, [months, netField]);
 
   return (
     <div className="grid grid-cols-3 gap-2 sm:grid-cols-6 lg:grid-cols-12">
       {months.map((m, i) => {
-        const totalReceived = m.received.reduce((s, r) => s + Number(r.netAmount), 0);
+        const totalReceived = m.received.reduce((s, r) => s + Number(r[netField]), 0);
         const totalUpcoming = m.upcoming.reduce((s, u) => s + Number(u.estimatedTotal), 0);
         const total = totalReceived + totalUpcoming;
         const intensity = maxIntensity > 0 ? total / maxIntensity : 0;
@@ -156,9 +159,7 @@ function MonthStrip({
                 {!hasPayments ? "—" : null}
               </span>
               {total > 0 ? (
-                <span className="font-mono text-zinc-400">
-                  {formatMoney(total, currency)}
-                </span>
+                <span className="font-mono text-zinc-400">{formatMoney(total, currency)}</span>
               ) : null}
             </div>
           </button>
@@ -169,6 +170,7 @@ function MonthStrip({
 }
 
 function MonthDetail({ month, currency }: { month: DividendMonth; currency: ViewCurrency }) {
+  console.log({ month });
   const isArs = currency === "ARS";
   if (month.received.length === 0 && month.upcoming.length === 0) {
     return (
@@ -181,14 +183,14 @@ function MonthDetail({ month, currency }: { month: DividendMonth; currency: View
   return (
     <div className="grid gap-3 md:grid-cols-2">
       {month.received.map((r) => {
-        const gross = isArs ? r.grossAmount : r.grossAmount;
-        const tax = isArs ? r.taxAmount : r.taxAmount;
-        const net = isArs ? r.netAmount : r.netAmount;
+        const gross = r.currencyCode === "ARS" ? r.grossArs : r.grossUsd;
+        // const tax = r.currencyCode === "ARS" ? r.taxArs : r.taxUsd;
+        const tax = r.taxArs;
+        const net = r.currencyCode === "ARS" ? r.netArs : r.netUsd;
+
+        console.log({ gross });
         return (
-          <div
-            key={r.id}
-            className="rounded-md border border-emerald-900/50 bg-emerald-950/20 p-3"
-          >
+          <div key={r.id} className="rounded-md border border-emerald-900/50 bg-emerald-950/20 p-3">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
                 <TickerAvatar ticker={r.ticker} />
@@ -202,7 +204,7 @@ function MonthDetail({ month, currency }: { month: DividendMonth; currency: View
               </div>
               <div className="text-right">
                 <p className="font-mono text-sm font-semibold text-emerald-400">
-                  {formatMoney(net, r.currencyCode)}
+                  {formatMoney(net, currency)}
                 </p>
                 <p className="text-[11px] text-zinc-500">neto</p>
               </div>
@@ -210,15 +212,11 @@ function MonthDetail({ month, currency }: { month: DividendMonth; currency: View
             <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-zinc-400">
               <div className="rounded bg-zinc-900/60 px-2 py-1">
                 <span className="text-zinc-500">Bruto:</span>{" "}
-                <span className="font-mono text-zinc-200">
-                  {formatMoney(gross, r.currencyCode)}
-                </span>
+                <span className="font-mono text-zinc-200">{formatMoney(gross, currency)}</span>
               </div>
               <div className="rounded bg-zinc-900/60 px-2 py-1">
                 <span className="text-zinc-500">Ret.:</span>{" "}
-                <span className="font-mono text-rose-300">
-                  {formatMoney(tax, r.currencyCode)}
-                </span>
+                <span className="font-mono text-rose-300">{formatMoney(tax, currency)}</span>
               </div>
             </div>
           </div>

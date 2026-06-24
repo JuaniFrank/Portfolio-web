@@ -134,6 +134,7 @@ export async function commitImportBatch(input: CommitImportInput): Promise<Commi
             currencyCode: parsed.currencyCode,
             grossAmount: new Prisma.Decimal(parsed.grossAmount),
             netAmount: new Prisma.Decimal(parsed.netAmount),
+            brokerFxRate: parsed.brokerFxRate ? new Prisma.Decimal(parsed.brokerFxRate) : null,
             source: TransactionSource.IMPORT,
             importBatchId: batch.id,
             externalId: parsed.externalId,

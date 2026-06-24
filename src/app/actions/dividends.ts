@@ -1,62 +1,17 @@
 "use server";
 
-import Decimal from "decimal.js";
 import { getCurrentUser } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { aggregateReceivedDividends } from "@/lib/dividends/aggregate";
 import { buildDividendsPageData } from "@/lib/dividends/build";
 import { forecastUpcomingDividends, type HoldingForForecast } from "@/lib/dividends/forecast";
 import type { DividendsPageData } from "@/lib/dividends/types";
+import { fetchCclQuote } from "@/lib/market/dolarapi";
+import { prisma } from "@/lib/prisma";
+import { buildHoldings, type TradeForHoldings } from "@/lib/transactions/holdings";
 import { TransactionType, type InstrumentType } from "@/lib/generated/prisma";
 
 const HOLDABLE_TYPES: InstrumentType[] = ["STOCK_AR", "CEDEAR", "STOCK_US", "ETF"];
-
-function computeHoldings(
-  trades: Array<{
-    ticker: string;
-    instrumentName: string;
-    instrumentType: InstrumentType;
-    type: TransactionType;
-    quantity: string;
-    tradeDate: string;
-  }>
-): HoldingForForecast[] {
-  const byTicker = new Map<
-    string,
-    { ticker: string; instrumentName: string; instrumentType: InstrumentType; qty: Decimal }
-  >();
-
-  const sorted = [...trades].sort(
-    (a, b) => new Date(a.tradeDate).getTime() - new Date(b.tradeDate).getTime()
-  );
-
-  for (const t of sorted) {
-    const key = t.ticker.toUpperCase();
-    const current = byTicker.get(key) ?? {
-      ticker: key,
-      instrumentName: t.instrumentName,
-      instrumentType: t.instrumentType,
-      qty: new Decimal(0),
-    };
-    const q = new Decimal(t.quantity).abs();
-    if (t.type === TransactionType.BUY) {
-      current.qty = current.qty.plus(q);
-    } else if (t.type === TransactionType.SELL) {
-      current.qty = current.qty.minus(q);
-      if (current.qty.lt(0)) current.qty = new Decimal(0);
-    }
-    byTicker.set(key, current);
-  }
-
-  return Array.from(byTicker.values())
-    .filter((h) => h.qty.gt(0))
-    .map((h) => ({
-      ticker: h.ticker,
-      instrumentName: h.instrumentName,
-      instrumentType: h.instrumentType,
-      quantity: h.qty.toFixed(8).replace(/\.?0+$/, ""),
-    }));
-}
 
 export async function getDividendsPageDataAction(): Promise<
   DividendsPageData | { error: "unauthorized" }
@@ -64,7 +19,7 @@ export async function getDividendsPageDataAction(): Promise<
   const user = await getCurrentUser();
   if (!user) return { error: "unauthorized" };
 
-  const [dividendsAndTaxes, tradeRows, latestFx] = await Promise.all([
+  const [dividendsAndTaxes, tradeRows, cclQuote, eventRows] = await Promise.all([
     prisma.transaction.findMany({
       where: {
         portfolio: { userId: user.id },
@@ -80,34 +35,74 @@ export async function getDividendsPageDataAction(): Promise<
         portfolio: { userId: user.id },
         type: { in: [TransactionType.BUY, TransactionType.SELL] },
         instrument: { type: { in: HOLDABLE_TYPES } },
+        instrumentId: { not: null },
       },
       orderBy: { tradeDate: "asc" },
       include: {
         instrument: { select: { id: true, ticker: true, type: true, name: true } },
       },
     }),
-    prisma.fxRate.findFirst({
-      where: { baseCurrencyCode: "USD", quoteCurrencyCode: "ARS" },
-      orderBy: { date: "desc" },
+    fetchCclQuote(),
+    prisma.corporateEvent.findMany({
+      where: {
+        instrument: {
+          transactions: { some: { portfolio: { userId: user.id } } },
+        },
+      },
+      orderBy: { effectiveDate: "asc" },
+      select: {
+        instrumentId: true,
+        eventType: true,
+        effectiveDate: true,
+        numerator: true,
+        denominator: true,
+      },
     }),
   ]);
 
-  const cclRate = latestFx ? Number(latestFx.mid) : null;
+  const cclToday = cclQuote?.mid ?? null;
 
   const received = aggregateReceivedDividends(dividendsAndTaxes);
 
-  const holdings = computeHoldings(
-    tradeRows
-      .filter((r) => r.instrument)
-      .map((r) => ({
-        ticker: r.instrument!.ticker,
-        instrumentName: r.instrument!.name,
-        instrumentType: r.instrument!.type,
-        type: r.type,
-        quantity: r.quantity.toString(),
-        tradeDate: r.tradeDate.toISOString(),
-      }))
-  );
+  // Build events map: instrumentId → events sorted ascending by effectiveDate
+  const eventsMap = new Map<string, CorporateEventForBuilder[]>();
+  for (const e of eventRows) {
+    const list = eventsMap.get(e.instrumentId) ?? [];
+    list.push({
+      instrumentId: e.instrumentId,
+      eventType: e.eventType,
+      effectiveDate: e.effectiveDate.toISOString().slice(0, 10),
+      numerator: e.numerator.toString(),
+      denominator: e.denominator.toString(),
+    });
+    eventsMap.set(e.instrumentId, list);
+  }
+
+  // Map to TradeForHoldings (price + netAmount required for buildHoldings)
+  const tradesForHoldings: TradeForHoldings[] = tradeRows
+    .filter((r) => r.instrument)
+    .map((r) => ({
+      instrumentId: r.instrument!.id,
+      ticker: r.instrument!.ticker,
+      instrumentType: r.instrument!.type,
+      instrumentName: r.instrument!.name,
+      type: r.type as "BUY" | "SELL",
+      quantity: r.quantity.toString(),
+      price: r.price.toString(),
+      netAmount: r.netAmount.toString(),
+      tradeDate: r.tradeDate.toISOString(),
+    }));
+
+  // Use empty prices map — dividends page only needs quantity, not market value
+  const holdingRows = buildHoldings(tradesForHoldings, new Map(), eventsMap);
+
+  // Map HoldingRow → HoldingForForecast
+  const holdings: HoldingForForecast[] = holdingRows.map((h) => ({
+    ticker: h.ticker,
+    instrumentName: h.instrumentName,
+    instrumentType: h.instrumentType,
+    quantity: h.quantity,
+  }));
 
   const { upcoming, errors } = await forecastUpcomingDividends(holdings, 6);
 
@@ -119,7 +114,7 @@ export async function getDividendsPageDataAction(): Promise<
       quantity: h.quantity,
       instrumentName: h.instrumentName,
     })),
-    cclRate,
+    cclToday,
     yahooErrors: errors,
   });
 }

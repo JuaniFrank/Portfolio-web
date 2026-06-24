@@ -5,7 +5,7 @@ export function formatMoney(value: string | number, currency: ViewCurrency): str
   return n.toLocaleString("es-AR", {
     style: "currency",
     currency,
-    maximumFractionDigits: currency === "USD" ? 2 : 0,
+    maximumFractionDigits: currency === "USD" ? 2 : 2,
   });
 }
 

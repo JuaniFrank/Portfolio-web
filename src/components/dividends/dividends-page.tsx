@@ -23,7 +23,7 @@ export function DividendsPage({ data }: Props) {
   const [currency, setCurrency] = useState<ViewCurrency>("ARS");
   const [tab, setTab] = useState("calendario");
 
-  const cclMissing = !data.cclRate;
+  const cclMissing = !data.cclToday;
 
   return (
     <div className="space-y-6">
@@ -36,21 +36,21 @@ export function DividendsPage({ data }: Props) {
             aproximadas según la frecuencia histórica de cada empresa.
           </p>
         </div>
-        <CurrencyToggle value={currency} onChange={setCurrency} disabledUsd={cclMissing} />
+        <CurrencyToggle value={currency} onChange={setCurrency} disabledUsd={false} />
       </div>
 
       {cclMissing ? (
         <div className="flex items-start gap-3 rounded-md border border-amber-900/50 bg-amber-950/20 p-3 text-xs text-amber-200">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
-            No hay cotización CCL cargada. Los totales en USD se muestran en cero. Importá o
-            registrá un <code className="rounded bg-amber-950/40 px-1">FxRate</code> USD/ARS
-            para habilitar la vista en dólares.
+            No pudimos obtener la cotización CCL actual desde{" "}
+            <code className="rounded bg-amber-950/40 px-1">dolarapi.com</code>. El total bruto
+            unificado se muestra como —. Los valores nativos en ARS y USD siguen siendo correctos.
           </div>
         </div>
       ) : null}
 
-      <DividendKpiCards kpis={data.kpis} currency={currency} />
+      <DividendKpiCards kpis={data.kpis} currency={currency} cclToday={data.cclToday} />
 
       <DividendCalendar months={data.calendar} currency={currency} />
 

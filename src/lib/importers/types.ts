@@ -32,6 +32,8 @@ export interface ParsedImportRowData {
   netAmount: string;
   externalId: string | null;
   description: string;
+  /** FX embebido por el broker en la fila (ej. CCL del día reportado en "Dólares C.V. 7000"). */
+  brokerFxRate: string | null;
 }
 
 export interface NormalizedImportRow {

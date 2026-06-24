@@ -8,13 +8,21 @@ export type ReceivedDividend = {
   ticker: string;
   instrumentType: InstrumentType | null;
   instrumentName: string | null;
-  /** Monto pagado (siempre positivo). */
-  grossAmount: string;
-  /** Retenciones impositivas asociadas (siempre positivo). 0 si no hay. */
-  taxAmount: string;
-  /** Neto = gross - tax. */
-  netAmount: string;
+  /** Moneda nativa del dividendo (USD para CEDEAR, ARS para acción AR). */
   currencyCode: DividendCurrency;
+  /** Bruto en USD (siempre >= 0). "0.00" si no aplica. */
+  grossUsd: string;
+  /** Bruto en ARS (siempre >= 0). "0.00" si no aplica. */
+  grossArs: string;
+  /** Retención impositiva en USD (siempre >= 0). */
+  taxUsd: string;
+  /** Retención impositiva en ARS — el monto efectivamente debitado por el fisco. */
+  taxArs: string;
+  /** Neto = gross - tax. */
+  netUsd: string;
+  netArs: string;
+  /** CCL USD/ARS del día del pago, embebido por el broker. Null si no hubo embebido. */
+  cclAtPayment: string | null;
 };
 
 export type UpcomingDividend = {
@@ -44,15 +52,29 @@ export type DividendMonth = {
 };
 
 export type DividendKpis = {
+  /** Bruto nativo en ARS (acciones AR). */
   totalGrossArs: string;
-  totalTaxArs: string;
-  totalNetArs: string;
+  /** Bruto nativo en USD (CEDEARs, dólar cable). */
   totalGrossUsd: string;
-  totalTaxUsd: string;
+  /**
+   * Total bruto unificado en ARS usando el CCL del momento.
+   * `totalGrossArs + totalGrossUsd × cclToday`. Null si no hay CCL today.
+   */
+  totalGrossUnifiedArs: string | null;
+  /** Total efectivamente debitado al fisco (ARS), sin conversión. */
+  totalTaxArs: string;
+  /**
+   * Neto en ARS: bruto ARS − tax ARS (acciones AR). NO incluye USD.
+   */
+  totalNetArs: string;
+  /**
+   * Neto en USD: el USD CCL depositado por CEDEARs.
+   * No se le resta tax porque el impuesto se paga en ARS por separado.
+   */
   totalNetUsd: string;
-  /** % retenciones sobre bruto, formato "0.00". */
+  /** % retenciones sobre bruto unificado, formato "0.00". */
   effectiveTaxRate: string;
-  /** Ticker con mayor neto recibido. */
+  /** Ticker con mayor neto (en moneda nativa). */
   topTicker: { ticker: string; netArs: string; netUsd: string } | null;
   /** Cantidad total de pagos recibidos. */
   totalPayments: number;
@@ -101,7 +123,8 @@ export type DividendsPageData = {
   calendar: DividendMonth[];
   received: ReceivedDividend[];
   upcoming: UpcomingDividend[];
-  cclRate: string | null;
+  /** CCL del momento (dolarapi.com → contadoconliqui.mid). Null si la API falló. */
+  cclToday: string | null;
   /** Si hubo errores parciales al traer Yahoo (no rompe la página). */
   yahooErrors: string[];
 };

@@ -132,10 +132,10 @@ export function DividendHistoryTable({
             <TableRow className="hover:bg-transparent">
               <TableHead>Fecha</TableHead>
               <TableHead>Ticker</TableHead>
-              <TableHead>Moneda</TableHead>
-              <TableHead className="text-right">Bruto</TableHead>
-              <TableHead className="text-right">Retención</TableHead>
-              <TableHead className="text-right">Neto</TableHead>
+              <TableHead className="text-right">Cobrado USD</TableHead>
+              <TableHead className="text-right">Cobrado ARS</TableHead>
+              <TableHead className="text-right">Impuesto ARS</TableHead>
+              <TableHead className="text-right">Neto ARS</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -146,29 +146,34 @@ export function DividendHistoryTable({
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="text-sm text-zinc-300">
-                    {formatFullDate(r.tradeDate)}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <TickerAvatar ticker={r.ticker} />
-                      <span className="font-semibold text-zinc-100">{r.ticker}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-sm text-zinc-400">{r.currencyCode}</TableCell>
-                  <TableCell className="text-right font-mono text-sm text-zinc-200">
-                    {formatMoney(r.grossAmount, r.currencyCode)}
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-sm text-rose-300">
-                    {formatMoney(r.taxAmount, r.currencyCode)}
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-sm font-semibold text-emerald-400">
-                    {formatMoney(r.netAmount, r.currencyCode)}
-                  </TableCell>
-                </TableRow>
-              ))
+              filtered.map((r) => {
+                const isCedear = Number(r.grossUsd) > 0;
+                return (
+                  <TableRow key={r.id}>
+                    <TableCell className="text-sm text-zinc-300">
+                      {formatFullDate(r.tradeDate)}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <TickerAvatar ticker={r.ticker} />
+                        <span className="font-semibold text-zinc-100">{r.ticker}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-sm text-zinc-200">
+                      {isCedear ? formatMoney(r.grossUsd, "USD") : "—"}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-sm text-zinc-200">
+                      {isCedear ? "—" : formatMoney(r.grossArs, "ARS")}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-sm text-rose-300">
+                      {Number(r.taxArs) > 0 ? formatMoney(r.taxArs, "ARS") : "—"}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-sm font-semibold text-emerald-400">
+                      {isCedear ? "—" : formatMoney(r.netArs, "ARS")}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>

@@ -29,11 +29,27 @@ export function isBalanzRawRow(row: unknown): row is BalanzRawRow {
   return HEADER_KEYS.every((k) => k in r);
 }
 
+const BROKER_FX_FROM_CURRENCY = /D[oó]lares\s+C\.V\.\s+([\d.,]+)/i;
+
 export function mapBalanzCurrency(moneda: string): string {
-  const m = moneda.trim().toLowerCase();
-  if (m === "pesos") return "ARS";
-  if (m === "dólares" || m.startsWith("dólares")) return "USD";
-  return "ARS";
+  return parseBalanzCurrency(moneda).currency;
+}
+
+export function parseBalanzCurrency(moneda: string): {
+  currency: string;
+  brokerFxRate: string | null;
+} {
+  const raw = moneda.trim();
+  const lower = raw.toLowerCase();
+  if (lower === "pesos") return { currency: "ARS", brokerFxRate: null };
+  const fxMatch = raw.match(BROKER_FX_FROM_CURRENCY);
+  if (fxMatch) {
+    return { currency: "USD", brokerFxRate: fxMatch[1]!.replace(",", ".") };
+  }
+  if (lower === "dólares" || lower.startsWith("dólares")) {
+    return { currency: "USD", brokerFxRate: null };
+  }
+  return { currency: "ARS", brokerFxRate: null };
 }
 
 export function mapBalanzInstrumentType(tipo: string): InstrumentType | null {
@@ -153,7 +169,7 @@ function normalizeQuantity(raw: BalanzRawRow, type: TransactionType): Decimal {
 export function parseBalanzRow(raw: BalanzRawRow, rowNumber: number): NormalizedImportRow {
   const messages: string[] = [];
   const meta = parseBalanzDescription(raw.Descripcion);
-  const type = resolveTransactionType(meta.category, meta.side, raw.Descripcion);
+  let type = resolveTransactionType(meta.category, meta.side, raw.Descripcion);
 
   if (!type) {
     return {
@@ -176,10 +192,24 @@ export function parseBalanzRow(raw: BalanzRawRow, rowNumber: number): Normalized
     };
   }
 
-  const currencyCode = mapBalanzCurrency(raw.Moneda);
+  const { currency: currencyCode, brokerFxRate } = parseBalanzCurrency(raw.Moneda);
   const instrumentType = raw["Tipo de Instrumento"]
     ? mapBalanzInstrumentType(raw["Tipo de Instrumento"])
     : null;
+
+  // Heurística CEDEAR: Balanz reporta el impuesto al dividendo como otra fila
+  // "Dividendo en efectivo / TICKER" pero en Pesos con monto negativo, mientras que
+  // el depósito del dividendo viene en "Dólares C.V. NNNN" con monto positivo.
+  // Reclasificamos la fila negativa en pesos como TAX_WITHHOLDING para que el agregador
+  // las empareje correctamente y no aparezcan dos "dividendos" para el mismo evento.
+  if (
+    type === TransactionType.DIVIDEND_CASH &&
+    instrumentType === InstrumentType.CEDEAR &&
+    currencyCode === "ARS" &&
+    raw.Importe < 0
+  ) {
+    type = TransactionType.TAX_WITHHOLDING;
+  }
 
   const ticker = raw.Ticker?.trim() || meta.tickerFromDesc?.trim() || null;
 
@@ -213,6 +243,7 @@ export function parseBalanzRow(raw: BalanzRawRow, rowNumber: number): Normalized
     netAmount: toDecimalString(raw.Importe),
     externalId: meta.externalId ?? null,
     description: raw.Descripcion,
+    brokerFxRate,
   };
 
   let status: ImportRowStatus = "valid";

@@ -34,20 +34,6 @@ function monthLabel(year: number, month: number): string {
   return `${MONTH_LABELS[month - 1]} ${String(year).slice(2)}`;
 }
 
-function toArs(amount: string, currency: "ARS" | "USD", cclRate: number | null): Decimal {
-  const value = new Decimal(amount);
-  if (currency === "ARS") return value;
-  if (!cclRate || cclRate <= 0) return new Decimal(0);
-  return value.mul(cclRate);
-}
-
-function toUsd(amount: string, currency: "ARS" | "USD", cclRate: number | null): Decimal {
-  const value = new Decimal(amount);
-  if (currency === "USD") return value;
-  if (!cclRate || cclRate <= 0) return new Decimal(0);
-  return value.div(cclRate);
-}
-
 function pickHoldingQuantity(
   holdings: Array<{ ticker: string; quantity: string }>,
   ticker: string
@@ -57,19 +43,41 @@ function pickHoldingQuantity(
   return found?.quantity ?? "0";
 }
 
+function upcomingToArs(
+  amount: string,
+  currency: "ARS" | "USD",
+  cclToday: number | null
+): Decimal {
+  const value = new Decimal(amount);
+  if (currency === "ARS") return value;
+  if (!cclToday || cclToday <= 0) return new Decimal(0);
+  return value.mul(cclToday);
+}
+
+function upcomingToUsd(
+  amount: string,
+  currency: "ARS" | "USD",
+  cclToday: number | null
+): Decimal {
+  const value = new Decimal(amount);
+  if (currency === "USD") return value;
+  if (!cclToday || cclToday <= 0) return new Decimal(0);
+  return value.div(cclToday);
+}
+
 export function buildDividendsPageData(args: {
   received: ReceivedDividend[];
   upcoming: UpcomingDividend[];
   holdings: Array<{ ticker: string; quantity: string; instrumentName: string | null }>;
-  cclRate: number | null;
+  /** CCL del momento, traído de dolarapi. Solo para unificar totales mixtos. */
+  cclToday: number | null;
   yahooErrors: string[];
 }): DividendsPageData {
-  const { received, upcoming, holdings, cclRate, yahooErrors } = args;
+  const { received, upcoming, holdings, cclToday, yahooErrors } = args;
 
   let totalGrossArs = new Decimal(0);
-  let totalTaxArs = new Decimal(0);
   let totalGrossUsd = new Decimal(0);
-  let totalTaxUsd = new Decimal(0);
+  let totalTaxArs = new Decimal(0);
 
   const nowYear = new Date().getUTCFullYear();
   let ytdNetArs = new Decimal(0);
@@ -99,15 +107,14 @@ export function buildDividendsPageData(args: {
   const byMonth = new Map<string, MonthAgg>();
 
   for (const r of received) {
-    const grossArs = toArs(r.grossAmount, r.currencyCode, cclRate);
-    const taxArs = toArs(r.taxAmount, r.currencyCode, cclRate);
-    const grossUsd = toUsd(r.grossAmount, r.currencyCode, cclRate);
-    const taxUsd = toUsd(r.taxAmount, r.currencyCode, cclRate);
+    const grossArs = new Decimal(r.grossArs);
+    const taxArs = new Decimal(r.taxArs);
+    const grossUsd = new Decimal(r.grossUsd);
+    const taxUsd = new Decimal(r.taxUsd);
 
     totalGrossArs = totalGrossArs.plus(grossArs);
-    totalTaxArs = totalTaxArs.plus(taxArs);
     totalGrossUsd = totalGrossUsd.plus(grossUsd);
-    totalTaxUsd = totalTaxUsd.plus(taxUsd);
+    totalTaxArs = totalTaxArs.plus(taxArs);
 
     const date = new Date(r.tradeDate);
     const year = date.getUTCFullYear();
@@ -143,14 +150,15 @@ export function buildDividendsPageData(args: {
     ma.taxUsd = ma.taxUsd.plus(taxUsd);
     byMonth.set(key, ma);
 
-    const netArs = grossArs.minus(taxArs);
-    const netUsd = grossUsd.minus(taxUsd);
+    // YTD/LastYear: tomamos lo "neto" en cada moneda separadamente.
+    // - ARS: grossArs - taxArs (acciones AR, ambos en pesos).
+    // - USD: grossUsd (CEDEARs; el impuesto en ARS se cuenta aparte en totalTaxArs).
     if (year === nowYear) {
-      ytdNetArs = ytdNetArs.plus(netArs);
-      ytdNetUsd = ytdNetUsd.plus(netUsd);
+      ytdNetArs = ytdNetArs.plus(grossArs.minus(taxArs));
+      ytdNetUsd = ytdNetUsd.plus(grossUsd);
     } else if (year === nowYear - 1) {
-      lastYearNetArs = lastYearNetArs.plus(netArs);
-      lastYearNetUsd = lastYearNetUsd.plus(netUsd);
+      lastYearNetArs = lastYearNetArs.plus(grossArs.minus(taxArs));
+      lastYearNetUsd = lastYearNetUsd.plus(grossUsd);
     }
   }
 
@@ -159,8 +167,8 @@ export function buildDividendsPageData(args: {
   const horizon30 = Date.now() + 30 * 24 * 60 * 60 * 1000;
   for (const u of upcoming) {
     if (new Date(u.estimatedDate).getTime() <= horizon30) {
-      next30ArsTotal = next30ArsTotal.plus(toArs(u.estimatedTotal, u.currencyCode, cclRate));
-      next30UsdTotal = next30UsdTotal.plus(toUsd(u.estimatedTotal, u.currencyCode, cclRate));
+      next30ArsTotal = next30ArsTotal.plus(upcomingToArs(u.estimatedTotal, u.currencyCode, cclToday));
+      next30UsdTotal = next30UsdTotal.plus(upcomingToUsd(u.estimatedTotal, u.currencyCode, cclToday));
     }
   }
 
@@ -171,13 +179,15 @@ export function buildDividendsPageData(args: {
       payments: t.payments,
       grossArs: t.grossArs.toFixed(2),
       taxArs: t.taxArs.toFixed(2),
-      netArs: t.grossArs.minus(t.taxArs).toFixed(2),
+      // El neto en cada moneda solo tiene sentido cuando dividendo y tax comparten moneda.
+      // Acciones AR → ARS - ARS. CEDEARs → USD bruto tal cual (tax va en taxArs aparte).
+      netArs: t.grossArs.gt(0) ? t.grossArs.minus(t.taxArs).toFixed(2) : "0.00",
       grossUsd: t.grossUsd.toFixed(2),
       taxUsd: t.taxUsd.toFixed(2),
-      netUsd: t.grossUsd.minus(t.taxUsd).toFixed(2),
+      netUsd: t.grossUsd.gt(0) ? t.grossUsd.minus(t.taxUsd).toFixed(2) : "0.00",
       currentQuantity: pickHoldingQuantity(holdings, t.ticker),
     }))
-    .sort((a, b) => Number(b.netArs) - Number(a.netArs));
+    .sort((a, b) => Number(b.grossArs) + Number(b.grossUsd) - Number(a.grossArs) - Number(a.grossUsd));
 
   const monthRows: DividendByMonth[] = Array.from(byMonth.values())
     .map((m) => ({
@@ -185,10 +195,10 @@ export function buildDividendsPageData(args: {
       label: m.label,
       grossArs: m.grossArs.toFixed(2),
       taxArs: m.taxArs.toFixed(2),
-      netArs: m.grossArs.minus(m.taxArs).toFixed(2),
+      netArs: m.grossArs.gt(0) ? m.grossArs.minus(m.taxArs).toFixed(2) : "0.00",
       grossUsd: m.grossUsd.toFixed(2),
       taxUsd: m.taxUsd.toFixed(2),
-      netUsd: m.grossUsd.minus(m.taxUsd).toFixed(2),
+      netUsd: m.grossUsd.gt(0) ? m.grossUsd.minus(m.taxUsd).toFixed(2) : "0.00",
     }))
     .sort((a, b) => a.key.localeCompare(b.key));
 
@@ -205,7 +215,7 @@ export function buildDividendsPageData(args: {
       month,
       received: received
         .filter((r) => monthKey(new Date(r.tradeDate)) === key)
-        .sort((a, b) => Number(b.netAmount) - Number(a.netAmount)),
+        .sort((a, b) => Number(b.netArs) + Number(b.netUsd) - Number(a.netArs) - Number(a.netUsd)),
       upcoming: upcoming
         .filter((u) => monthKey(new Date(u.estimatedDate)) === key)
         .sort((a, b) => a.estimatedDate.localeCompare(b.estimatedDate)),
@@ -220,17 +230,30 @@ export function buildDividendsPageData(args: {
       }
     : null;
 
-  const effectiveTaxRate = totalGrossArs.isZero()
-    ? "0.00"
-    : totalTaxArs.div(totalGrossArs).mul(100).toFixed(2);
+  // Total bruto unificado en ARS usando el CCL del momento (NO el "7000" de la especie).
+  // Solo se calcula si dolarapi nos dio una cotización.
+  const totalGrossUnifiedArs =
+    cclToday && cclToday > 0
+      ? totalGrossArs.plus(totalGrossUsd.mul(cclToday)).toFixed(2)
+      : null;
+
+  // Tasa efectiva: impuestos pagados sobre el bruto unificado. Sin CCL today, queda 0.
+  const effectiveTaxRate =
+    totalGrossUnifiedArs && !new Decimal(totalGrossUnifiedArs).isZero()
+      ? totalTaxArs.div(totalGrossUnifiedArs).mul(100).toFixed(2)
+      : "0.00";
+
+  // Net ARS = solo acciones AR (gross - tax). Net USD = bruto CEDEAR (sin restar tax ARS).
+  const totalNetArs = totalGrossArs.minus(totalTaxArs).toFixed(2);
+  const totalNetUsd = totalGrossUsd.toFixed(2);
 
   const kpis: DividendKpis = {
     totalGrossArs: totalGrossArs.toFixed(2),
-    totalTaxArs: totalTaxArs.toFixed(2),
-    totalNetArs: totalGrossArs.minus(totalTaxArs).toFixed(2),
     totalGrossUsd: totalGrossUsd.toFixed(2),
-    totalTaxUsd: totalTaxUsd.toFixed(2),
-    totalNetUsd: totalGrossUsd.minus(totalTaxUsd).toFixed(2),
+    totalGrossUnifiedArs,
+    totalTaxArs: totalTaxArs.toFixed(2),
+    totalNetArs,
+    totalNetUsd,
     effectiveTaxRate,
     topTicker,
     totalPayments: received.length,
@@ -249,7 +272,7 @@ export function buildDividendsPageData(args: {
     calendar,
     received: received.slice().sort((a, b) => b.tradeDate.localeCompare(a.tradeDate)),
     upcoming,
-    cclRate: cclRate ? cclRate.toFixed(2) : null,
+    cclToday: cclToday && cclToday > 0 ? cclToday.toFixed(2) : null,
     yahooErrors,
   };
 }
