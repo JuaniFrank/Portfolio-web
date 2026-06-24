@@ -161,8 +161,15 @@ function projectFutureDividends(args: {
     return projections;
   }
 
+  // Tolerancia: los gaps reales suelen variar ±15% alrededor de la mediana
+  // (PM: 83–99 días con mediana 91). Si la proyección cae apenas en el pasado
+  // por esa variabilidad, la mantenemos como "próxima" en vez de saltar al
+  // siguiente ciclo y perder el pago real que está por venir.
+  const graceDays = Math.max(15, cadenceDays * 0.2);
+  const graceMs = graceDays * MS_PER_DAY;
+
   let nextTs = lastTimestampMs + cadenceDays * MS_PER_DAY;
-  while (nextTs <= now) nextTs += cadenceDays * MS_PER_DAY;
+  while (nextTs < now - graceMs) nextTs += cadenceDays * MS_PER_DAY;
   while (nextTs - now <= horizonMs) {
     projections.push(makeProjection(args, amountPerUnit, qty, nextTs));
     nextTs += cadenceDays * MS_PER_DAY;
