@@ -112,6 +112,15 @@ enum MacroCode {
   BADLAR
 }
 
+enum CorporateEventType {
+  CEDEAR_RATIO_CHANGE
+  STOCK_SPLIT
+  REVERSE_SPLIT
+  SPINOFF
+  MERGER
+  TICKER_CHANGE
+}
+
 // ============================================================
 // CATÁLOGOS / DICCIONARIOS
 // ============================================================
@@ -175,11 +184,12 @@ model User {
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 
-  portfolios     Portfolio[]
-  brokerAccounts BrokerAccount[]
-  imports        ImportBatch[]
-  auditLogs      AuditLog[]
-  tags           Tag[]
+  portfolios              Portfolio[]
+  brokerAccounts          BrokerAccount[]
+  imports                 ImportBatch[]
+  auditLogs               AuditLog[]
+  tags                    Tag[]
+  corporateEventsCreated  CorporateEvent[] @relation("CorporateEventCreator")
 }
 
 model Portfolio {
@@ -261,8 +271,9 @@ model Instrument {
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
-  transactions Transaction[]
-  prices       PriceCache[]
+  transactions     Transaction[]
+  prices           PriceCache[]
+  corporateEvents  CorporateEvent[]
 
   @@unique([ticker, type, venueCode, currencyCode])
   @@index([type])
@@ -437,6 +448,28 @@ model TransactionTag {
   tag           Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([transactionId, tagId])
+}
+
+// ============================================================
+// EVENTOS CORPORATIVOS
+// ============================================================
+
+model CorporateEvent {
+  id              String             @id @default(cuid())
+  instrumentId    String
+  instrument      Instrument         @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  eventType       CorporateEventType
+  effectiveDate   DateTime
+  numerator       Decimal            @db.Decimal(20, 8)
+  denominator     Decimal            @db.Decimal(20, 8)
+  notes           String?
+  appliedAt       DateTime           @default(now())
+  createdByUserId String
+  createdByUser   User               @relation("CorporateEventCreator", fields: [createdByUserId], references: [id])
+
+  @@unique([instrumentId, effectiveDate, eventType])
+  @@index([instrumentId])
+  @@index([createdByUserId])
 }
 
 // ============================================================

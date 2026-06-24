@@ -1,5 +1,7 @@
 import Decimal from "decimal.js";
 import type { HoldingRow } from "./types";
+import { applyEventsToTrade } from "@/lib/events/apply";
+import type { CorporateEventForBuilder } from "@/lib/events/types";
 
 export type TradeForHoldings = {
   instrumentId: string;
@@ -54,15 +56,31 @@ function computePositionFromTrades(trades: TradeForHoldings[]): {
   return { quantity: qty, avgPrice, costBasisArs: totalCost };
 }
 
+/**
+ * Build holdings from a list of trades.
+ *
+ * @param trades - All BUY/SELL trades to process.
+ * @param latestPrices - Map of instrumentId → latest price string.
+ * @param events - Optional map of instrumentId → corporate events sorted ascending
+ *   by effectiveDate. When provided, pre-event trades (tradeDate < effectiveDate)
+ *   are adjusted by the event ratio before entering PPP math.
+ *   Backwards compatible: omitting this param is a no-op.
+ */
 export function buildHoldings(
   trades: TradeForHoldings[],
-  latestPrices: PriceByInstrument
+  latestPrices: PriceByInstrument,
+  events?: Map<string, CorporateEventForBuilder[]>
 ): HoldingRow[] {
   const byInstrument = new Map<string, TradeForHoldings[]>();
 
   for (const t of trades) {
+    const instrumentEvents = events?.get(t.instrumentId);
+    const adjusted =
+      instrumentEvents && instrumentEvents.length > 0
+        ? applyEventsToTrade(t, instrumentEvents)
+        : t;
     const list = byInstrument.get(t.instrumentId) ?? [];
-    list.push(t);
+    list.push(adjusted);
     byInstrument.set(t.instrumentId, list);
   }
 

@@ -1,6 +1,7 @@
 "use server";
 
 import { getCurrentUser } from "@/lib/auth";
+import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { refreshLatestQuotes, type InstrumentForQuote } from "@/lib/market/quotes";
 import { prisma } from "@/lib/prisma";
 import {
@@ -22,7 +23,7 @@ export async function getTransactionsPageDataAction(): Promise<
   const user = await getCurrentUser();
   if (!user) return { error: "unauthorized" };
 
-  const [rows, latestFx] = await Promise.all([
+  const [rows, latestFx, eventRows] = await Promise.all([
     prisma.transaction.findMany({
       where: {
         portfolio: { userId: user.id },
@@ -48,7 +49,36 @@ export async function getTransactionsPageDataAction(): Promise<
       },
       orderBy: { date: "desc" },
     }),
+    prisma.corporateEvent.findMany({
+      where: {
+        instrument: {
+          transactions: { some: { portfolio: { userId: user.id } } },
+        },
+      },
+      orderBy: { effectiveDate: "asc" },
+      select: {
+        instrumentId: true,
+        eventType: true,
+        effectiveDate: true,
+        numerator: true,
+        denominator: true,
+      },
+    }),
   ]);
+
+  // Build events map: instrumentId → events sorted ascending by effectiveDate
+  const eventsMap = new Map<string, CorporateEventForBuilder[]>();
+  for (const e of eventRows) {
+    const list = eventsMap.get(e.instrumentId) ?? [];
+    list.push({
+      instrumentId: e.instrumentId,
+      eventType: e.eventType,
+      effectiveDate: e.effectiveDate.toISOString().slice(0, 10),
+      numerator: e.numerator.toString(),
+      denominator: e.denominator.toString(),
+    });
+    eventsMap.set(e.instrumentId, list);
+  }
 
   const cclRate = latestFx ? Number(latestFx.mid) : null;
 
@@ -109,7 +139,7 @@ export async function getTransactionsPageDataAction(): Promise<
   }
   const { prices: latestPrices } = await refreshLatestQuotes([...uniqueInstruments.values()]);
 
-  const holdings = buildHoldings(tradesForHoldings, latestPrices);
+  const holdings = buildHoldings(tradesForHoldings, latestPrices, eventsMap);
   const summaryBase = computePortfolioSummary(holdings);
 
   return {

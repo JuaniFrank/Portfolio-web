@@ -6,6 +6,7 @@ import {
   type HoldingForDashboard,
 } from "@/lib/dashboard/build";
 import type { DashboardData } from "@/lib/dashboard/types";
+import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { refreshLatestQuotes, type InstrumentForQuote } from "@/lib/market/quotes";
 import { prisma } from "@/lib/prisma";
 import {
@@ -34,7 +35,7 @@ export async function getDashboardPageDataAction(): Promise<
     });
   }
 
-  const [rows, latestFx] = await Promise.all([
+  const [rows, latestFx, eventRows] = await Promise.all([
     prisma.transaction.findMany({
       where: {
         portfolioId: portfolio.id,
@@ -59,7 +60,36 @@ export async function getDashboardPageDataAction(): Promise<
       where: { baseCurrencyCode: "USD", quoteCurrencyCode: "ARS" },
       orderBy: { date: "desc" },
     }),
+    prisma.corporateEvent.findMany({
+      where: {
+        instrument: {
+          transactions: { some: { portfolioId: portfolio.id } },
+        },
+      },
+      orderBy: { effectiveDate: "asc" },
+      select: {
+        instrumentId: true,
+        eventType: true,
+        effectiveDate: true,
+        numerator: true,
+        denominator: true,
+      },
+    }),
   ]);
+
+  // Build events map: instrumentId → events sorted ascending by effectiveDate
+  const eventsMap = new Map<string, CorporateEventForBuilder[]>();
+  for (const e of eventRows) {
+    const list = eventsMap.get(e.instrumentId) ?? [];
+    list.push({
+      instrumentId: e.instrumentId,
+      eventType: e.eventType,
+      effectiveDate: e.effectiveDate.toISOString().slice(0, 10),
+      numerator: e.numerator.toString(),
+      denominator: e.denominator.toString(),
+    });
+    eventsMap.set(e.instrumentId, list);
+  }
 
   const cclRate = latestFx ? Number(latestFx.mid) : null;
 
@@ -94,7 +124,7 @@ export async function getDashboardPageDataAction(): Promise<
   }
 
   const { prices } = await refreshLatestQuotes([...uniqueInstruments.values()]);
-  const holdings = buildHoldings(trades, prices);
+  const holdings = buildHoldings(trades, prices, eventsMap);
 
   const rawHoldings: HoldingForDashboard[] = holdings.map((h) => ({
     instrumentId: h.instrumentId,

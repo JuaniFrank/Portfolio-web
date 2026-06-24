@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Building2,
+  CalendarSync,
   Coins,
   Download,
   LayoutDashboard,
@@ -19,6 +20,7 @@ const items = [
   { href: "/portfolios", label: "Portfolios", icon: Wallet },
   { href: "/transactions", label: "Transacciones", icon: LineChart },
   { href: "/dividends", label: "Dividendos", icon: Coins },
+  { href: "/events", label: "Eventos", icon: CalendarSync },
   { href: "/imports", label: "Imports", icon: Download },
   { href: "/brokers", label: "Brokers", icon: Building2 },
   { href: "/instruments", label: "Instrumentos", icon: Shapes },
