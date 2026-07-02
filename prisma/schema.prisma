@@ -274,6 +274,7 @@ model Instrument {
   transactions     Transaction[]
   prices           PriceCache[]
   corporateEvents  CorporateEvent[]
+  bondTerms        BondTerms?
 
   @@unique([ticker, type, venueCode, currencyCode])
   @@index([type])
@@ -474,6 +475,38 @@ model CorporateEvent {
   @@unique([instrumentId, effectiveDate, eventType])
   @@index([instrumentId])
   @@index([createdByUserId])
+}
+
+// ============================================================
+// BOND TERMS (v2 — additive)
+// ============================================================
+
+enum RateType {
+  FIXED
+  FLOATING
+}
+
+model BondTerms {
+  id                     String     @id @default(cuid())
+  instrumentId           String     @unique
+  instrument             Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  faceValue              Decimal    @db.Decimal(20, 8)
+  currencyCode           String
+  rateType               RateType
+  couponRate             Decimal    @db.Decimal(20, 8)
+  couponFrequencyMonths  Int
+  issueDate              DateTime
+  maturityDate           DateTime
+  /**
+   * JSON array of { date: string (ISO), principalPct: number }.
+   * principalPct values must sum to 100.
+   */
+  amortizationSchedule   Json
+  dayCountConvention     String     @default("ACT/365")
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+
+  @@index([instrumentId])
 }
 
 // ============================================================

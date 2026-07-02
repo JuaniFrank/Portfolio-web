@@ -3,13 +3,17 @@
 import { useState } from "react";
 import { AlertTriangle, Clock } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { BondsPageData } from "@/lib/bonds/types";
+import type { BondsPageDataV2, BondHoldingV2 } from "@/lib/bonds/types";
 import { BondKpiCards } from "./bond-kpis";
 import { BondHoldingsTable } from "./bond-holdings-table";
 import { BondCashflowTable } from "./bond-cashflow-table";
+import { BondAnalyticsCard } from "./bond-analytics";
+import { BondProjectionTable } from "./bond-projection-table";
+import { BondTermsForm } from "./bond-terms-form";
+import type { BondTerms } from "@/lib/generated/prisma";
 
 type Props = {
-  data: BondsPageData;
+  data: BondsPageDataV2;
 };
 
 export function BondsPage({ data }: Props) {
@@ -72,14 +76,94 @@ export function BondsPage({ data }: Props) {
           >
             Flujos recibidos
           </TabsTrigger>
+          <TabsTrigger
+            value="analytics"
+            className="rounded-none border-b-2 border-transparent px-4 pb-2 data-[state=active]:border-teal-500 data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+          >
+            Analítica v2
+          </TabsTrigger>
         </TabsList>
+
         <TabsContent value="holdings" className="mt-4">
           <BondHoldingsTable holdings={data.holdings} />
         </TabsContent>
+
         <TabsContent value="flows" className="mt-4">
           <BondCashflowTable flows={data.flows} />
         </TabsContent>
+
+        <TabsContent value="analytics" className="mt-4 space-y-8">
+          {data.holdings.length === 0 ? (
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-6 py-10 text-center">
+              <p className="text-sm text-zinc-400">No hay posiciones activas.</p>
+            </div>
+          ) : (
+            data.holdings.map((holding) => (
+              <HoldingAnalyticsSection key={holding.ticker} holding={holding} />
+            ))
+          )}
+        </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Per-holding analytics + projection section
+// ---------------------------------------------------------------------------
+
+function HoldingAnalyticsSection({ holding }: { holding: BondHoldingV2 }) {
+  const [showForm, setShowForm] = useState(false);
+  const [localTerms, setLocalTerms] = useState<BondTerms | null>(null);
+
+  const effectiveHasTerms = holding.hasTerms || !!localTerms;
+
+  function handleTermsSaved(terms: BondTerms) {
+    setLocalTerms(terms);
+    setShowForm(false);
+  }
+
+  return (
+    <div className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-zinc-100">{holding.ticker}</h3>
+        <button
+          onClick={() => setShowForm((v) => !v)}
+          className="text-xs text-zinc-400 hover:text-teal-400 underline underline-offset-2"
+        >
+          {showForm ? "Cancel" : effectiveHasTerms ? "Edit terms" : "Enter terms"}
+        </button>
+      </div>
+
+      {showForm ? (
+        <BondTermsForm
+          instrumentId={holding.instrumentId}
+          ticker={holding.ticker}
+          onSaved={handleTermsSaved}
+          onCancel={() => setShowForm(false)}
+        />
+      ) : (
+        <>
+          <BondAnalyticsCard
+            analytics={holding.analytics}
+            ticker={holding.ticker}
+            onEnterTerms={() => setShowForm(true)}
+          />
+
+          <div className="space-y-2">
+            <h4 className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Flujos proyectados
+            </h4>
+            <BondProjectionTable
+              flows={holding.projectedFlows}
+              currencyCode="USD"
+              ticker={holding.ticker}
+              hasTerms={effectiveHasTerms}
+              onEnterTerms={() => setShowForm(true)}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

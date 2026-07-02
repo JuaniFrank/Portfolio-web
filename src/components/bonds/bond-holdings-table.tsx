@@ -10,12 +10,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TickerAvatar } from "@/components/transactions/ticker-avatar";
-import type { BondHolding } from "@/lib/bonds/types";
+import type { BondHolding, BondHoldingV2 } from "@/lib/bonds/types";
 import { cn } from "@/lib/utils";
 import { formatMoney, formatNumber, formatPercent } from "./format";
 
 type Props = {
-  holdings: BondHolding[];
+  /** Accepts both v1 BondHolding and v2 BondHoldingV2 (superset). */
+  holdings: (BondHolding | BondHoldingV2)[];
 };
 
 export function BondHoldingsTable({ holdings }: Props) {
@@ -124,15 +125,15 @@ export function BondHoldingsTable({ holdings }: Props) {
 }
 
 /**
- * Derive an approximate "last price" display value from the market value and nominal.
- * data912 prices are ARS per 100 VN; we can back-calculate: price = (marketValueArs / nominalHeld) * 100
+ * Display the last price directly from the data912 `c` field (ARS per 100 VN).
+ * Previously back-calculated from marketValueArs / nominalHeld; now uses the
+ * directly carried lastPriceArs field added in v2 to avoid the back-calculation.
  */
 function PriceCell({ holding }: { holding: BondHolding }) {
-  if (holding.marketValueArs === null || Number(holding.nominalHeld) === 0) {
+  if (holding.lastPriceArs === null) {
     return <span className="text-zinc-600">—</span>;
   }
-  const price =
-    (Number(holding.marketValueArs) / Number(holding.nominalHeld)) * 100;
+  const price = Number(holding.lastPriceArs);
   if (!Number.isFinite(price)) return <span className="text-zinc-600">—</span>;
   return (
     <span>

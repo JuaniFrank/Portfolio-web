@@ -11,7 +11,13 @@ import type { BondHolding } from "./types";
 export type TradeForBondHoldings = {
   instrumentId: string;
   ticker: string;
-  type: "BUY" | "SELL";
+  /**
+   * Transaction type as a string. Widened from "BUY"|"SELL" to accommodate the
+   * full set of ON transaction types (COUPON, AMORTIZATION) that share the same
+   * TradeForBonds intersection in build.ts.
+   * buildBondHoldings filters internally to only process BUY and SELL rows.
+   */
+  type: string;
   /** Nominal units (Balanz Cantidad: 1 unit = one 100-VN lámina). */
   quantity: string;
   /** Net amount in native transaction currency (USD for ONs). */
@@ -65,6 +71,7 @@ export function buildBondHoldings(trades: TradeForBondHoldings[]): BondHolding[]
       pctChange: null,
       priceStale: false,
       priceUnavailable: true,
+      lastPriceArs: null,
     });
   }
 

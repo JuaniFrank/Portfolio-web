@@ -38,6 +38,8 @@ export type MarkToMarketResult = {
   pctChange: string | null;
   priceStale: boolean;
   priceUnavailable: boolean;
+  /** ARS per 100 nominal VN from data912 `c` field. Null when price unavailable. */
+  lastPriceArs: string | null;
 };
 
 /**
@@ -64,6 +66,7 @@ export function markToMarket(
       pctChange: null,
       priceStale: false,
       priceUnavailable: true,
+      lastPriceArs: null,
     };
   }
 
@@ -97,5 +100,6 @@ export function markToMarket(
     pctChange: pctChange?.toFixed(2) ?? null,
     priceStale,
     priceUnavailable: false,
+    lastPriceArs: new Decimal(quote.c).toFixed(2),
   };
 }
