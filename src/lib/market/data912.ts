@@ -4,7 +4,8 @@
  * Endpoint: https://data912.com/live/arg_corp
  *
  * The `c` field in each quote is ARS per 100 nominal VN (face value):
- *   position value ARS = nominalHeld * (c / 100)
+ *   position value ARS = nominalHeld × c
+ *   (VN_PER_UNIT = 100 and c is ARS/100 VN, so the /100 and ×100 cancel — no /100 needed)
  *
  * Caching strategy mirrors quotes.ts:
  *   - Next.js fetch cache: revalidate=300s, tag "on-prices"
@@ -79,7 +80,14 @@ export async function fetchOnPrices(symbols: string[]): Promise<FetchOnPricesRes
       }
     }
 
-    const now = new Date();
+    // Truncate timestamp to the revalidation window so the upsert WHERE clause
+    // matches a stable key. Without truncation, each call uses a brand-new
+    // Date() and the update branch never fires — the table grows unbounded.
+    // data912 provides no exchange timestamp, so we floor to the nearest 300s bucket.
+    const nowMs = Date.now();
+    const bucketMs = REVALIDATE_SECONDS * 1000;
+    const bucketedNow = new Date(Math.floor(nowMs / bucketMs) * bucketMs);
+
     const quotes = new Map<string, Data912Quote>();
 
     await Promise.all(
@@ -108,13 +116,13 @@ export async function fetchOnPrices(symbols: string[]): Promise<FetchOnPricesRes
               where: {
                 instrumentId_datetime_source: {
                   instrumentId: instrument.id,
-                  datetime: now,
+                  datetime: bucketedNow,
                   source: "data912",
                 },
               },
               create: {
                 instrumentId: instrument.id,
-                datetime: now,
+                datetime: bucketedNow,
                 close: new Prisma.Decimal(item.c),
                 source: "data912",
               },

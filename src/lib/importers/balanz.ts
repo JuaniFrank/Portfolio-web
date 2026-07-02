@@ -111,9 +111,13 @@ function parseBalanzDescription(descripcion: string): {
     return { category, tickerFromDesc: parts[1].trim() };
   }
 
-  // Coupon / interest payment rows: "Cupón de Renta / TICKER", "Renta / TICKER", etc.
-  // Accent/case-insensitive; must NOT match "Dividendo" (handled by a separate branch).
-  if (/cup[oó]n|renta/i.test(category) && !/dividendo/i.test(category) && parts[1]) {
+  // Coupon / interest payment rows: "Cupón de Renta / TICKER", "Cupón / TICKER", etc.
+  // Conservative match on "cupón"/"cupon" only — bare "renta" is dropped because it
+  // matches FCI rows like "FCI Renta Fija" / "FCI Renta Variable", which would be
+  // misclassified as COUPON (data-corruption regression).
+  // Exact Balanz coupon category string is unconfirmed; widen the regex only after
+  // verifying against a real coupon export row.
+  if (/cup[oó]n/i.test(category) && parts[1]) {
     return { category, tickerFromDesc: parts[1].trim() };
   }
 
@@ -150,11 +154,13 @@ function resolveTransactionType(
       }
       return TransactionType.ADJUSTMENT;
     default: {
-      // Coupon / interest: accent/case-insensitive match on "cupón"/"cupon"/"renta",
-      // but NOT "dividendo" (that branch is already handled above).
-      // Precedence: if the description also looks like an amortization, classify as
-      // AMORTIZATION (amortization is the more specific event).
-      const isCoupon = /cup[oó]n|renta/i.test(descripcion) && !/dividendo/i.test(descripcion);
+      // Coupon / interest: conservative match on "cupón"/"cupon" only.
+      // "renta" is intentionally excluded — it matches FCI rows like
+      // "FCI Renta Fija" / "FCI Renta Variable", causing a data-corruption
+      // regression where those rows are imported as COUPON instead of being
+      // safely skipped. Exact Balanz coupon category string unconfirmed;
+      // verify against a real coupon export row and widen if needed.
+      const isCoupon = /cup[oó]n/i.test(descripcion);
       const isAmortization = /amortiz/i.test(descripcion);
       if (isCoupon || isAmortization) {
         return isAmortization ? TransactionType.AMORTIZATION : TransactionType.COUPON;

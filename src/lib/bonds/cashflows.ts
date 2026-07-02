@@ -6,6 +6,7 @@
  */
 
 import Decimal from "decimal.js";
+import { addMonths as dateFnsAddMonths } from "date-fns";
 import type { ReceivedFlow } from "./types";
 import type { CashFlow } from "./analytics";
 
@@ -142,79 +143,85 @@ export function projectCashFlows(
   const freqMonths = terms.couponFrequencyMonths;
   const isFloating = terms.rateType === "FLOATING";
 
-  // Parse and sort amortization schedule
+  // Parse and sort amortization schedule (already sorted by parseAmortizationSchedule)
   const schedule = parseAmortizationSchedule(terms.amortizationSchedule);
 
   // Build ordered coupon payment dates from issueDate to maturityDate
   const couponDates = buildCouponDates(issueDate, maturityDate, freqMonths);
+  const couponDateSet = new Set(couponDates.map((d) => d.getTime()));
+
+  // Build a merged, date-sorted timeline of all events so that amortizations
+  // between coupon dates reduce the outstanding principal before the next coupon
+  // is computed — fixing the bug where mid-period amortizations left principal
+  // unchanged and subsequent coupons were computed on too-high a base.
+  type TimelineEvent =
+    | { kind: "COUPON"; date: Date }
+    | { kind: "AMORTIZATION"; date: Date; principalPct: number };
+
+  const timeline: TimelineEvent[] = [];
+
+  for (const d of couponDates) {
+    timeline.push({ kind: "COUPON", date: d });
+  }
+  for (const amort of schedule) {
+    const amortDate = new Date(amort.date);
+    // Amortizations that land exactly on a coupon date are included in the
+    // coupon-date set; we still add them as AMORTIZATION events so the principal
+    // reduction fires in the walk below.
+    timeline.push({ kind: "AMORTIZATION", date: amortDate, principalPct: amort.principalPct });
+  }
+
+  // Sort: by date ascending; within same date, AMORTIZATION before COUPON so
+  // the coupon on that date uses the already-reduced principal.
+  timeline.sort((a, b) => {
+    const dt = a.date.getTime() - b.date.getTime();
+    if (dt !== 0) return dt;
+    // AMORTIZATION < COUPON
+    return a.kind === "AMORTIZATION" ? -1 : 1;
+  });
 
   // Track remaining principal (as percentage 0..100)
   let remainingPrincipalPct = new Decimal(100);
 
   const flows: ProjectedFlow[] = [];
 
-  for (const couponDate of couponDates) {
-    const couponTime = couponDate.getTime();
+  for (const event of timeline) {
+    const eventTime = event.date.getTime();
 
-    // Apply any amortization events that occur ON this coupon date or before it
-    // (Amortization reduces the principal before computing the coupon on the same date)
-    for (const amort of schedule) {
-      const amortTime = new Date(amort.date).getTime();
-      if (amortTime === couponTime) {
-        const principalAmount = faceValue.mul(new Decimal(amort.principalPct).div(100));
-        const t = yearsBetween(today, couponDate);
+    if (event.kind === "AMORTIZATION") {
+      // Reduce principal regardless of whether this is past or future; we need
+      // correct principal for subsequent coupon calculations.
+      remainingPrincipalPct = remainingPrincipalPct.minus(new Decimal(event.principalPct));
+      if (remainingPrincipalPct.lt(0)) remainingPrincipalPct = new Decimal(0);
 
-        if (couponTime > todayTime) {
-          flows.push({
-            date: couponDate.toISOString(),
-            flowType: "AMORTIZATION",
-            amount: principalAmount.toDecimalPlaces(8).toNumber(),
-            t,
-            assumedRate: false,
-          });
-        }
-        remainingPrincipalPct = remainingPrincipalPct.minus(new Decimal(amort.principalPct));
-        if (remainingPrincipalPct.lt(0)) remainingPrincipalPct = new Decimal(0);
+      // Emit the flow only for future amortization events
+      if (eventTime > todayTime) {
+        const principalAmount = faceValue.mul(new Decimal(event.principalPct).div(100));
+        const t = yearsBetween(today, event.date);
+        flows.push({
+          date: event.date.toISOString(),
+          flowType: "AMORTIZATION",
+          amount: principalAmount.toDecimalPlaces(8).toNumber(),
+          t,
+          assumedRate: false,
+        });
       }
-    }
-
-    // Coupon: rate × remainingPrincipal / (12 / freqMonths)
-    if (couponTime > todayTime && remainingPrincipalPct.gt(0)) {
-      const periodsPerYear = new Decimal(12).div(new Decimal(freqMonths));
-      const outstandingPrincipal = faceValue.mul(remainingPrincipalPct.div(100));
-      const couponAmount = couponRate.mul(outstandingPrincipal).div(periodsPerYear);
-      const t = yearsBetween(today, couponDate);
-
-      flows.push({
-        date: couponDate.toISOString(),
-        flowType: "COUPON",
-        amount: couponAmount.toDecimalPlaces(8).toNumber(),
-        t,
-        assumedRate: isFloating,
-      });
-    }
-  }
-
-  // Handle amortization entries that don't coincide with a coupon date
-  // (e.g. bullet maturity amortization on maturityDate itself)
-  const couponDateSet = new Set(couponDates.map((d) => d.getTime()));
-
-  for (const amort of schedule) {
-    const amortDate = new Date(amort.date);
-    const amortTime = amortDate.getTime();
-
-    // Only process non-coupon-date amortizations that are in the future
-    if (!couponDateSet.has(amortTime) && amortTime > todayTime) {
-      const principalAmount = faceValue.mul(new Decimal(amort.principalPct).div(100));
-      const t = yearsBetween(today, amortDate);
-
-      flows.push({
-        date: amortDate.toISOString(),
-        flowType: "AMORTIZATION",
-        amount: principalAmount.toDecimalPlaces(8).toNumber(),
-        t,
-        assumedRate: false,
-      });
+    } else {
+      // COUPON event — only emit if it falls on a proper coupon date and is in the future
+      if (!couponDateSet.has(eventTime)) continue; // skip duplicates
+      if (eventTime > todayTime && remainingPrincipalPct.gt(0)) {
+        const periodsPerYear = new Decimal(12).div(new Decimal(freqMonths));
+        const outstandingPrincipal = faceValue.mul(remainingPrincipalPct.div(100));
+        const couponAmount = couponRate.mul(outstandingPrincipal).div(periodsPerYear);
+        const t = yearsBetween(today, event.date);
+        flows.push({
+          date: event.date.toISOString(),
+          flowType: "COUPON",
+          amount: couponAmount.toDecimalPlaces(8).toNumber(),
+          t,
+          assumedRate: isFloating,
+        });
+      }
     }
   }
 
@@ -267,10 +274,14 @@ function buildCouponDates(
   return dates;
 }
 
+/**
+ * Add `months` to `date`, clamping to the last valid day when the target month
+ * is shorter (e.g. Jan 31 + 1 month → Feb 28/29, not Mar 2/3).
+ * Uses date-fns addMonths which handles month-end overflow correctly.
+ * Returns a new UTC-consistent Date.
+ */
 function addMonths(date: Date, months: number): Date {
-  const d = new Date(date);
-  d.setUTCMonth(d.getUTCMonth() + months);
-  return d;
+  return dateFnsAddMonths(date, months);
 }
 
 /** Returns fractional years between two dates using ACT/365 convention. */

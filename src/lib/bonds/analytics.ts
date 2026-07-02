@@ -127,8 +127,11 @@ export function computeYTM(
   let lo = YTM_BISECTION_LOW;
   let hi = YTM_BISECTION_HIGH;
 
-  const fLo = npv(cashFlows, lo, price);
-  const fHi = npv(cashFlows, hi, price);
+  // fLo/fHi must be mutable so the bracket update keeps NPV values in sync
+  // with the bound. Without this, the sign test uses a stale fLo and the
+  // bracket can diverge, producing wrong YTM or noConvergence.
+  let fLo = npv(cashFlows, lo, price);
+  let fHi = npv(cashFlows, hi, price);
 
   // If no sign change, there is no solution in the bracket
   if (fLo * fHi > 0) {
@@ -145,8 +148,10 @@ export function computeYTM(
 
     if (fLo * fMid < 0) {
       hi = mid;
+      fHi = fMid;
     } else {
       lo = mid;
+      fLo = fMid;
     }
   }
 

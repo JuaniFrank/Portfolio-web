@@ -134,13 +134,15 @@ export async function getBondsPageDataAction(): Promise<
       amount: f.amount,
     }));
 
-    // Get USD price for analytics (marketValueUsd / nominalHeld when available)
+    // Per-unit USD price for analytics.
+    // projectCashFlows() emits cash flows scaled to one lámina (terms.faceValue).
+    // marketValueUsd is the TOTAL position value = nominalHeld × per-unit price.
+    // Dividing by nominalHeld gives the per-unit dirty price that matches the
+    // per-unit cash-flow denomination, keeping YTM identical for 1 unit vs N units.
     let priceUsd: number | null = null;
-    if (holding.marketValueUsd !== null && Number(holding.nominalHeld) > 0) {
-      // Approximate price per unit in USD: marketValueUsd / nominalHeld
-      // For analytics, use total present value (price = marketValueUsd represents the full position)
-      // We compute YTM on the basis of nominalHeld × unit face-value flows vs. total market value
-      priceUsd = parseFloat(holding.marketValueUsd);
+    const nominalUnits = Number(holding.nominalHeld);
+    if (holding.marketValueUsd !== null && nominalUnits > 0) {
+      priceUsd = parseFloat(holding.marketValueUsd) / nominalUnits;
     }
 
     const periodsPerYear = 12 / terms.couponFrequencyMonths;

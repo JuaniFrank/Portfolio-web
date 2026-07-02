@@ -176,7 +176,7 @@ export function BondTermsForm({
         faceValue: parseFloat(form.faceValue) || 0,
         currencyCode: form.currencyCode,
         rateType: form.rateType,
-        couponRate: parseFloat(form.couponRate) || 0,
+        couponRate: parseFloat(form.couponRate),
         couponFrequencyMonths: parseInt(form.couponFrequencyMonths, 10) || 6,
         issueDate: form.issueDate,
         maturityDate: form.maturityDate,
@@ -280,6 +280,7 @@ export function BondTermsForm({
             type="number"
             step="0.0001"
             min="0"
+            max="1"
             placeholder="0.085"
             value={form.couponRate}
             onChange={(e) => setField("couponRate", e.target.value)}

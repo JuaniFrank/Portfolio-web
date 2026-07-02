@@ -10,6 +10,7 @@ import { BondCashflowTable } from "./bond-cashflow-table";
 import { BondAnalyticsCard } from "./bond-analytics";
 import { BondProjectionTable } from "./bond-projection-table";
 import { BondTermsForm } from "./bond-terms-form";
+import { getBondTermsAction } from "@/app/actions/bond-terms";
 import type { BondTerms } from "@/lib/generated/prisma";
 
 type Props = {
@@ -115,23 +116,52 @@ export function BondsPage({ data }: Props) {
 function HoldingAnalyticsSection({ holding }: { holding: BondHoldingV2 }) {
   const [showForm, setShowForm] = useState(false);
   const [localTerms, setLocalTerms] = useState<BondTerms | null>(null);
+  // Loaded on-demand when the user clicks "Edit terms" for a holding that already has terms.
+  const [loadedTerms, setLoadedTerms] = useState<BondTerms | null>(null);
+  const [loadingTerms, setLoadingTerms] = useState(false);
 
   const effectiveHasTerms = holding.hasTerms || !!localTerms;
 
+  async function handleToggleForm() {
+    if (showForm) {
+      setShowForm(false);
+      return;
+    }
+    // When editing existing terms, fetch them first so the form is pre-populated
+    // and the user cannot accidentally overwrite stored data with blank defaults.
+    if (effectiveHasTerms && !loadedTerms) {
+      setLoadingTerms(true);
+      try {
+        const result = await getBondTermsAction(holding.instrumentId);
+        if (result.success && result.data) {
+          setLoadedTerms(result.data);
+        }
+      } finally {
+        setLoadingTerms(false);
+      }
+    }
+    setShowForm(true);
+  }
+
   function handleTermsSaved(terms: BondTerms) {
     setLocalTerms(terms);
+    setLoadedTerms(terms);
     setShowForm(false);
   }
+
+  // Resolve which terms to pass: freshly loaded > previously saved local > none
+  const initialTermsForForm = loadedTerms ?? localTerms ?? undefined;
 
   return (
     <div className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-zinc-100">{holding.ticker}</h3>
         <button
-          onClick={() => setShowForm((v) => !v)}
-          className="text-xs text-zinc-400 hover:text-teal-400 underline underline-offset-2"
+          onClick={() => void handleToggleForm()}
+          disabled={loadingTerms}
+          className="text-xs text-zinc-400 hover:text-teal-400 underline underline-offset-2 disabled:opacity-50"
         >
-          {showForm ? "Cancel" : effectiveHasTerms ? "Edit terms" : "Enter terms"}
+          {loadingTerms ? "Loading…" : showForm ? "Cancel" : effectiveHasTerms ? "Edit terms" : "Enter terms"}
         </button>
       </div>
 
@@ -139,6 +169,7 @@ function HoldingAnalyticsSection({ holding }: { holding: BondHoldingV2 }) {
         <BondTermsForm
           instrumentId={holding.instrumentId}
           ticker={holding.ticker}
+          initialTerms={initialTermsForForm}
           onSaved={handleTermsSaved}
           onCancel={() => setShowForm(false)}
         />

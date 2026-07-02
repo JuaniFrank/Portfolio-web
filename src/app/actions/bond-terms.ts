@@ -50,6 +50,12 @@ function validateBondTermsInput(input: BondTermsInput): string | null {
   if (input.couponRate === undefined || input.couponRate === null) {
     return "couponRate is required";
   }
+  if (input.couponRate < 0) {
+    return "couponRate must be >= 0 (use a decimal fraction, e.g. 0.085 for 8.5%)";
+  }
+  if (input.couponRate > 1) {
+    return "couponRate must be a decimal fraction, e.g. 0.085 for 8.5% (received a value > 1 — did you enter a percentage instead of a decimal?)";
+  }
   if (!input.couponFrequencyMonths || input.couponFrequencyMonths <= 0) {
     return "couponFrequencyMonths must be greater than 0";
   }
