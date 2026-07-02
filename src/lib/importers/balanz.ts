@@ -41,15 +41,31 @@ export function parseBalanzCurrency(moneda: string): {
 } {
   const raw = moneda.trim();
   const lower = raw.toLowerCase();
-  if (lower === "pesos") return { currency: "ARS", brokerFxRate: null };
+
+  // ARS explicit matches
+  if (lower === "pesos" || lower === "ars" || lower === "$") {
+    return { currency: "ARS", brokerFxRate: null };
+  }
+
+  // USD with embedded FX rate (e.g. "Dólares C.V. 1200.50")
   const fxMatch = raw.match(BROKER_FX_FROM_CURRENCY);
   if (fxMatch) {
     return { currency: "USD", brokerFxRate: fxMatch[1]!.replace(",", ".") };
   }
-  if (lower === "dólares" || lower.startsWith("dólares")) {
+
+  // USD variants: "US Dollar (Cable)", "US Dollar", "Dólares", "Dólar Cable", "USD", "U$S"
+  if (
+    lower.includes("dollar") ||
+    lower.includes("dólar") ||
+    lower.includes("dolar") ||
+    lower === "usd" ||
+    lower.startsWith("u$")
+  ) {
     return { currency: "USD", brokerFxRate: null };
   }
-  return { currency: "ARS", brokerFxRate: null };
+
+  // Unknown currency: do not silently fall through to ARS — surface as an error
+  throw new Error(`parseBalanzCurrency: unrecognized currency string "${raw}"`);
 }
 
 export function mapBalanzInstrumentType(tipo: string): InstrumentType | null {
@@ -95,6 +111,12 @@ function parseBalanzDescription(descripcion: string): {
     return { category, tickerFromDesc: parts[1].trim() };
   }
 
+  // Coupon / interest payment rows: "Cupón de Renta / TICKER", "Renta / TICKER", etc.
+  // Accent/case-insensitive; must NOT match "Dividendo" (handled by a separate branch).
+  if (/cup[oó]n|renta/i.test(category) && !/dividendo/i.test(category) && parts[1]) {
+    return { category, tickerFromDesc: parts[1].trim() };
+  }
+
   if (category === "Movimiento Manual") {
     const tickerMatch = descripcion.match(/-\s*([A-Z0-9.]+)\s*$/i);
     return { category, tickerFromDesc: tickerMatch?.[1]?.trim() };
@@ -127,8 +149,18 @@ function resolveTransactionType(
         return TransactionType.TAX_WITHHOLDING;
       }
       return TransactionType.ADJUSTMENT;
-    default:
+    default: {
+      // Coupon / interest: accent/case-insensitive match on "cupón"/"cupon"/"renta",
+      // but NOT "dividendo" (that branch is already handled above).
+      // Precedence: if the description also looks like an amortization, classify as
+      // AMORTIZATION (amortization is the more specific event).
+      const isCoupon = /cup[oó]n|renta/i.test(descripcion) && !/dividendo/i.test(descripcion);
+      const isAmortization = /amortiz/i.test(descripcion);
+      if (isCoupon || isAmortization) {
+        return isAmortization ? TransactionType.AMORTIZATION : TransactionType.COUPON;
+      }
       return null;
+    }
   }
 }
 
@@ -192,7 +224,20 @@ export function parseBalanzRow(raw: BalanzRawRow, rowNumber: number): Normalized
     };
   }
 
-  const { currency: currencyCode, brokerFxRate } = parseBalanzCurrency(raw.Moneda);
+  let currencyCode: string;
+  let brokerFxRate: string | null;
+  try {
+    const parsed = parseBalanzCurrency(raw.Moneda);
+    currencyCode = parsed.currency;
+    brokerFxRate = parsed.brokerFxRate;
+  } catch {
+    return {
+      rowNumber,
+      status: "invalid",
+      messages: [`Moneda no reconocida: "${raw.Moneda}"`],
+      raw,
+    };
+  }
   const instrumentType = raw["Tipo de Instrumento"]
     ? mapBalanzInstrumentType(raw["Tipo de Instrumento"])
     : null;
