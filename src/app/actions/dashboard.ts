@@ -2,11 +2,18 @@
 
 import { getCurrentUser } from "@/lib/auth";
 import {
+  toDashboardHolding,
+  toBondTrade,
+  valuateOnPositions,
+} from "@/lib/bonds/portfolio-bridge";
+import {
   buildDashboardData,
   type HoldingForDashboard,
 } from "@/lib/dashboard/build";
 import type { DashboardData } from "@/lib/dashboard/types";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
+import { fetchOnPrices } from "@/lib/market/data912";
+import { resolveCclRate } from "@/lib/market/ccl-rate";
 import { refreshLatestQuotes, type InstrumentForQuote } from "@/lib/market/quotes";
 import { prisma } from "@/lib/prisma";
 import {
@@ -35,7 +42,7 @@ export async function getDashboardPageDataAction(): Promise<
     });
   }
 
-  const [rows, latestFx, eventRows] = await Promise.all([
+  const [rows, cclRate, eventRows] = await Promise.all([
     prisma.transaction.findMany({
       where: {
         portfolioId: portfolio.id,
@@ -56,10 +63,7 @@ export async function getDashboardPageDataAction(): Promise<
         },
       },
     }),
-    prisma.fxRate.findFirst({
-      where: { baseCurrencyCode: "USD", quoteCurrencyCode: "ARS" },
-      orderBy: { date: "desc" },
-    }),
+    resolveCclRate(),
     prisma.corporateEvent.findMany({
       where: {
         instrument: {
@@ -91,14 +95,14 @@ export async function getDashboardPageDataAction(): Promise<
     eventsMap.set(e.instrumentId, list);
   }
 
-  const cclRate = latestFx ? Number(latestFx.mid) : null;
-
   const trades: TradeForHoldings[] = [];
+  const onBondTrades: ReturnType<typeof toBondTrade>[] = [];
   const sectorByInstrument = new Map<string, string | null>();
+  const onNamesById = new Map<string, string>();
 
   for (const r of rows) {
     if (!r.instrument) continue;
-    trades.push({
+    const trade: TradeForHoldings = {
       instrumentId: r.instrument.id,
       ticker: r.instrument.ticker,
       instrumentType: r.instrument.type,
@@ -108,7 +112,15 @@ export async function getDashboardPageDataAction(): Promise<
       price: r.price.toString(),
       netAmount: r.netAmount.toString(),
       tradeDate: r.tradeDate.toISOString(),
-    });
+    };
+
+    if (r.instrument.type === "ON") {
+      onBondTrades.push(toBondTrade(trade, r.currencyCode));
+      onNamesById.set(r.instrument.id, r.instrument.name);
+      continue;
+    }
+
+    trades.push(trade);
     sectorByInstrument.set(r.instrument.id, r.instrument.underlyingAsset?.sector ?? null);
   }
 
@@ -123,21 +135,31 @@ export async function getDashboardPageDataAction(): Promise<
     }
   }
 
-  const { prices } = await refreshLatestQuotes([...uniqueInstruments.values()]);
-  const holdings = buildHoldings(trades, prices, eventsMap);
+  const onTickers = Array.from(new Set(onBondTrades.map((t) => t.ticker.toUpperCase())));
 
-  const rawHoldings: HoldingForDashboard[] = holdings.map((h) => ({
-    instrumentId: h.instrumentId,
-    ticker: h.ticker,
-    instrumentName: h.instrumentName,
-    instrumentType: h.instrumentType,
-    quantity: h.quantity,
-    costBasisArs: h.costBasisArs,
-    marketValueArs: h.marketValueArs,
-    pnlArs: h.pnlArs,
-    pnlPercent: h.pnlPercent,
-    sector: sectorByInstrument.get(h.instrumentId) ?? null,
-  }));
+  const [{ prices }, onPriceResult] = await Promise.all([
+    refreshLatestQuotes([...uniqueInstruments.values()]),
+    onTickers.length > 0 ? fetchOnPrices(onTickers) : Promise.resolve({ quotes: new Map(), stale: false }),
+  ]);
+
+  const equityHoldings = buildHoldings(trades, prices, eventsMap);
+  const onPositions = valuateOnPositions(onBondTrades, onPriceResult, cclRate, onNamesById);
+
+  const rawHoldings: HoldingForDashboard[] = [
+    ...equityHoldings.map((h) => ({
+      instrumentId: h.instrumentId,
+      ticker: h.ticker,
+      instrumentName: h.instrumentName,
+      instrumentType: h.instrumentType,
+      quantity: h.quantity,
+      costBasisArs: h.costBasisArs,
+      marketValueArs: h.marketValueArs,
+      pnlArs: h.pnlArs,
+      pnlPercent: h.pnlPercent,
+      sector: sectorByInstrument.get(h.instrumentId) ?? null,
+    })),
+    ...onPositions.map((p) => toDashboardHolding(p, cclRate)),
+  ];
 
   return buildDashboardData({
     portfolioName: portfolio.name,
