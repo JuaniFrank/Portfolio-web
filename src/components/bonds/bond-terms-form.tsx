@@ -52,15 +52,25 @@ type AmortizationRow = {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Normalize a date field to a YYYY-MM-DD input value. The DTO delivers ISO
+ * strings, but React Flight revives raw Date objects when a stale server action
+ * returns un-serialized Prisma data, so tolerate both rather than crash.
+ */
+function toDateInput(value: string | Date): string {
+  const iso = value instanceof Date ? value.toISOString() : value;
+  return iso.slice(0, 10);
+}
+
 function toFormState(terms: BondTermsDTO): FormState {
   return {
-    faceValue: terms.faceValue,
+    faceValue: String(terms.faceValue),
     currencyCode: terms.currencyCode,
     rateType: terms.rateType,
-    couponRate: terms.couponRate,
+    couponRate: String(terms.couponRate),
     couponFrequencyMonths: String(terms.couponFrequencyMonths),
-    issueDate: terms.issueDate.slice(0, 10),
-    maturityDate: terms.maturityDate.slice(0, 10),
+    issueDate: toDateInput(terms.issueDate),
+    maturityDate: toDateInput(terms.maturityDate),
     dayCountConvention: terms.dayCountConvention,
   };
 }
