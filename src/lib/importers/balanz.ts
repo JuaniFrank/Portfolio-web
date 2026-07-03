@@ -135,11 +135,17 @@ function resolveTransactionType(
   descripcion: string
 ): TransactionType | null {
   switch (category) {
-    case "Boleto":
-      if (side === "COMPRA") return TransactionType.BUY;
-      if (side === "VENTA") return TransactionType.SELL;
+    case "Boleto": {
+      // Balanz puts the operation code in the 3rd description segment. Known
+      // variants: "COMPRA"/"VENTA" (secondary market), "Licitación MAE"
+      // (primary), and "LICOMPRA"/"LIVENTA" (primary auction). Match COMPRA/VENTA
+      // by substring so the "LI…" auction codes resolve too.
+      const op = (side ?? "").toUpperCase();
+      if (op.includes("COMPRA")) return TransactionType.BUY;
+      if (op.includes("VENTA")) return TransactionType.SELL;
       if (/licitaci[oó]n/i.test(descripcion)) return TransactionType.BUY;
       return null;
+    }
     case "Dividendo en efectivo":
       return TransactionType.DIVIDEND_CASH;
     case "Recibo de Cobro":
