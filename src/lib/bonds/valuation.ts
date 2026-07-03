@@ -1,18 +1,20 @@
 /**
  * Mark-to-market valuation for ON (corporate bond) positions.
  *
- * Valuation semantics (confirmed by orchestrator):
- *   Balanz Cantidad = 1 unit = one 100-VN lámina.
- *   data912 `c` = ARS per 100 nominal VN.
+ * Valuation semantics (verified against a real Balanz position + live data912):
+ *   Balanz Cantidad = raw VN face value held (e.g. 149 = 149 nominal VN).
+ *   data912 `c`     = ARS per 100 nominal VN.
  *
  * Therefore:
- *   marketValueARS = nominalHeld × c
+ *   marketValueARS = nominalHeld × c / 100
  *   marketValueUSD = marketValueARS / cclMid
  *
- * VN_PER_UNIT documents this assumption explicitly. If empirical verification
- * against a running Balanz account shows Cantidad is NOT per-100-VN lámina
- * (e.g. it is raw VN face value), update this constant to 1 and the
- * formulas below will adjust automatically.
+ * The /100 is essential: `c` is quoted per 100 VN, but Cantidad is a raw VN
+ * count, NOT a count of 100-VN láminas. Omitting it inflates the position by
+ * exactly 100× (the bug that reported MCC3O at ~US$14.7k instead of ~US$147).
+ *
+ * Worked example (MCC3O): 149 VN × 155 000 / 100 / CCL(≈1575)
+ *   = 149 × 1 550 / 1575 ≈ US$146.6, consistent with the ~US$149 cost basis.
  */
 
 import Decimal from "decimal.js";
@@ -20,16 +22,12 @@ import type { BondHolding } from "./types";
 import type { Data912Quote } from "@/lib/market/data912";
 
 /**
- * Units of nominal VN per 1 Balanz Cantidad unit.
+ * Nominal VN that data912's `c` price is quoted against.
  *
- * Current assumption: 1 Balanz unit = 1 lámina = 100 VN face value.
- * data912 `c` is already quoted per 100 VN, so:
- *   position ARS = nominalHeld × c   (the /100 and ×100 cancel out)
- *
- * Sanity check: MCC3O → 1 unit × ~153 990 ARS / CCL ≈ 110 USD,
- * close to the ~149 USD cost basis observed. Consistent.
+ * data912 reports `c` as ARS per 100 VN, while Balanz Cantidad (nominalHeld)
+ * is a raw VN count, so per-VN price = c / VN_QUOTE_BASIS.
  */
-export const VN_PER_UNIT = 100;
+export const VN_QUOTE_BASIS = 100;
 
 export type MarkToMarketResult = {
   marketValueArs: string | null;
@@ -72,10 +70,12 @@ export function markToMarket(
 
   const nominal = new Decimal(holding.nominalHeld);
 
-  // nominalHeld × c  (since 1 unit = 100 VN and c is ARS/100VN, the factors cancel)
-  // Documented: VN_PER_UNIT = 100 is the assumption; update if Cantidad semantics differ.
-  void VN_PER_UNIT; // reference to keep the constant visible to callers
-  const marketValueArs = nominal.mul(new Decimal(quote.c)).toDecimalPlaces(2);
+  // marketValueARS = nominalHeld (raw VN) × c (ARS per 100 VN) / 100.
+  // The /VN_QUOTE_BASIS converts the per-100-VN quote to a per-VN price.
+  const marketValueArs = nominal
+    .mul(new Decimal(quote.c))
+    .div(VN_QUOTE_BASIS)
+    .toDecimalPlaces(2);
 
   let marketValueUsd: Decimal | null = null;
   if (cclMid !== null && cclMid > 0) {

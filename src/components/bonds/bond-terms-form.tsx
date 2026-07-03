@@ -96,11 +96,11 @@ const DAY_COUNT_OPTIONS = [
 ];
 
 const FREQUENCY_OPTIONS: { label: string; value: string }[] = [
-  { label: "Monthly (1m)", value: "1" },
-  { label: "Bi-monthly (2m)", value: "2" },
-  { label: "Quarterly (3m)", value: "3" },
-  { label: "Semi-annual (6m)", value: "6" },
-  { label: "Annual (12m)", value: "12" },
+  { label: "Mensual (1m)", value: "1" },
+  { label: "Bimestral (2m)", value: "2" },
+  { label: "Trimestral (3m)", value: "3" },
+  { label: "Semestral (6m)", value: "6" },
+  { label: "Anual (12m)", value: "12" },
 ];
 
 export function BondTermsForm({
@@ -191,10 +191,10 @@ export function BondTermsForm({
         return;
       }
 
-      toast.success(`Bond terms saved for ${ticker}`);
+      toast.success(`Términos guardados para ${ticker}`);
       onSaved?.(result.data);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
+      const message = err instanceof Error ? err.message : "Error desconocido";
       setFormError(message);
     } finally {
       setPending(false);
@@ -206,17 +206,17 @@ export function BondTermsForm({
     0
   );
   const amortSumError = amortRows.length > 0 && Math.abs(totalPct - 100) > 0.01
-    ? `Sum of principal % is ${totalPct.toFixed(2)} — must be 100`
+    ? `La suma de % de capital es ${totalPct.toFixed(2)} — debe ser 100`
     : null;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       <div className="space-y-1">
         <h2 className="text-lg font-semibold text-zinc-100">
-          Bond Terms — {ticker}
+          Términos del bono — {ticker}
         </h2>
         <p className="text-xs text-zinc-400">
-          Enter the contractual terms for this ON to enable forward projection and YTM/duration analytics.
+          Ingresá los términos contractuales de esta ON para habilitar la proyección de flujos y la analítica de TIR/duration.
         </p>
       </div>
 
@@ -225,7 +225,7 @@ export function BondTermsForm({
       {/* ---------------------------------------------------------------- */}
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
-          <Label htmlFor="faceValue">Face Value</Label>
+          <Label htmlFor="faceValue">Valor nominal (VN)</Label>
           <Input
             id="faceValue"
             type="number"
@@ -239,7 +239,7 @@ export function BondTermsForm({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="currencyCode">Currency</Label>
+          <Label htmlFor="currencyCode">Moneda</Label>
           <Select
             value={form.currencyCode}
             onValueChange={(v) => setField("currencyCode", v)}
@@ -255,7 +255,7 @@ export function BondTermsForm({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="rateType">Rate Type</Label>
+          <Label htmlFor="rateType">Tipo de tasa</Label>
           <Select
             value={form.rateType}
             onValueChange={(v) => setField("rateType", v as "FIXED" | "FLOATING")}
@@ -264,16 +264,16 @@ export function BondTermsForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="FIXED">Fixed</SelectItem>
-              <SelectItem value="FLOATING">Floating (last-known rate)</SelectItem>
+              <SelectItem value="FIXED">Fija</SelectItem>
+              <SelectItem value="FLOATING">Variable (última tasa conocida)</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
         <div className="space-y-1.5">
           <Label htmlFor="couponRate">
-            {form.rateType === "FLOATING" ? "Last-Known Coupon Rate" : "Coupon Rate"}
-            <span className="ml-1 text-xs text-zinc-500">(decimal, e.g. 0.085 for 8.5%)</span>
+            {form.rateType === "FLOATING" ? "Última tasa de cupón conocida" : "Tasa de cupón"}
+            <span className="ml-1 text-xs text-zinc-500">(decimal, ej. 0,085 para 8,5%)</span>
           </Label>
           <Input
             id="couponRate"
@@ -289,7 +289,7 @@ export function BondTermsForm({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="couponFrequencyMonths">Coupon Frequency</Label>
+          <Label htmlFor="couponFrequencyMonths">Frecuencia de cupón</Label>
           <Select
             value={form.couponFrequencyMonths}
             onValueChange={(v) => setField("couponFrequencyMonths", v)}
@@ -308,7 +308,7 @@ export function BondTermsForm({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="dayCountConvention">Day Count Convention</Label>
+          <Label htmlFor="dayCountConvention">Convención de conteo de días</Label>
           <Select
             value={form.dayCountConvention}
             onValueChange={(v) => setField("dayCountConvention", v)}
@@ -327,7 +327,7 @@ export function BondTermsForm({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="issueDate">Issue Date</Label>
+          <Label htmlFor="issueDate">Fecha de emisión</Label>
           <Input
             id="issueDate"
             type="date"
@@ -338,7 +338,7 @@ export function BondTermsForm({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="maturityDate">Maturity Date</Label>
+          <Label htmlFor="maturityDate">Fecha de vencimiento</Label>
           <Input
             id="maturityDate"
             type="date"
@@ -355,13 +355,13 @@ export function BondTermsForm({
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <Label>Amortization Schedule</Label>
+            <Label>Cronograma de amortización</Label>
             <p className="text-xs text-zinc-400">
-              Define when principal is repaid. Principal % must sum to 100.
+              Definí cuándo se devuelve el capital. Los % de capital deben sumar 100.
             </p>
           </div>
           <Button type="button" variant="outline" size="sm" onClick={addAmortRow}>
-            + Add row
+            + Agregar fila
           </Button>
         </div>
 
@@ -395,7 +395,7 @@ export function BondTermsForm({
                   onClick={() => removeAmortRow(idx)}
                   className="shrink-0"
                 >
-                  Remove
+                  Quitar
                 </Button>
               )}
             </div>
@@ -416,9 +416,9 @@ export function BondTermsForm({
       {/* ---------------------------------------------------------------- */}
       {form.rateType === "FLOATING" && (
         <div className="rounded-md border border-amber-900/50 bg-amber-950/20 p-3 text-xs text-amber-200">
-          <strong>Floating rate note:</strong> Cash-flow projections for this bond will use the
-          coupon rate entered above as an assumed constant rate. All projected coupon rows will be
-          labeled &ldquo;assumed rate&rdquo; in the UI.
+          <strong>Nota sobre tasa variable:</strong> las proyecciones de flujos de este bono usarán
+          la tasa de cupón ingresada arriba como tasa constante supuesta. Todas las filas de cupón
+          proyectadas se marcarán como &ldquo;tasa asumida&rdquo; en la interfaz.
         </div>
       )}
 
@@ -434,11 +434,11 @@ export function BondTermsForm({
       <div className="flex justify-end gap-2">
         {onCancel && (
           <Button type="button" variant="outline" onClick={onCancel} disabled={pending}>
-            Cancel
+            Cancelar
           </Button>
         )}
         <Button type="submit" disabled={pending || !!amortSumError}>
-          {pending ? "Saving…" : initialTerms ? "Update Terms" : "Save Terms"}
+          {pending ? "Guardando…" : initialTerms ? "Actualizar términos" : "Guardar términos"}
         </Button>
       </div>
     </form>

@@ -32,7 +32,7 @@ export function BondProjectionTable({
   if (!hasTerms) {
     return (
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-6 py-8 text-center">
-        <p className="text-sm text-zinc-400">No bond terms entered for {ticker}.</p>
+        <p className="text-sm text-zinc-400">No hay términos cargados para {ticker}.</p>
         <p className="mt-1 text-xs text-zinc-500">
           {onEnterTerms ? (
             <>
@@ -40,12 +40,12 @@ export function BondProjectionTable({
                 onClick={onEnterTerms}
                 className="text-teal-400 underline underline-offset-2 hover:text-teal-300"
               >
-                Enter terms
+                Cargar términos
               </button>{" "}
-              to project future coupon and amortization payments.
+              para proyectar los pagos futuros de cupón y amortización.
             </>
           ) : (
-            "Enter bond terms to project future coupon and amortization payments."
+            "Cargá los términos para proyectar los pagos futuros de cupón y amortización."
           )}
         </p>
       </div>
@@ -56,7 +56,7 @@ export function BondProjectionTable({
     return (
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-6 py-8 text-center">
         <p className="text-sm text-zinc-400">
-          No future cash flows — this bond may have matured or all flows are in the past.
+          No hay flujos futuros — el bono puede haber vencido o todos los flujos ya ocurrieron.
         </p>
       </div>
     );
@@ -70,8 +70,8 @@ export function BondProjectionTable({
         <div className="flex items-start gap-2 rounded-md border border-amber-900/50 bg-amber-950/20 p-2 text-xs text-amber-200">
           <InfoIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
-            This bond has a floating rate. Future coupons are projected at the last-known rate
-            as an assumption — actual payments may differ when the rate resets.
+            Este bono tiene tasa variable. Los cupones futuros se proyectan a la última tasa
+            conocida como supuesto — los pagos reales pueden diferir cuando la tasa se ajuste.
           </span>
         </div>
       )}
@@ -80,9 +80,9 @@ export function BondProjectionTable({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead>Date</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead className="text-right">Amount ({currencyCode})</TableHead>
+              <TableHead>Fecha</TableHead>
+              <TableHead>Tipo</TableHead>
+              <TableHead className="text-right">Monto ({currencyCode})</TableHead>
               <TableHead></TableHead>
             </TableRow>
           </TableHeader>

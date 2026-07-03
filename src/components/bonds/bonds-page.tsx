@@ -161,7 +161,7 @@ function HoldingAnalyticsSection({ holding }: { holding: BondHoldingV2 }) {
           disabled={loadingTerms}
           className="text-xs text-zinc-400 hover:text-teal-400 underline underline-offset-2 disabled:opacity-50"
         >
-          {loadingTerms ? "Loading…" : showForm ? "Cancel" : effectiveHasTerms ? "Edit terms" : "Enter terms"}
+          {loadingTerms ? "Cargando…" : showForm ? "Cancelar" : effectiveHasTerms ? "Editar términos" : "Cargar términos"}
         </button>
       </div>
 

@@ -4,8 +4,9 @@
  * Endpoint: https://data912.com/live/arg_corp
  *
  * The `c` field in each quote is ARS per 100 nominal VN (face value):
- *   position value ARS = nominalHeld × c
- *   (VN_PER_UNIT = 100 and c is ARS/100 VN, so the /100 and ×100 cancel — no /100 needed)
+ *   position value ARS = nominalHeld × c / 100
+ *   (`c` is quoted per 100 VN; nominalHeld is a raw VN count, so divide by 100.
+ *    See valuation.ts VN_QUOTE_BASIS.)
  *
  * Caching strategy mirrors quotes.ts:
  *   - Next.js fetch cache: revalidate=300s, tag "on-prices"
