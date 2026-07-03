@@ -10,8 +10,7 @@ import { BondCashflowTable } from "./bond-cashflow-table";
 import { BondAnalyticsCard } from "./bond-analytics";
 import { BondProjectionTable } from "./bond-projection-table";
 import { BondTermsForm } from "./bond-terms-form";
-import { getBondTermsAction } from "@/app/actions/bond-terms";
-import type { BondTerms } from "@/lib/generated/prisma";
+import { getBondTermsAction, type BondTermsDTO } from "@/app/actions/bond-terms";
 
 type Props = {
   data: BondsPageDataV2;
@@ -115,9 +114,9 @@ export function BondsPage({ data }: Props) {
 
 function HoldingAnalyticsSection({ holding }: { holding: BondHoldingV2 }) {
   const [showForm, setShowForm] = useState(false);
-  const [localTerms, setLocalTerms] = useState<BondTerms | null>(null);
+  const [localTerms, setLocalTerms] = useState<BondTermsDTO | null>(null);
   // Loaded on-demand when the user clicks "Edit terms" for a holding that already has terms.
-  const [loadedTerms, setLoadedTerms] = useState<BondTerms | null>(null);
+  const [loadedTerms, setLoadedTerms] = useState<BondTermsDTO | null>(null);
   const [loadingTerms, setLoadingTerms] = useState(false);
 
   const effectiveHasTerms = holding.hasTerms || !!localTerms;
@@ -143,7 +142,7 @@ function HoldingAnalyticsSection({ holding }: { holding: BondHoldingV2 }) {
     setShowForm(true);
   }
 
-  function handleTermsSaved(terms: BondTerms) {
+  function handleTermsSaved(terms: BondTermsDTO) {
     setLocalTerms(terms);
     setLoadedTerms(terms);
     setShowForm(false);

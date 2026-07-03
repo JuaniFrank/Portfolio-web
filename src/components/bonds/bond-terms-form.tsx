@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import type { BondTerms } from "@/lib/generated/prisma";
 import {
   upsertBondTermsAction,
   type BondTermsInput,
+  type BondTermsDTO,
   type AmortizationEntry,
 } from "@/app/actions/bond-terms";
 import { Button } from "@/components/ui/button";
@@ -27,8 +27,8 @@ type Props = {
   instrumentId: string;
   ticker: string;
   /** Pre-populated when editing existing terms. */
-  initialTerms?: BondTerms | null;
-  onSaved?: (terms: BondTerms) => void;
+  initialTerms?: BondTermsDTO | null;
+  onSaved?: (terms: BondTermsDTO) => void;
   onCancel?: () => void;
 };
 
@@ -52,32 +52,24 @@ type AmortizationRow = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function toFormState(terms: BondTerms): FormState {
-  const schedule = Array.isArray(terms.amortizationSchedule)
-    ? (terms.amortizationSchedule as AmortizationEntry[])
-    : [];
-  void schedule; // used only for amort rows below
-
+function toFormState(terms: BondTermsDTO): FormState {
   return {
-    faceValue: String(terms.faceValue),
+    faceValue: terms.faceValue,
     currencyCode: terms.currencyCode,
-    rateType: terms.rateType as "FIXED" | "FLOATING",
-    couponRate: String(terms.couponRate),
+    rateType: terms.rateType,
+    couponRate: terms.couponRate,
     couponFrequencyMonths: String(terms.couponFrequencyMonths),
-    issueDate: terms.issueDate instanceof Date
-      ? terms.issueDate.toISOString().slice(0, 10)
-      : String(terms.issueDate).slice(0, 10),
-    maturityDate: terms.maturityDate instanceof Date
-      ? terms.maturityDate.toISOString().slice(0, 10)
-      : String(terms.maturityDate).slice(0, 10),
+    issueDate: terms.issueDate.slice(0, 10),
+    maturityDate: terms.maturityDate.slice(0, 10),
     dayCountConvention: terms.dayCountConvention,
   };
 }
 
-function toAmortizationRows(terms: BondTerms): AmortizationRow[] {
-  const raw = terms.amortizationSchedule;
-  if (!Array.isArray(raw)) return [{ date: "", principalPct: "100" }];
-  return (raw as AmortizationEntry[]).map((e) => ({
+function toAmortizationRows(terms: BondTermsDTO): AmortizationRow[] {
+  if (terms.amortizationSchedule.length === 0) {
+    return [{ date: "", principalPct: "100" }];
+  }
+  return terms.amortizationSchedule.map((e) => ({
     date: e.date.slice(0, 10),
     principalPct: String(e.principalPct),
   }));

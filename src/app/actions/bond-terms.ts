@@ -26,8 +26,54 @@ export type BondTermsInput = {
   dayCountConvention: string;
 };
 
+/**
+ * Serializable view of BondTerms for crossing the RSC → Client boundary.
+ *
+ * Prisma returns `faceValue` and `couponRate` as Decimal and the dates as Date
+ * objects; Decimals cannot be passed to Client Components. This DTO exposes
+ * Decimals as strings and dates as ISO strings so the whole object is a plain
+ * serializable value. The terms form parses the strings back on submit.
+ */
+export type BondTermsDTO = {
+  id: string;
+  instrumentId: string;
+  faceValue: string;
+  currencyCode: string;
+  rateType: "FIXED" | "FLOATING";
+  couponRate: string;
+  couponFrequencyMonths: number;
+  issueDate: string;
+  maturityDate: string;
+  amortizationSchedule: AmortizationEntry[];
+  dayCountConvention: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function toBondTermsDTO(terms: BondTerms): BondTermsDTO {
+  const schedule = Array.isArray(terms.amortizationSchedule)
+    ? (terms.amortizationSchedule as unknown as AmortizationEntry[])
+    : [];
+
+  return {
+    id: terms.id,
+    instrumentId: terms.instrumentId,
+    faceValue: terms.faceValue.toString(),
+    currencyCode: terms.currencyCode,
+    rateType: terms.rateType as "FIXED" | "FLOATING",
+    couponRate: terms.couponRate.toString(),
+    couponFrequencyMonths: terms.couponFrequencyMonths,
+    issueDate: terms.issueDate.toISOString(),
+    maturityDate: terms.maturityDate.toISOString(),
+    amortizationSchedule: schedule,
+    dayCountConvention: terms.dayCountConvention,
+    createdAt: terms.createdAt.toISOString(),
+    updatedAt: terms.updatedAt.toISOString(),
+  };
+}
+
 export type BondTermsActionResult =
-  | { success: true; data: BondTerms }
+  | { success: true; data: BondTermsDTO }
   | { success: false; error: string };
 
 // ---------------------------------------------------------------------------
@@ -161,7 +207,7 @@ export async function upsertBondTermsAction(
     },
   });
 
-  return { success: true, data };
+  return { success: true, data: toBondTermsDTO(data) };
 }
 
 /**
@@ -172,7 +218,7 @@ export async function upsertBondTermsAction(
  */
 export async function getBondTermsAction(
   instrumentId: string
-): Promise<{ success: true; data: BondTerms | null } | { success: false; error: string }> {
+): Promise<{ success: true; data: BondTermsDTO | null } | { success: false; error: string }> {
   const user = await getCurrentUser();
   if (!user) return { success: false, error: "unauthorized" };
 
@@ -180,5 +226,5 @@ export async function getBondTermsAction(
     where: { instrumentId },
   });
 
-  return { success: true, data: terms };
+  return { success: true, data: terms ? toBondTermsDTO(terms) : null };
 }
