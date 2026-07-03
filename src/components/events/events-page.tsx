@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { CalendarSync } from "lucide-react";
 import type { CorporateEventDTO } from "@/lib/events/types";
+import { resolveApplicableRecommendations } from "@/lib/events/recommended";
 import { EventsList } from "./events-list";
 import { EventFormDialog } from "./event-form-dialog";
+import { RecommendedEvents } from "./recommended-events";
 
 type InstrumentOption = {
   id: string;
@@ -35,6 +37,10 @@ export function EventsPage({ initialEvents, instruments }: Props) {
   const lastDate =
     events.length > 0 ? events[0]!.effectiveDate : null;
   const distinctInstruments = new Set(events.map((e) => e.instrumentId)).size;
+
+  // Recomputed each render: once an event is applied it lands in `events`,
+  // so the matching recommendation drops out automatically.
+  const recommendations = resolveApplicableRecommendations(instruments, events);
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
@@ -72,6 +78,12 @@ export function EventsPage({ initialEvents, instruments }: Props) {
           <p className="mt-1 text-2xl font-semibold text-zinc-100">{distinctInstruments}</p>
         </div>
       </div>
+
+      {/* Suggested events (curated, one-click apply) */}
+      <RecommendedEvents
+        recommendations={recommendations}
+        onApplied={handleEventCreated}
+      />
 
       {/* Events list */}
       <EventsList
