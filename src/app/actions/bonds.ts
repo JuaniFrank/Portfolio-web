@@ -122,6 +122,7 @@ export async function getBondsPageDataAction(): Promise<
         } satisfies BondAnalytics,
         projectedFlows: [],
         hasTerms: false,
+        dayCountConvention: null,
       };
     }
 
@@ -168,6 +169,7 @@ export async function getBondsPageDataAction(): Promise<
       flowType: f.flowType,
       amount: f.amount.toFixed(8).replace(/\.?0+$/, "") || "0",
       assumedRate: f.assumedRate,
+      periodDays: f.periodDays,
     }));
 
     return {
@@ -175,6 +177,7 @@ export async function getBondsPageDataAction(): Promise<
       analytics,
       projectedFlows: upcomingFlows,
       hasTerms: true,
+      dayCountConvention: terms.dayCountConvention,
     };
   });
 

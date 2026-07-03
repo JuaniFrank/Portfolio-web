@@ -1,6 +1,7 @@
 "use client";
 
 import { InfoIcon } from "lucide-react";
+import Decimal from "decimal.js";
 import {
   Table,
   TableBody,
@@ -9,9 +10,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import type { UpcomingFlow } from "@/lib/bonds/types";
-import { formatFullDate, formatMoney, type ViewCurrency } from "./format";
+import { formatFullDate, formatMoney, formatNumber, type ViewCurrency } from "./format";
 
 type Props = {
   flows: UpcomingFlow[];
@@ -19,14 +19,74 @@ type Props = {
   currencyCode: ViewCurrency;
   ticker: string;
   hasTerms: boolean;
+  /** Day-count convention label for the "días del período" column header. */
+  dayCountConvention?: string | null;
   onEnterTerms?: () => void;
 };
+
+/** One row per payment date: coupon interest and amortization shown side by side. */
+type ScheduleRow = {
+  seq: number;
+  date: string;
+  periodDays: number | null;
+  interest: Decimal;
+  amortization: Decimal;
+  total: Decimal;
+  assumedRate: boolean;
+};
+
+/**
+ * Collapse the flat coupon/amortization flow list into one row per payment date,
+ * so a maturity date that pays both a coupon and principal shows a single row.
+ * Input is assumed chronological (projectCashFlows sorts ascending).
+ */
+function groupByPaymentDate(flows: UpcomingFlow[]): ScheduleRow[] {
+  const byDate = new Map<string, ScheduleRow>();
+
+  for (const f of flows) {
+    const row: ScheduleRow =
+      byDate.get(f.date) ?? {
+        seq: 0,
+        date: f.date,
+        periodDays: null,
+        interest: new Decimal(0),
+        amortization: new Decimal(0),
+        total: new Decimal(0),
+        assumedRate: false,
+      };
+
+    const amount = new Decimal(f.amount);
+    if (f.flowType === "COUPON") {
+      row.interest = row.interest.plus(amount);
+      if (f.periodDays !== null) row.periodDays = f.periodDays;
+      if (f.assumedRate) row.assumedRate = true;
+    } else {
+      row.amortization = row.amortization.plus(amount);
+    }
+    row.total = row.total.plus(amount);
+
+    byDate.set(f.date, row);
+  }
+
+  const rows = Array.from(byDate.values());
+  rows.forEach((row, index) => {
+    row.seq = index + 1;
+  });
+  return rows;
+}
+
+/** Currency amount prefixed with ≈ to signal it is a projection, or "—" for zero. */
+function estimated(value: Decimal, currency: ViewCurrency): string {
+  if (value.isZero()) return "—";
+  return `≈ ${formatMoney(value.toFixed(2), currency)}`;
+}
 
 export function BondProjectionTable({
   flows,
   currencyCode,
   ticker,
   hasTerms,
+  dayCountConvention,
   onEnterTerms,
 }: Props) {
   if (!hasTerms) {
@@ -62,7 +122,16 @@ export function BondProjectionTable({
     );
   }
 
-  const hasAssumedRate = flows.some((f) => f.assumedRate);
+  const rows = groupByPaymentDate(flows);
+  const hasAssumedRate = rows.some((r) => r.assumedRate);
+
+  const totalInterest = rows.reduce((sum, r) => sum.plus(r.interest), new Decimal(0));
+  const totalAmortization = rows.reduce((sum, r) => sum.plus(r.amortization), new Decimal(0));
+  const totalFlow = rows.reduce((sum, r) => sum.plus(r.total), new Decimal(0));
+
+  const periodHeader = dayCountConvention
+    ? `Días del período (${dayCountConvention})`
+    : "Días del período";
 
   return (
     <div className="space-y-2">
@@ -80,39 +149,55 @@ export function BondProjectionTable({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead>Fecha</TableHead>
-              <TableHead>Tipo</TableHead>
-              <TableHead className="text-right">Monto ({currencyCode})</TableHead>
-              <TableHead></TableHead>
+              <TableHead className="w-12">N°</TableHead>
+              <TableHead>Fecha de pago</TableHead>
+              <TableHead className="text-right">{periodHeader}</TableHead>
+              <TableHead className="text-right">Interés estimado ({currencyCode})</TableHead>
+              <TableHead className="text-right">Amortización ({currencyCode})</TableHead>
+              <TableHead className="text-right">Flujo total ({currencyCode})</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {flows.map((flow, idx) => (
-              <TableRow key={`${flow.date}-${flow.flowType}-${idx}`}>
+            {rows.map((row) => (
+              <TableRow key={row.date}>
+                <TableCell className="font-mono text-sm text-zinc-500">{row.seq}</TableCell>
                 <TableCell className="font-mono text-sm text-zinc-300">
-                  {formatFullDate(flow.date)}
+                  {formatFullDate(row.date)}
                 </TableCell>
-                <TableCell>
-                  {flow.flowType === "COUPON" ? (
-                    <Badge className="bg-teal-900/50 text-teal-300 hover:bg-teal-900/50 border-teal-800">
-                      Cupón
-                    </Badge>
-                  ) : (
-                    <Badge className="bg-violet-900/50 text-violet-300 hover:bg-violet-900/50 border-violet-800">
-                      Amortización
-                    </Badge>
-                  )}
+                <TableCell className="text-right font-mono text-sm text-zinc-400">
+                  {row.periodDays !== null ? formatNumber(row.periodDays) : "—"}
                 </TableCell>
                 <TableCell className="text-right font-mono text-sm text-zinc-200">
-                  {formatMoney(flow.amount, currencyCode)}
+                  {estimated(row.interest, currencyCode)}
                 </TableCell>
-                <TableCell className="text-right">
-                  {flow.assumedRate && (
-                    <span className="text-[11px] text-amber-500 italic">tasa asumida</span>
-                  )}
+                <TableCell className="text-right font-mono text-sm text-zinc-200">
+                  {row.amortization.isZero()
+                    ? "—"
+                    : formatMoney(row.amortization.toFixed(2), currencyCode)}
+                </TableCell>
+                <TableCell className="text-right font-mono text-sm font-medium text-zinc-100">
+                  {estimated(row.total, currencyCode)}
                 </TableCell>
               </TableRow>
             ))}
+
+            {/* Totals */}
+            <TableRow className="border-t-2 border-zinc-700 hover:bg-transparent">
+              <TableCell />
+              <TableCell className="text-sm font-semibold text-zinc-200">Total</TableCell>
+              <TableCell />
+              <TableCell className="text-right font-mono text-sm font-semibold text-zinc-100">
+                {estimated(totalInterest, currencyCode)}
+              </TableCell>
+              <TableCell className="text-right font-mono text-sm font-semibold text-zinc-100">
+                {totalAmortization.isZero()
+                  ? "—"
+                  : formatMoney(totalAmortization.toFixed(2), currencyCode)}
+              </TableCell>
+              <TableCell className="text-right font-mono text-sm font-semibold text-zinc-100">
+                {estimated(totalFlow, currencyCode)}
+              </TableCell>
+            </TableRow>
           </TableBody>
         </Table>
       </div>

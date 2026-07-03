@@ -9,6 +9,7 @@ import Decimal from "decimal.js";
 import { addMonths as dateFnsAddMonths } from "date-fns";
 import type { ReceivedFlow } from "./types";
 import type { CashFlow } from "./analytics";
+import { normalizeConvention, periodAccrual } from "./day-count";
 
 export type TransactionForCashFlows = {
   ticker: string;
@@ -111,6 +112,11 @@ export type ProjectedFlow = CashFlow & {
   flowType: "COUPON" | "AMORTIZATION";
   /** True when rateType is FLOATING — rate is the last-known value, not a forecast. */
   assumedRate: boolean;
+  /**
+   * Accrual days in this coupon's period per the day-count convention
+   * (actual days for ACT/*, 30-adjusted for 30/360). Null for AMORTIZATION flows.
+   */
+  periodDays: number | null;
 };
 
 /**
@@ -142,6 +148,7 @@ export function projectCashFlows(
   const couponRate = new Decimal(String(terms.couponRate));
   const freqMonths = terms.couponFrequencyMonths;
   const isFloating = terms.rateType === "FLOATING";
+  const convention = normalizeConvention(terms.dayCountConvention);
 
   // Parse and sort amortization schedule (already sorted by parseAmortizationSchedule)
   const schedule = parseAmortizationSchedule(terms.amortizationSchedule);
@@ -149,6 +156,17 @@ export function projectCashFlows(
   // Build ordered coupon payment dates from issueDate to maturityDate
   const couponDates = buildCouponDates(issueDate, maturityDate, freqMonths);
   const couponDateSet = new Set(couponDates.map((d) => d.getTime()));
+
+  // Map each coupon date to the start of its accrual period (the previous coupon
+  // date, or the issue date for the first coupon). Interest accrues over the full
+  // period regardless of the valuation date, so a full coupon is projected even
+  // when today falls mid-period.
+  const periodStartByCoupon = new Map<number, Date>();
+  let prevCouponDate = issueDate;
+  for (const d of couponDates) {
+    periodStartByCoupon.set(d.getTime(), prevCouponDate);
+    prevCouponDate = d;
+  }
 
   // Build a merged, date-sorted timeline of all events so that amortizations
   // between coupon dates reduce the outstanding principal before the next coupon
@@ -204,15 +222,20 @@ export function projectCashFlows(
           amount: principalAmount.toDecimalPlaces(8).toNumber(),
           t,
           assumedRate: false,
+          periodDays: null,
         });
       }
     } else {
       // COUPON event — only emit if it falls on a proper coupon date and is in the future
       if (!couponDateSet.has(eventTime)) continue; // skip duplicates
       if (eventTime > todayTime && remainingPrincipalPct.gt(0)) {
-        const periodsPerYear = new Decimal(12).div(new Decimal(freqMonths));
+        // Day-count accrual: interest = outstandingPrincipal × rate × yearFraction.
+        const periodStart = periodStartByCoupon.get(eventTime) ?? issueDate;
+        const accrual = periodAccrual(periodStart, event.date, convention);
         const outstandingPrincipal = faceValue.mul(remainingPrincipalPct.div(100));
-        const couponAmount = couponRate.mul(outstandingPrincipal).div(periodsPerYear);
+        const couponAmount = couponRate
+          .mul(outstandingPrincipal)
+          .mul(new Decimal(accrual.yearFraction));
         const t = yearsBetween(today, event.date);
         flows.push({
           date: event.date.toISOString(),
@@ -220,6 +243,7 @@ export function projectCashFlows(
           amount: couponAmount.toDecimalPlaces(8).toNumber(),
           t,
           assumedRate: isFloating,
+          periodDays: accrual.days,
         });
       }
     }

@@ -86,6 +86,11 @@ export type UpcomingFlow = {
   amount: string;
   /** True when rateType is FLOATING — rate is the last-known value, not a forecast. */
   assumedRate: boolean;
+  /**
+   * Accrual days in this coupon's period per the day-count convention.
+   * Null for AMORTIZATION flows (no accrual period).
+   */
+  periodDays: number | null;
 };
 
 /** YTM and duration analytics for a single position. */
@@ -114,6 +119,11 @@ export type BondHoldingV2 = BondHolding & {
   projectedFlows: UpcomingFlow[];
   /** True when BondTerms exist for this instrument. */
   hasTerms: boolean;
+  /**
+   * Day-count convention from BondTerms (e.g. "ACT/365"), shown as the unit of
+   * the "días del período" column. Null when no terms are entered.
+   */
+  dayCountConvention: string | null;
 };
 
 export type BondsPageDataV2 = Omit<BondsPageData, "holdings"> & {

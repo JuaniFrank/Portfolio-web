@@ -189,6 +189,7 @@ function HoldingAnalyticsSection({ holding }: { holding: BondHoldingV2 }) {
               currencyCode="USD"
               ticker={holding.ticker}
               hasTerms={effectiveHasTerms}
+              dayCountConvention={holding.dayCountConvention}
               onEnterTerms={() => setShowForm(true)}
             />
           </div>
