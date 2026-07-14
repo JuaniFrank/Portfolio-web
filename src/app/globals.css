@@ -29,3 +29,30 @@ body {
   background: var(--background);
   color: var(--foreground);
 }
+
+/* Indeterminate progress bar: a segment sliding across the track. Used when
+   an operation is running but has no reportable percentage (e.g. an atomic
+   import commit). */
+@keyframes indeterminate-progress {
+  0% {
+    left: -40%;
+    right: 100%;
+  }
+  60%,
+  100% {
+    left: 100%;
+    right: -40%;
+  }
+}
+
+.indeterminate-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -40%;
+  right: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: indeterminate-progress 1.2s ease-in-out infinite;
+}

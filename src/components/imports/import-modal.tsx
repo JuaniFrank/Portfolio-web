@@ -199,10 +199,13 @@ export function ImportModal({ open, onOpenChange, context }: ImportModalProps) {
                 onFile={handleFile}
               />
               {parsing && (
-                <p className="flex items-center gap-2 text-sm text-zinc-400">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Procesando archivo…
-                </p>
+                <div className="space-y-2">
+                  <p className="flex items-center gap-2 text-sm text-zinc-400">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Procesando archivo…
+                  </p>
+                  <IndeterminateBar />
+                </div>
               )}
             </div>
           )}
@@ -239,6 +242,20 @@ export function ImportModal({ open, onOpenChange, context }: ImportModalProps) {
             </div>
           )}
 
+          {step === "committing" && (
+            <div className="space-y-3 py-2">
+              <p className="flex items-center gap-2 text-sm text-zinc-300">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Guardando {commitRows.length} movimientos…
+              </p>
+              <IndeterminateBar />
+              <p className="text-xs text-zinc-500">
+                No cierres esta ventana. Se guarda todo o nada, así que si algo falla no queda nada a
+                medias.
+              </p>
+            </div>
+          )}
+
           {step === "done" && preview && (
             <p className="text-sm text-emerald-400">
               Importación completada. Podés ver las transacciones en el listado.
@@ -257,7 +274,7 @@ export function ImportModal({ open, onOpenChange, context }: ImportModalProps) {
           >
             {step === "done" ? "Cerrar" : "Cancelar"}
           </Button>
-          {step === "preview" && (
+          {(step === "preview" || step === "committing") && (
             <Button type="button" onClick={handleCommit} disabled={!canCommit || isCommitting}>
               {isCommitting ? (
                 <>
@@ -272,6 +289,16 @@ export function ImportModal({ open, onOpenChange, context }: ImportModalProps) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function IndeterminateBar() {
+  return (
+    <div
+      role="progressbar"
+      aria-label="Progreso indeterminado"
+      className="indeterminate-bar relative h-1.5 w-full overflow-hidden rounded-full bg-zinc-800"
+    />
   );
 }
 
