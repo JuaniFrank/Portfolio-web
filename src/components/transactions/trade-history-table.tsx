@@ -63,7 +63,7 @@ export function TradeHistoryTable({ trades, search }: TradeHistoryTableProps) {
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-6 py-12 text-center">
         <p className="text-sm text-zinc-400">No hay operaciones de compra o venta registradas.</p>
         <p className="mt-1 text-xs text-zinc-500">
-          Las operaciones de acciones y CEDEARs aparecerán acá.
+          Las operaciones de acciones, CEDEARs y ONs aparecerán acá.
         </p>
       </div>
     );

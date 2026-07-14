@@ -1,7 +1,13 @@
 "use server";
 
 import { getCurrentUser } from "@/lib/auth";
+import {
+  toBondTrade,
+  toHoldingRow,
+  valuateOnPositions,
+} from "@/lib/bonds/portfolio-bridge";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
+import { fetchOnPrices } from "@/lib/market/data912";
 import { refreshLatestQuotes, type InstrumentForQuote } from "@/lib/market/quotes";
 import { prisma } from "@/lib/prisma";
 import {
@@ -15,6 +21,36 @@ import { TRADE_INSTRUMENT_TYPES, TRADE_TYPES } from "@/lib/transactions/types";
 function toUsdPrice(priceArs: number, cclRate: number | null): string | null {
   if (!cclRate || cclRate <= 0) return null;
   return (priceArs / cclRate).toFixed(2);
+}
+
+function toArsFromUsd(amountUsd: number, cclRate: number | null): string {
+  if (!cclRate || cclRate <= 0) return amountUsd.toFixed(2);
+  return (amountUsd * cclRate).toFixed(2);
+}
+
+function tradePricesAndAmounts(
+  price: number,
+  netAmount: number,
+  currencyCode: string,
+  cclRate: number | null
+): Pick<TradeHistoryRow, "priceArs" | "priceUsd" | "amountArs" | "amountUsd"> {
+  const amountAbs = Math.abs(netAmount);
+
+  if (currencyCode === "USD") {
+    return {
+      priceUsd: price.toFixed(2),
+      priceArs: toArsFromUsd(price, cclRate),
+      amountUsd: amountAbs.toFixed(2),
+      amountArs: toArsFromUsd(amountAbs, cclRate),
+    };
+  }
+
+  return {
+    priceArs: price.toFixed(2),
+    priceUsd: toUsdPrice(price, cclRate),
+    amountArs: amountAbs.toFixed(2),
+    amountUsd: toUsdPrice(amountAbs, cclRate),
+  };
 }
 
 export async function getTransactionsPageDataAction(): Promise<
@@ -83,15 +119,16 @@ export async function getTransactionsPageDataAction(): Promise<
   const cclRate = latestFx ? Number(latestFx.mid) : null;
 
   const tradesForHoldings: TradeForHoldings[] = [];
+  const onBondTrades: ReturnType<typeof toBondTrade>[] = [];
+  const onNamesById = new Map<string, string>();
   const history: TradeHistoryRow[] = [];
 
   for (const r of rows) {
     if (!r.instrument) continue;
 
-    const priceArs = Number(r.price);
+    const price = Number(r.price);
     const qty = Number(r.quantity);
-
-    tradesForHoldings.push({
+    const trade: TradeForHoldings = {
       instrumentId: r.instrument.id,
       ticker: r.instrument.ticker,
       instrumentType: r.instrument.type,
@@ -101,13 +138,24 @@ export async function getTransactionsPageDataAction(): Promise<
       price: r.price.toString(),
       netAmount: r.netAmount.toString(),
       tradeDate: r.tradeDate.toISOString(),
-    });
+    };
+
+    if (r.instrument.type === "ON") {
+      onBondTrades.push(toBondTrade(trade, r.currencyCode));
+      onNamesById.set(r.instrument.id, r.instrument.name);
+    } else {
+      tradesForHoldings.push(trade);
+    }
 
     const tagFromDb = r.tags[0]?.tag.name;
     const tagFromBroker = r.importBatch?.broker.code.toLowerCase();
     const tagLabel = tagFromDb ?? tagFromBroker ?? null;
-
-    const amountArs = Math.abs(Number(r.netAmount));
+    const { priceArs, priceUsd, amountArs, amountUsd } = tradePricesAndAmounts(
+      price,
+      Number(r.netAmount),
+      r.currencyCode,
+      cclRate
+    );
 
     history.push({
       id: r.id,
@@ -117,10 +165,10 @@ export async function getTransactionsPageDataAction(): Promise<
       instrumentType: r.instrument.type,
       instrumentName: r.instrument.name,
       quantity: qty.toString(),
-      priceArs: r.price.toString(),
-      priceUsd: toUsdPrice(priceArs, cclRate),
-      amountArs: amountArs.toString(),
-      amountUsd: toUsdPrice(amountArs, cclRate),
+      priceArs,
+      priceUsd,
+      amountArs,
+      amountUsd,
       currencyCode: r.currencyCode,
       tagLabel,
       source: r.source,
@@ -137,9 +185,20 @@ export async function getTransactionsPageDataAction(): Promise<
       });
     }
   }
-  const { prices: latestPrices } = await refreshLatestQuotes([...uniqueInstruments.values()]);
 
-  const holdings = buildHoldings(tradesForHoldings, latestPrices, eventsMap);
+  const onTickers = Array.from(new Set(onBondTrades.map((t) => t.ticker.toUpperCase())));
+
+  const [{ prices: latestPrices }, onPriceResult] = await Promise.all([
+    refreshLatestQuotes([...uniqueInstruments.values()]),
+    onTickers.length > 0 ? fetchOnPrices(onTickers) : Promise.resolve({ quotes: new Map(), stale: false }),
+  ]);
+
+  const equityHoldings = buildHoldings(tradesForHoldings, latestPrices, eventsMap);
+  const onPositions = valuateOnPositions(onBondTrades, onPriceResult, cclRate, onNamesById);
+  const onHoldings = onPositions.map((p) => toHoldingRow(p, cclRate));
+  const holdings = [...equityHoldings, ...onHoldings].sort((a, b) =>
+    a.ticker.localeCompare(b.ticker)
+  );
   const summaryBase = computePortfolioSummary(holdings);
 
   return {

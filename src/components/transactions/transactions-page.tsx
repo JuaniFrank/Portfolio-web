@@ -135,7 +135,7 @@ function PageHeader() {
     <div className="space-y-2">
       <h1 className="text-3xl font-semibold tracking-tight text-zinc-50">Transacciones</h1>
       <p className="max-w-2xl text-sm leading-relaxed text-zinc-400">
-        Resumen de posiciones y historial de compras y ventas en acciones y CEDEARs.
+        Resumen de posiciones y historial de compras y ventas en acciones, CEDEARs y ONs.
       </p>
     </div>
   );

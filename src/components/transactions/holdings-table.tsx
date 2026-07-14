@@ -75,7 +75,7 @@ export function HoldingsTable({ holdings, search }: HoldingsTableProps) {
 function EmptyState() {
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-6 py-12 text-center">
-      <p className="text-sm text-zinc-400">No tenés posiciones en acciones o CEDEARs.</p>
+      <p className="text-sm text-zinc-400">No tenés posiciones en acciones, CEDEARs u ONs.</p>
       <p className="mt-1 text-xs text-zinc-500">
         Importá movimientos desde Balanz o registrá operaciones manualmente.
       </p>
