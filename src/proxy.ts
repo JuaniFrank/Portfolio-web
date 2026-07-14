@@ -1,45 +1,46 @@
-import { auth } from "@/lib/auth";
-import { NextResponse } from "next/server";
+import { getToken } from "next-auth/jwt";
+import { NextResponse, type NextRequest } from "next/server";
 
-const appPrefixes = [
-  "/dashboard",
-  "/portfolios",
-  "/transactions",
-  "/imports",
-  "/brokers",
-  "/instruments",
-  "/settings",
-] as const;
+// Public routes reachable without a session. Everything else under the
+// matcher is protected by default, so new app routes don't silently leak.
+const PUBLIC_PATHS = ["/", "/login", "/register", "/reset-password"];
 
-function isProtectedPath(pathname: string) {
-  return appPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+function isPublic(pathname: string): boolean {
+  return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
-export default auth((req) => {
+/**
+ * Optimistic auth gate. First line of defense only — the real enforcement
+ * lives in the server actions (`getCurrentUser`) close to the data. `getToken`
+ * verifies the JWT with the secret, so expired/forged cookies read as
+ * unauthenticated (no redirect loop). Runs on the Node.js runtime in Next 16.
+ */
+export default async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  if (pathname.startsWith("/api/auth")) {
-    return NextResponse.next();
-  }
+  const token = await getToken({
+    req,
+    secret: process.env.NEXTAUTH_SECRET ?? process.env.AUTH_SECRET,
+    secureCookie: process.env.NODE_ENV === "production",
+  });
+  const isAuthed = Boolean(token);
 
-  const loggedIn = !!req.auth;
-
-  if (isProtectedPath(pathname) && !loggedIn) {
+  if (!isAuthed && !isPublic(pathname)) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("callbackUrl", pathname);
     return NextResponse.redirect(url);
   }
 
-  if ((pathname === "/login" || pathname === "/register") && loggedIn) {
+  if (isAuthed && (pathname === "/login" || pathname === "/register")) {
     return NextResponse.redirect(new URL("/dashboard", req.nextUrl));
   }
 
   return NextResponse.next();
-});
+}
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

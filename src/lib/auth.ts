@@ -5,6 +5,10 @@ import type { CostMethod } from "@/lib/generated/prisma";
 import type { RegisterInput } from "@/lib/validations/auth";
 import { loginSchema } from "@/lib/validations/auth";
 import { prisma } from "@/lib/prisma";
+import { rateLimit } from "@/lib/rate-limit";
+
+const LOGIN_ATTEMPTS = 10;
+const LOGIN_WINDOW_MS = 60_000;
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
@@ -19,7 +23,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
-      async authorize(raw) {
+      async authorize(raw, request) {
+        // Throttle by client IP before touching the DB. On serverless this is
+        // per-instance only; see rate-limit.ts for the distributed caveat.
+        const ip =
+          request?.headers?.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+        if (!rateLimit(`login:${ip}`, LOGIN_ATTEMPTS, LOGIN_WINDOW_MS).allowed) {
+          return null;
+        }
+
         const parsed = loginSchema.safeParse({
           email: raw?.email,
           password: raw?.password,
