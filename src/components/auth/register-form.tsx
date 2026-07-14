@@ -25,6 +25,7 @@ export function RegisterForm() {
       email: "",
       password: "",
       confirmPassword: "",
+      inviteCode: "",
     },
   });
 
@@ -96,6 +97,13 @@ export function RegisterForm() {
             />
             {form.formState.errors.confirmPassword?.message ? (
               <p className="text-xs text-red-400">{form.formState.errors.confirmPassword.message}</p>
+            ) : null}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="inviteCode">Código de invitación</Label>
+            <Input id="inviteCode" autoComplete="off" {...form.register("inviteCode")} />
+            {form.formState.errors.inviteCode?.message ? (
+              <p className="text-xs text-red-400">{form.formState.errors.inviteCode.message}</p>
             ) : null}
           </div>
           {formError ? <p className="text-sm text-red-400">{formError}</p> : null}

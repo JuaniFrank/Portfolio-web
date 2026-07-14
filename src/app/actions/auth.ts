@@ -24,6 +24,13 @@ export async function createUserAction(input: RegisterInput): Promise<CreateUser
     return { ok: false, error: msg ?? "Datos inválidos" };
   }
 
+  // Gate registration behind a shared invite code. If none is configured,
+  // registration is closed entirely rather than open to anyone.
+  const expectedCode = process.env.REGISTRATION_INVITE_CODE;
+  if (!expectedCode || parsed.data.inviteCode !== expectedCode) {
+    return { ok: false, error: "Código de invitación inválido" };
+  }
+
   try {
     await registerUser(parsed.data);
     return { ok: true };
