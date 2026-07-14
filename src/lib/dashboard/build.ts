@@ -127,13 +127,39 @@ export function buildDashboardData(args: {
 
   holdings.sort((a, b) => Number(b.marketValueArs) - Number(a.marketValueArs));
 
-  const allocationByTicker: AllocationSlice[] = holdings.map((h) => ({
+  const equityHoldings = holdings.filter((h) => h.instrumentType !== "ON");
+  const onHoldings = holdings.filter((h) => h.instrumentType === "ON");
+
+  const allocationByTicker: AllocationSlice[] = equityHoldings.map((h) => ({
     key: h.instrumentId,
     label: h.ticker,
     valueArs: h.marketValueArs,
     valueUsd: h.marketValueUsd,
     percent: h.weightPercent,
   }));
+
+  if (onHoldings.length > 0) {
+    let onTotalArs = new Decimal(0);
+    for (const h of onHoldings) {
+      onTotalArs = onTotalArs.plus(h.marketValueArs);
+    }
+    allocationByTicker.push({
+      key: "__on__",
+      label: "ON",
+      valueArs: onTotalArs.toFixed(2),
+      valueUsd: toUsd(onTotalArs, cclRate).toFixed(2),
+      percent: pctOf(onTotalArs, totalValue),
+      details: onHoldings.map((h) => ({
+        key: h.instrumentId,
+        label: h.ticker,
+        valueArs: h.marketValueArs,
+        valueUsd: h.marketValueUsd,
+        percent: h.weightPercent,
+      })),
+    });
+  }
+
+  allocationByTicker.sort((a, b) => Number(b.valueArs) - Number(a.valueArs));
 
   const marketMap = new Map<MarketSegment, Decimal>();
   for (const h of holdings) {

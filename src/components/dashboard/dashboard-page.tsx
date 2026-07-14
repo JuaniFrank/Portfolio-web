@@ -80,6 +80,7 @@ export function DashboardPage({ data }: Props) {
             currency={currency}
             topN={12}
             centerSubtitle={`${data.kpis.totalInstruments} instrumentos`}
+            colorMap={{ ON: "#6366f1" }}
           />
         </ChartCard>
 

@@ -33,12 +33,22 @@ export type DashboardHolding = {
   weightPercent: string;
 };
 
+export type AllocationSliceDetail = {
+  key: string;
+  label: string;
+  valueArs: string;
+  valueUsd: string;
+  percent: string;
+};
+
 export type AllocationSlice = {
   key: string;
   label: string;
   valueArs: string;
   valueUsd: string;
   percent: string;
+  /** Desglose al hacer hover (p. ej. tickers de ON agrupados). */
+  details?: AllocationSliceDetail[];
 };
 
 export type SectorBar = {

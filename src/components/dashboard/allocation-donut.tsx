@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
-import type { AllocationSlice } from "@/lib/dashboard/types";
+import type { AllocationSlice, AllocationSliceDetail } from "@/lib/dashboard/types";
+import { cn } from "@/lib/utils";
 import { CHART_COLORS, formatMoney, formatPercent, type ViewCurrency } from "./format";
 
 type Props = {
@@ -24,11 +25,20 @@ export function AllocationDonut({
   topN,
 }: Props) {
   const slices = useMemo(() => {
+    const toSlice = (d: AllocationSlice, i: number): SliceWithColor => ({
+      ...d,
+      value: Number(currency === "ARS" ? d.valueArs : d.valueUsd),
+      color: pickColor(d, i, colorMap),
+    });
+
     if (!topN || data.length <= topN) {
-      return data.map((d, i) => ({ ...d, color: pickColor(d, i, colorMap) }));
+      return data.map(toSlice);
     }
-    const top = data.slice(0, topN);
-    const restItems = data.slice(topN);
+    const protectedSlices = data.filter((d) => d.details?.length);
+    const regular = data.filter((d) => !d.details?.length);
+    const regularBudget = Math.max(topN - protectedSlices.length, 0);
+    const top = regular.slice(0, regularBudget);
+    const restItems = regular.slice(regularBudget);
     let restValueArs = 0;
     let restValueUsd = 0;
     let restPercent = 0;
@@ -38,25 +48,27 @@ export function AllocationDonut({
       restPercent += Number(r.percent);
     }
     return [
-      ...top.map((d, i) => ({ ...d, color: pickColor(d, i, colorMap) })),
-      {
-        key: "__rest__",
-        label: "Otros",
-        valueArs: restValueArs.toFixed(2),
-        valueUsd: restValueUsd.toFixed(2),
-        percent: restPercent.toFixed(2),
-        color: "#52525b",
-      },
+      ...protectedSlices.map((d, i) => toSlice(d, i)),
+      ...top.map((d, i) => toSlice(d, i + protectedSlices.length)),
+      ...(restItems.length > 0
+        ? [
+            {
+              key: "__rest__",
+              label: "Otros",
+              valueArs: restValueArs.toFixed(2),
+              valueUsd: restValueUsd.toFixed(2),
+              percent: restPercent.toFixed(2),
+              value: Number(currency === "ARS" ? restValueArs : restValueUsd),
+              color: "#52525b",
+            },
+          ]
+        : []),
     ];
-  }, [data, topN, colorMap]);
+  }, [data, topN, colorMap, currency]);
 
   const totalValue = useMemo(
-    () =>
-      slices.reduce(
-        (acc, s) => acc + Number(currency === "ARS" ? s.valueArs : s.valueUsd),
-        0
-      ),
-    [slices, currency]
+    () => slices.reduce((acc, s) => acc + s.value, 0),
+    [slices]
   );
 
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
@@ -69,33 +81,20 @@ export function AllocationDonut({
     );
   }
 
-  const layout = labelPosition === "side" ? "grid-cols-[1fr_220px]" : "grid-cols-1";
-
   return (
-    <div className={`grid items-center gap-4 lg:${layout}`}>
+    <div
+      className={cn(
+        "grid items-center gap-4",
+        labelPosition === "side" ? "lg:grid-cols-[1fr_220px]" : "lg:grid-cols-1"
+      )}
+    >
       <div className="relative h-72">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
-            <Tooltip
-              contentStyle={{
-                background: "#09090b",
-                border: "1px solid #27272a",
-                borderRadius: 8,
-                fontSize: 12,
-                padding: "8px 10px",
-              }}
-              labelStyle={{ color: "#d4d4d8" }}
-              formatter={(value, _name, item) => {
-                const pct = item?.payload?.percent ?? "0";
-                return [
-                  `${formatMoney(Number(value ?? 0), currency)} · ${formatPercent(pct)}`,
-                  item?.payload?.label,
-                ];
-              }}
-            />
+            <Tooltip content={(props) => <DonutTooltipContent {...props} currency={currency} />} />
             <Pie
               data={slices}
-              dataKey={currency === "ARS" ? "valueArs" : "valueUsd"}
+              dataKey="value"
               nameKey="label"
               cx="50%"
               cy="50%"
@@ -146,7 +145,63 @@ function pickColor(slice: AllocationSlice, i: number, map?: Record<string, strin
   return CHART_COLORS[i % CHART_COLORS.length]!;
 }
 
-type SliceWithColor = AllocationSlice & { color: string };
+type SliceWithColor = AllocationSlice & { value: number; color: string };
+
+function DonutTooltipContent({
+  active,
+  payload,
+  currency,
+}: {
+  active?: boolean;
+  payload?: ReadonlyArray<{ payload?: SliceWithColor }>;
+  currency: ViewCurrency;
+}) {
+  if (!active || !payload?.length) return null;
+
+  const slice = payload[0]?.payload;
+  if (!slice) return null;
+
+  const boxStyle = {
+    background: "#09090b",
+    border: "1px solid #27272a",
+    borderRadius: 8,
+    fontSize: 12,
+    padding: "8px 10px",
+  } as const;
+
+  if (slice.details?.length) {
+    return (
+      <div style={boxStyle} className="space-y-1.5">
+        <p className="font-medium text-zinc-100">{slice.label}</p>
+        <ul className="space-y-1">
+          {slice.details.map((d) => (
+            <li key={d.key} className="tabular-nums text-zinc-300">
+              <DetailLine detail={d} />
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
+  return (
+    <div style={boxStyle}>
+      <p className="font-medium text-zinc-100">{slice.label}</p>
+      <p className="mt-0.5 tabular-nums text-zinc-300">
+        {formatMoney(slice.value, currency)} · {formatPercent(slice.percent)}
+      </p>
+    </div>
+  );
+}
+
+function DetailLine({ detail }: { detail: AllocationSliceDetail }) {
+  return (
+    <>
+      {detail.label} · {formatPercent(detail.percent)} ·{" "}
+      {formatMoney(Number(detail.valueUsd), "USD")}
+    </>
+  );
+}
 
 function Legend({
   slices,
@@ -172,7 +227,6 @@ function Legend({
       }
     >
       {slices.map((s, i) => {
-        const value = currency === "ARS" ? s.valueArs : s.valueUsd;
         const active = activeIndex === i;
         return (
           <li
@@ -192,7 +246,7 @@ function Legend({
             </span>
             <span className="flex items-baseline gap-2 text-right tabular-nums">
               <span className="text-zinc-400">{formatPercent(s.percent)}</span>
-              <span className="text-zinc-500">{formatMoney(Number(value), currency)}</span>
+              <span className="text-zinc-500">{formatMoney(s.value, currency)}</span>
             </span>
           </li>
         );
