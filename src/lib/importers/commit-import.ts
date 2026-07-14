@@ -25,46 +25,112 @@ export type CommitImportResult =
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
-async function resolveInstrument(
+// Prisma's interactive-transaction timeout. Kept generous purely as a safety
+// margin — the committed transaction only runs 3 statements, so it completes
+// in milliseconds regardless of row count.
+const TRANSACTION_TIMEOUT_MS = 15_000;
+
+function venueFor(type: InstrumentType): string | null {
+  return type === InstrumentType.CEDEAR ||
+    type === InstrumentType.STOCK_AR ||
+    type === InstrumentType.BOND_AR ||
+    type === InstrumentType.LETRA ||
+    type === InstrumentType.ON
+    ? "BYMA"
+    : null;
+}
+
+/** Stable identity of an instrument for the import lookup. */
+function instrumentKey(parts: {
+  ticker: string;
+  type: InstrumentType;
+  currencyCode: string;
+  venueCode: string | null;
+}): string {
+  return `${parts.ticker}|${parts.type}|${parts.currencyCode}|${parts.venueCode ?? ""}`;
+}
+
+/**
+ * Resolve every instrument referenced by the batch in bulk: one findMany for
+ * the existing ones, one createMany for the missing ones. Runs OUTSIDE the
+ * commit transaction — instruments are shared reference data, so creating one
+ * that ends up unused (if the commit later rolls back) is harmless and gets
+ * reused on retry. Returns a key→id map.
+ */
+async function resolveInstrumentsBatch(
   db: DbClient,
-  parsed: ParsedImportRowData
-): Promise<string | null> {
-  if (!parsed.ticker || !parsed.instrumentType) {
-    return null;
+  rows: ParsedImportRowData[]
+): Promise<Map<string, string>> {
+  const wanted = new Map<
+    string,
+    { ticker: string; type: InstrumentType; currencyCode: string; venueCode: string | null }
+  >();
+
+  for (const p of rows) {
+    if (!p.ticker || !p.instrumentType) continue;
+    const parts = {
+      ticker: p.ticker,
+      type: p.instrumentType,
+      currencyCode: p.currencyCode,
+      venueCode: venueFor(p.instrumentType),
+    };
+    wanted.set(instrumentKey(parts), parts);
   }
 
-  const venueCode =
-    parsed.instrumentType === InstrumentType.CEDEAR ||
-    parsed.instrumentType === InstrumentType.STOCK_AR ||
-    parsed.instrumentType === InstrumentType.BOND_AR ||
-    parsed.instrumentType === InstrumentType.LETRA ||
-    parsed.instrumentType === InstrumentType.ON
-      ? "BYMA"
-      : null;
+  const map = new Map<string, string>();
+  if (wanted.size === 0) return map;
 
-  const existing = await db.instrument.findFirst({
-    where: {
-      ticker: parsed.ticker,
-      type: parsed.instrumentType,
-      currencyCode: parsed.currencyCode,
-      venueCode,
-    },
-  });
+  const tickers = [...new Set([...wanted.values()].map((w) => w.ticker))];
+  const existing = await db.instrument.findMany({ where: { ticker: { in: tickers } } });
+  for (const inst of existing) {
+    map.set(
+      instrumentKey({
+        ticker: inst.ticker,
+        type: inst.type,
+        currencyCode: inst.currencyCode,
+        venueCode: inst.venueCode,
+      }),
+      inst.id
+    );
+  }
 
-  if (existing) return existing.id;
+  const missing = [...wanted.entries()].filter(([key]) => !map.has(key)).map(([, v]) => v);
+  if (missing.length > 0) {
+    await db.instrument.createMany({
+      data: missing.map((m) => ({
+        ticker: m.ticker,
+        name: m.ticker,
+        type: m.type,
+        venueCode: m.venueCode,
+        currencyCode: m.currencyCode,
+        taxJurisdiction: m.currencyCode === "ARS" ? "AR" : "US",
+      })),
+      skipDuplicates: true,
+    });
 
-  const created = await db.instrument.create({
-    data: {
-      ticker: parsed.ticker,
-      name: parsed.ticker,
-      type: parsed.instrumentType,
-      venueCode,
-      currencyCode: parsed.currencyCode,
-      taxJurisdiction: parsed.currencyCode === "ARS" ? "AR" : "US",
-    },
-  });
+    const created = await db.instrument.findMany({
+      where: { ticker: { in: missing.map((m) => m.ticker) } },
+    });
+    for (const inst of created) {
+      map.set(
+        instrumentKey({
+          ticker: inst.ticker,
+          type: inst.type,
+          currencyCode: inst.currencyCode,
+          venueCode: inst.venueCode,
+        }),
+        inst.id
+      );
+    }
+  }
 
-  return created.id;
+  return map;
+}
+
+function toDateOrNull(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 export async function commitImportBatch(input: CommitImportInput): Promise<CommitImportResult> {
@@ -87,82 +153,114 @@ export async function commitImportBatch(input: CommitImportInput): Promise<Commi
     return { ok: false, error: "No hay filas válidas para importar" };
   }
 
+  // --- Reads / preparation, OUTSIDE the transaction ---
+
+  // 1. Hash every row up front.
+  const hashed = importable.map((row) => ({
+    parsed: row.parsed!,
+    idempotencyHash: buildImportIdempotencyHash({
+      brokerAccountId: input.brokerAccountId,
+      row: row.parsed!,
+      rowNumber: row.rowNumber,
+    }),
+  }));
+
+  // 2. Drop duplicates in a single query (against the DB) plus within the batch.
+  const existingHashes = await prisma.transaction.findMany({
+    where: { idempotencyHash: { in: hashed.map((h) => h.idempotencyHash) } },
+    select: { idempotencyHash: true },
+  });
+  const seen = new Set(existingHashes.map((e) => e.idempotencyHash));
+  const toInsert = hashed.filter(({ idempotencyHash }) => {
+    if (seen.has(idempotencyHash)) return false;
+    seen.add(idempotencyHash);
+    return true;
+  });
+  const skipped = hashed.length - toInsert.length;
+
+  // 3. Resolve all instruments in bulk.
+  let instrumentMap: Map<string, string>;
   try {
-    const result = await prisma.$transaction(async (tx) => {
-      const batch = await tx.importBatch.create({
-        data: {
-          userId: input.userId,
-          brokerId: input.brokerId,
-          fileName: input.fileName,
-          fileHash: input.fileHash,
-          status: ImportStatus.PREVIEW,
-          rowsTotal: importable.length,
-        },
-      });
+    instrumentMap = await resolveInstrumentsBatch(
+      prisma,
+      toInsert.map((t) => t.parsed)
+    );
+  } catch (error) {
+    console.error("commitImportBatch:resolveInstruments", error);
+    return { ok: false, error: "No se pudieron resolver los instrumentos del archivo" };
+  }
 
-      let imported = 0;
-      let skipped = 0;
+  const instrumentIdFor = (parsed: ParsedImportRowData): string | null => {
+    if (!parsed.ticker || !parsed.instrumentType) return null;
+    return (
+      instrumentMap.get(
+        instrumentKey({
+          ticker: parsed.ticker,
+          type: parsed.instrumentType,
+          currencyCode: parsed.currencyCode,
+          venueCode: venueFor(parsed.instrumentType),
+        })
+      ) ?? null
+    );
+  };
 
-      for (const row of importable) {
-        const parsed = row.parsed;
-        const idempotencyHash = buildImportIdempotencyHash({
-          brokerAccountId: input.brokerAccountId,
-          row: parsed,
-          rowNumber: row.rowNumber,
-        });
-
-        const duplicate = await tx.transaction.findFirst({
-          where: { idempotencyHash },
-        });
-        if (duplicate) {
-          skipped += 1;
-          continue;
-        }
-
-        const instrumentId = await resolveInstrument(tx, parsed);
-
-        await tx.transaction.create({
+  // --- Writes, INSIDE a short all-or-nothing transaction ---
+  try {
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const batch = await tx.importBatch.create({
           data: {
-            portfolioId: input.portfolioId,
-            brokerAccountId: input.brokerAccountId,
-            instrumentId,
-            type: parsed.type,
-            tradeDate: new Date(parsed.tradeDate),
-            settlementDate: new Date(parsed.settlementDate),
-            quantity: new Prisma.Decimal(parsed.quantity),
-            price: new Prisma.Decimal(parsed.price ?? "0"),
-            currencyCode: parsed.currencyCode,
-            grossAmount: new Prisma.Decimal(parsed.grossAmount),
-            netAmount: new Prisma.Decimal(parsed.netAmount),
-            brokerFxRate: parsed.brokerFxRate ? new Prisma.Decimal(parsed.brokerFxRate) : null,
-            source: TransactionSource.IMPORT,
-            importBatchId: batch.id,
-            externalId: parsed.externalId,
-            idempotencyHash,
-            notes: parsed.description,
+            userId: input.userId,
+            brokerId: input.brokerId,
+            fileName: input.fileName,
+            fileHash: input.fileHash,
+            status: ImportStatus.COMMITTED,
+            rowsTotal: importable.length,
+            rowsImported: toInsert.length,
+            rowsSkipped: skipped,
+            committedAt: new Date(),
+            rawSummary: { valid: importable.length, imported: toInsert.length, skipped },
           },
         });
-        imported += 1;
-      }
 
-      await tx.importBatch.update({
-        where: { id: batch.id },
-        data: {
-          status: ImportStatus.COMMITTED,
-          rowsImported: imported,
-          rowsSkipped: skipped,
-          committedAt: new Date(),
-          rawSummary: { valid: importable.length, imported, skipped },
-        },
-      });
+        if (toInsert.length > 0) {
+          await tx.transaction.createMany({
+            data: toInsert.map(({ parsed, idempotencyHash }) => ({
+              portfolioId: input.portfolioId,
+              brokerAccountId: input.brokerAccountId,
+              instrumentId: instrumentIdFor(parsed),
+              type: parsed.type,
+              tradeDate: new Date(parsed.tradeDate),
+              settlementDate: toDateOrNull(parsed.settlementDate),
+              quantity: new Prisma.Decimal(parsed.quantity),
+              price: new Prisma.Decimal(parsed.price ?? "0"),
+              currencyCode: parsed.currencyCode,
+              grossAmount: new Prisma.Decimal(parsed.grossAmount),
+              netAmount: new Prisma.Decimal(parsed.netAmount),
+              brokerFxRate: parsed.brokerFxRate ? new Prisma.Decimal(parsed.brokerFxRate) : null,
+              source: TransactionSource.IMPORT,
+              importBatchId: batch.id,
+              externalId: parsed.externalId,
+              idempotencyHash,
+              notes: parsed.description,
+            })),
+            skipDuplicates: true,
+          });
+        }
 
-      return { importBatchId: batch.id, imported, skipped };
-    });
+        return { importBatchId: batch.id, imported: toInsert.length, skipped };
+      },
+      { timeout: TRANSACTION_TIMEOUT_MS }
+    );
 
     return { ok: true, ...result };
   } catch (error) {
     console.error("commitImportBatch", error);
-    return { ok: false, error: "Error al guardar las transacciones" };
+    // The transaction rolled back — nothing was persisted, so a retry is safe.
+    return {
+      ok: false,
+      error: "No se guardó ningún movimiento. Revisá el archivo y volvé a intentar.",
+    };
   }
 }
 
