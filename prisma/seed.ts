@@ -1,7 +1,5 @@
-import bcrypt from "bcrypt";
 import {
   AssetType,
-  CostMethod,
   InstrumentType,
   Prisma,
   PrismaClient,
@@ -369,24 +367,6 @@ async function main() {
 
   await upsertCashInstrument({ ticker: "CASH-ARS", name: "Efectivo ARS", currencyCode: "ARS" });
   await upsertCashInstrument({ ticker: "CASH-USD", name: "Efectivo USD", currencyCode: "USD" });
-
-  // 6. Demo user (sin portfolios ni transacciones)
-  const passwordHash = await bcrypt.hash("demo1234", 12);
-  await prisma.user.upsert({
-    where: { email: "demo@demo.com" },
-    create: {
-      email: "demo@demo.com",
-      passwordHash,
-      name: "Usuario demo",
-      displayCurrencyCode: "ARS",
-      defaultCostMethod: CostMethod.PPP,
-    },
-    update: {
-      passwordHash,
-      displayCurrencyCode: "ARS",
-      defaultCostMethod: CostMethod.PPP,
-    },
-  });
 }
 
 main()
