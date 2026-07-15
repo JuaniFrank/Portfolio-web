@@ -31,16 +31,12 @@ export function HoldingsTable({ holdings, search }: HoldingsTableProps) {
   const q = search.trim().toLowerCase();
   const filtered = q
     ? holdings.filter(
-        (h) =>
-          h.ticker.toLowerCase().includes(q) ||
-          h.instrumentName.toLowerCase().includes(q)
+        (h) => h.ticker.toLowerCase().includes(q) || h.instrumentName.toLowerCase().includes(q)
       )
     : holdings;
 
   if (holdings.length === 0) {
-    return (
-      <EmptyState />
-    );
+    return <EmptyState />;
   }
 
   return (
@@ -92,10 +88,10 @@ function HoldingRow({ row }: { row: HoldingRow }) {
     <TableRow>
       <TableCell>
         <div className="flex items-center gap-3">
-          <TickerAvatar ticker={row.ticker} />
+          <TickerAvatar ticker={row.ticker} className="h-10 w-10" />
           <div>
-            <p className="font-semibold text-zinc-100">{row.ticker}</p>
-            <p className="text-xs text-zinc-500">{row.instrumentName}</p>
+            <p className="font-semibold text-zinc-100 ">{row.ticker}</p>
+            <p className="text-sm text-zinc-500">{row.instrumentName}</p>{" "}
           </div>
         </div>
       </TableCell>
@@ -110,12 +106,7 @@ function HoldingRow({ row }: { row: HoldingRow }) {
         {formatMoney(row.currentPriceArs)}
       </TableCell>
       <TableCell className="text-right">
-        <span
-          className={cn(
-            "font-mono text-sm",
-            positive ? "text-emerald-400" : "text-red-400"
-          )}
-        >
+        <span className={cn("font-mono text-sm", positive ? "text-emerald-400" : "text-red-400")}>
           {formatMoney(row.pnlArs)} ({positive ? "+" : ""}
           {pnlPct.toLocaleString("es-AR", { maximumFractionDigits: 2 })}%)
         </span>
