@@ -1,11 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
-import { Plus, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { HoldingsTable } from "@/components/transactions/holdings-table";
 import { TradeHistoryTable } from "@/components/transactions/trade-history-table";
-import { Button } from "@/components/ui/button";
+import { NewTransactionDialog } from "@/components/transactions/transaction-form-modal";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { TransactionsPageData } from "@/lib/transactions/types";
@@ -38,12 +37,7 @@ export function TransactionsPage({ data }: TransactionsPageProps) {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <PageHeader />
-        <Button asChild variant="outline" className="shrink-0">
-          <Link href="/transactions/new">
-            <Plus className="mr-2 h-4 w-4" />
-            Nueva operación
-          </Link>
-        </Button>
+        <NewTransactionDialog />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
