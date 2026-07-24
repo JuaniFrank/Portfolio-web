@@ -1,0 +1,1 @@
+// Updated cron route only; we will trigger manually with POST request.
