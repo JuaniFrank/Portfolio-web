@@ -1,8 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
+import { Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { DeleteTransactionsDialog } from "@/components/imports/delete-transactions-dialog";
 import {
   IMPORT_TRANSACTION_FILTERS,
   INSTRUMENT_TYPE_LABELS,
@@ -42,12 +45,33 @@ function formatQuantity(value: string) {
   return n.toLocaleString("es-AR", { maximumFractionDigits: 4 });
 }
 
+/** Línea corta que describe una operación, para el diálogo de confirmación. */
+function describeRow(row: ImportedTransactionRow): string {
+  return [
+    formatDate(row.tradeDate),
+    TRANSACTION_TYPE_LABELS[row.type],
+    row.ticker ?? "—",
+    `${formatAmount(row.netAmount)} ${row.currencyCode}`,
+  ].join(" · ");
+}
+
 export function ImportedTransactionsTable({ transactions }: ImportedTransactionsTableProps) {
+  const router = useRouter();
   const [filter, setFilter] = useState<ImportTransactionFilter>("all");
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(new Set());
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
+  // Las filas borradas se ocultan de inmediato; `router.refresh()` después trae
+  // la lista real desde el servidor.
+  const liveTransactions = useMemo(
+    () => transactions.filter((t) => !removedIds.has(t.id)),
+    [transactions, removedIds]
+  );
 
   const filtered = useMemo(
-    () => transactions.filter((row) => matchesImportFilter(row, filter)),
-    [transactions, filter]
+    () => liveTransactions.filter((row) => matchesImportFilter(row, filter)),
+    [liveTransactions, filter]
   );
 
   const counts = useMemo(() => {
@@ -56,14 +80,48 @@ export function ImportedTransactionsTable({ transactions }: ImportedTransactions
       map.set(
         f.id,
         f.id === "all"
-          ? transactions.length
-          : transactions.filter((r) => matchesImportFilter(r, f.id)).length
+          ? liveTransactions.length
+          : liveTransactions.filter((r) => matchesImportFilter(r, f.id)).length
       );
     }
     return map;
-  }, [transactions]);
+  }, [liveTransactions]);
 
-  if (transactions.length === 0) {
+  const allVisibleSelected = filtered.length > 0 && filtered.every((r) => selected.has(r.id));
+
+  const selectedRows = useMemo(
+    () => liveTransactions.filter((t) => selected.has(t.id)),
+    [liveTransactions, selected]
+  );
+
+  function toggleRow(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllVisible() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        for (const r of filtered) next.delete(r.id);
+      } else {
+        for (const r of filtered) next.add(r.id);
+      }
+      return next;
+    });
+  }
+
+  function handleDeleted(ids: string[]) {
+    setRemovedIds((prev) => new Set([...prev, ...ids]));
+    setSelected(new Set());
+    router.refresh();
+  }
+
+  if (liveTransactions.length === 0) {
     return (
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-6 py-12 text-center">
         <p className="text-sm text-zinc-400">Todavía no importaste movimientos.</p>
@@ -75,28 +133,8 @@ export function ImportedTransactionsTable({ transactions }: ImportedTransactions
   }
 
   return (
-    <ImportedTransactionsTableInner
-      filter={filter}
-      setFilter={setFilter}
-      filtered={filtered}
-      counts={counts}
-    />
-  );
-}
-
-function ImportedTransactionsTableInner({
-  filter,
-  setFilter,
-  filtered,
-  counts,
-}: {
-  filter: ImportTransactionFilter;
-  setFilter: (f: ImportTransactionFilter) => void;
-  filtered: ImportedTransactionRow[];
-  counts: Map<ImportTransactionFilter, number>;
-}) {
-  return (
     <div className="space-y-4">
+      {/* Filtros */}
       <div className="flex flex-wrap gap-2">
         {IMPORT_TRANSACTION_FILTERS.map((f) => {
           const count = counts.get(f.id) ?? 0;
@@ -117,14 +155,60 @@ function ImportedTransactionsTableInner({
         })}
       </div>
 
-      <p className="text-sm text-zinc-500">
-        Mostrando {filtered.length} de {counts.get("all") ?? 0} movimientos importados
-      </p>
+      {/* Barra de acciones sobre la selección */}
+      {selected.size > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-teal-900/60 bg-teal-950/20 px-4 py-2.5">
+          <p className="text-sm text-teal-100">
+            <span className="font-semibold">{selected.size}</span>{" "}
+            {selected.size === 1 ? "operación seleccionada" : "operaciones seleccionadas"}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-8 text-zinc-300"
+              onClick={() => setSelected(new Set())}
+            >
+              <X className="mr-1.5 h-3.5 w-3.5" />
+              Limpiar
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              className="h-8"
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              Borrar seleccionadas
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-zinc-500">
+          Mostrando {filtered.length} de {counts.get("all") ?? 0} movimientos importados
+        </p>
+      )}
 
       <div className="overflow-auto rounded-md border border-zinc-800">
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-10">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 accent-teal-500"
+                  checked={allVisibleSelected}
+                  onChange={toggleAllVisible}
+                  disabled={filtered.length === 0}
+                  aria-label={
+                    allVisibleSelected
+                      ? "Deseleccionar todas las visibles"
+                      : "Seleccionar todas las visibles"
+                  }
+                />
+              </TableHead>
               <TableHead>Fecha</TableHead>
               <TableHead>Tipo</TableHead>
               <TableHead>Categoría</TableHead>
@@ -138,28 +222,60 @@ function ImportedTransactionsTableInner({
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-8 text-center text-sm text-zinc-500">
+                <TableCell colSpan={9} className="py-8 text-center text-sm text-zinc-500">
                   No hay movimientos para este filtro.
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((row) => <TransactionRow key={row.id} row={row} />)
+              filtered.map((row) => (
+                <TransactionRow
+                  key={row.id}
+                  row={row}
+                  isSelected={selected.has(row.id)}
+                  onToggle={() => toggleRow(row.id)}
+                />
+              ))
             )}
           </TableBody>
         </Table>
       </div>
+
+      <DeleteTransactionsDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        ids={selectedRows.map((r) => r.id)}
+        preview={selectedRows.map(describeRow)}
+        onDeleted={handleDeleted}
+      />
     </div>
   );
 }
 
-function TransactionRow({ row }: { row: ImportedTransactionRow }) {
+function TransactionRow({
+  row,
+  isSelected,
+  onToggle,
+}: {
+  row: ImportedTransactionRow;
+  isSelected: boolean;
+  onToggle: () => void;
+}) {
   const amount = Number(row.netAmount);
   const categoryLabel = row.instrumentType
     ? (INSTRUMENT_TYPE_LABELS[row.instrumentType] ?? row.instrumentType)
     : "—";
 
   return (
-    <TableRow>
+    <TableRow className={cn(isSelected && "bg-teal-950/20")}>
+      <TableCell>
+        <input
+          type="checkbox"
+          className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 accent-teal-500"
+          checked={isSelected}
+          onChange={onToggle}
+          aria-label={`Seleccionar operación del ${formatDate(row.tradeDate)}`}
+        />
+      </TableCell>
       <TableCell className="whitespace-nowrap text-xs">{formatDate(row.tradeDate)}</TableCell>
       <TableCell>
         <Badge variant="secondary" className="font-normal">
