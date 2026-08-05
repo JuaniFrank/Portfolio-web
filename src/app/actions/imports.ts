@@ -19,6 +19,9 @@ import { prisma } from "@/lib/prisma";
 import { ImportStatus, TransactionSource } from "@/lib/generated/prisma";
 import type { CommitImportRow, DuplicateStrategy } from "@/lib/importers/types";
 
+/** Tope defensivo para las operaciones masivas disparadas desde el cliente. */
+const MAX_BULK_IDS = 2000;
+
 export type ImportContextData = {
   brokers: Array<{ id: string; code: string; name: string; enabled: boolean }>;
   portfolios: Array<{ id: string; name: string; isDefault: boolean }>;
@@ -253,15 +256,14 @@ export async function commitImportAction(
   });
 
   if (result.ok) {
-    revalidatePath("/imports");
-    revalidatePath("/transactions");
+    revalidateImportConsumers();
   }
 
   return result;
 }
 
 // ---------------------------------------------------------------------------
-// Listado de transacciones importadas
+// Listado y borrado de transacciones importadas
 // ---------------------------------------------------------------------------
 
 export async function getImportedTransactionsAction(): Promise<
@@ -304,4 +306,90 @@ export async function getImportedTransactionsAction(): Promise<
       fileName: r.importBatch!.fileName,
       importBatchId: r.importBatch!.id,
     }));
+}
+
+export type DeleteImportedResult =
+  | { ok: true; deleted: number }
+  | { ok: false; error: string };
+
+/**
+ * Borra transacciones importadas por id.
+ *
+ * Alcance acotado a propósito: `source = IMPORT` y portfolio del usuario. Las
+ * operaciones cargadas a mano no se tocan desde acá.
+ *
+ * Después del borrado recalcula `rowsImported` de los lotes afectados y marca
+ * como `REVERTED` los que quedaron vacíos, para que el historial no siga
+ * declarando filas que ya no existen.
+ */
+export async function deleteImportedTransactionsAction(
+  ids: string[]
+): Promise<DeleteImportedResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "No autenticado" };
+
+  const uniqueIds = [...new Set(ids.filter((id) => typeof id === "string" && id.length > 0))];
+  if (uniqueIds.length === 0) {
+    return { ok: false, error: "No seleccionaste ninguna operación" };
+  }
+  if (uniqueIds.length > MAX_BULK_IDS) {
+    return { ok: false, error: `No se pueden borrar más de ${MAX_BULK_IDS} operaciones a la vez` };
+  }
+
+  // Resolvemos primero para (a) verificar pertenencia y (b) saber qué lotes
+  // hay que recalcular después.
+  const owned = await prisma.transaction.findMany({
+    where: {
+      id: { in: uniqueIds },
+      source: TransactionSource.IMPORT,
+      portfolio: { userId: user.id },
+    },
+    select: { id: true, importBatchId: true },
+  });
+
+  if (owned.length === 0) {
+    return { ok: false, error: "No se encontraron operaciones para borrar" };
+  }
+
+  const ownedIds = owned.map((t) => t.id);
+  const affectedBatchIds = [
+    ...new Set(owned.map((t) => t.importBatchId).filter((v): v is string => Boolean(v))),
+  ];
+
+  try {
+    const deleted = await prisma.$transaction(async (tx) => {
+      const res = await tx.transaction.deleteMany({ where: { id: { in: ownedIds } } });
+
+      for (const batchId of affectedBatchIds) {
+        const remaining = await tx.transaction.count({ where: { importBatchId: batchId } });
+        await tx.importBatch.update({
+          where: { id: batchId },
+          data: {
+            rowsImported: remaining,
+            status: remaining === 0 ? ImportStatus.REVERTED : ImportStatus.COMMITTED,
+          },
+        });
+      }
+
+      return res.count;
+    });
+
+    revalidateImportConsumers();
+    return { ok: true, deleted };
+  } catch (error) {
+    console.error("deleteImportedTransactionsAction", error);
+    return { ok: false, error: "No se pudieron borrar las operaciones. Volvé a intentar." };
+  }
+}
+
+/**
+ * Todas las pantallas que leen `Transaction`. Un import o un borrado las
+ * invalida a todas: si agregás una pantalla que use holdings, sumala acá.
+ */
+function revalidateImportConsumers() {
+  revalidatePath("/imports");
+  revalidatePath("/transactions");
+  revalidatePath("/dashboard");
+  revalidatePath("/dividends");
+  revalidatePath("/bonds");
 }
