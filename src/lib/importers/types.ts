@@ -88,3 +88,13 @@ export interface CommitImportRow {
   /** Se propaga para poder contabilizar cuántas filas se corrigieron a mano. */
   edited?: boolean;
 }
+
+/**
+ * Qué hacer con las filas cuyo hash de idempotencia ya existe en la base.
+ *
+ * - `skip`   → se omiten (comportamiento histórico).
+ * - `import` → se insertan igual, con `idempotencyVersion` incrementada para no
+ *              violar el unique compuesto. El usuario lo elige explícitamente
+ *              en el diálogo de duplicados.
+ */
+export type DuplicateStrategy = "skip" | "import";
