@@ -140,6 +140,67 @@ describe("modifiedDietzReturn", () => {
   });
 });
 
+describe("capital invertido derivado de las compras", () => {
+  // El escenario que motivó el rediseño: sin un solo depósito cargado, las compras
+  // mismas son el aporte. Tres compras de un ticker con 15 días de gap.
+  const ENERO = 31;
+
+  it("mide enero aunque no exista ningún depósito", () => {
+    const result = modifiedDietzReturn({
+      startValue: 0,
+      endValue: 3600, // 30 nominales × $120 al cierre
+      flows: [
+        { day: 1, amount: 1000 }, // 10 × $100
+        { day: 16, amount: 1100 }, // 10 × $110
+        { day: 31, amount: 1200 }, // 10 × $120
+      ],
+      daysInMonth: ENERO,
+    });
+
+    // capital medio = 1000×30/31 + 1100×15/31 + 1200×0/31 = 1500
+    // ganancia      = 3600 − 0 − 3300 = 300
+    expect(result).toBeCloseTo((300 / 1500) * 100, 6);
+    expect(result).toBeCloseTo(20, 6);
+  });
+
+  it("el mes siguiente sin compras mide la variación de precio pura", () => {
+    const result = modifiedDietzReturn({
+      startValue: 3600,
+      endValue: 3960, // el precio pasa de $120 a $132
+      flows: [],
+      daysInMonth: 28,
+    });
+    expect(result).toBeCloseTo(10, 6);
+  });
+
+  it("encadena los dos meses sin sumarlos", () => {
+    const cumulative = chainReturns([20, 10]);
+    expect(cumulative.at(-1)!).toBeCloseTo(32, 6); // 1,20 × 1,10 − 1
+  });
+
+  it("vender a lo que vale no genera rendimiento", () => {
+    // La ganancia ya quedó registrada en el mes en que el precio subió; el acto de
+    // vender solo saca capital del perímetro.
+    const result = modifiedDietzReturn({
+      startValue: 1200,
+      endValue: 0,
+      flows: [{ day: 15, amount: -1200 }],
+      daysInMonth: 30,
+    });
+    expect(result).toBeCloseTo(0, 6);
+  });
+
+  it("una venta por encima del valor previo sí registra ganancia", () => {
+    const result = modifiedDietzReturn({
+      startValue: 1000,
+      endValue: 0,
+      flows: [{ day: 30, amount: -1100 }],
+      daysInMonth: 30,
+    });
+    expect(result).toBeCloseTo(10, 6);
+  });
+});
+
 describe("chainReturns", () => {
   it("acumula por producto, no por suma", () => {
     const [first, second] = chainReturns([10, 10]);

@@ -32,8 +32,8 @@ export const PERIODS: Array<{ id: Period; label: string }> = [
 export type MonthlyChartRow = {
   month: string;
   value: number;
-  cumulativeFlow: number;
-  netFlow: number;
+  cumulativeInvested: number;
+  netInvested: number;
   gain: number;
   /** Ganancia acumulada **dentro del período visible**, no desde la primera transacción. */
   cumulativeGain: number;
@@ -125,8 +125,8 @@ export function resolveView(
     const chartRow: MonthlyChartRow = {
       month: row.month,
       value: isArs ? row.valueArs : row.valueUsd,
-      cumulativeFlow: isArs ? row.cumulativeFlowArs : row.cumulativeFlowUsd,
-      netFlow: isArs ? row.netFlowArs : row.netFlowUsd,
+      cumulativeInvested: isArs ? row.cumulativeInvestedArs : row.cumulativeInvestedUsd,
+      netInvested: isArs ? row.netInvestedArs : row.netInvestedUsd,
       gain,
       cumulativeGain,
       monthlyReturn: monthlyReturns[index] ?? null,
@@ -187,8 +187,8 @@ function summarize(
       cumulativeReturnUsd: null,
       cumulativeGainArs: 0,
       cumulativeGainUsd: 0,
-      netFlowArs: 0,
-      netFlowUsd: 0,
+      netInvestedArs: 0,
+      netInvestedUsd: 0,
       annualizedReturnArs: null,
       annualizedReturnUsd: null,
       maxDrawdownArs: 0,
@@ -199,10 +199,10 @@ function summarize(
     };
   }
 
-  // Ganancia y aportes del período = suma de los meses visibles, no el acumulado
-  // global que arrastra todo lo anterior a la ventana.
+  // Ganancia y capital invertido del período = suma de los meses visibles, no el
+  // acumulado global que arrastra todo lo anterior a la ventana.
   const periodGain = rows.reduce((total, row) => total + row.gain, 0);
-  const periodFlow = rows.reduce((total, row) => total + row.netFlow, 0);
+  const periodInvested = rows.reduce((total, row) => total + row.netInvested, 0);
   const cumulativeReturn = lastRow.cumulativeReturn;
   const measuredMonths = rows.filter((row) => row.monthlyReturn !== null).length;
   const maxDrawdown = Math.min(0, ...rows.map((row) => row.drawdown));
@@ -217,8 +217,8 @@ function summarize(
     cumulativeReturnUsd: isArs ? null : cumulativeReturn,
     cumulativeGainArs: isArs ? periodGain : 0,
     cumulativeGainUsd: isArs ? 0 : periodGain,
-    netFlowArs: isArs ? periodFlow : 0,
-    netFlowUsd: isArs ? 0 : periodFlow,
+    netInvestedArs: isArs ? periodInvested : 0,
+    netInvestedUsd: isArs ? 0 : periodInvested,
     annualizedReturnArs: isArs ? annualizeReturn(cumulativeReturn, measuredMonths) : null,
     annualizedReturnUsd: isArs ? null : annualizeReturn(cumulativeReturn, measuredMonths),
     maxDrawdownArs: isArs ? maxDrawdown : 0,
@@ -236,7 +236,7 @@ export function summaryForCurrency(summary: PerformanceSummary, currency: ViewCu
     currentValue: isArs ? summary.currentValueArs : summary.currentValueUsd,
     cumulativeReturn: isArs ? summary.cumulativeReturnArs : summary.cumulativeReturnUsd,
     gain: isArs ? summary.cumulativeGainArs : summary.cumulativeGainUsd,
-    netFlow: isArs ? summary.netFlowArs : summary.netFlowUsd,
+    netInvested: isArs ? summary.netInvestedArs : summary.netInvestedUsd,
     annualizedReturn: isArs ? summary.annualizedReturnArs : summary.annualizedReturnUsd,
     maxDrawdown: isArs ? summary.maxDrawdownArs : summary.maxDrawdownUsd,
     bestMonth: summary.bestMonthArs,

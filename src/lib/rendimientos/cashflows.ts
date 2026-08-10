@@ -1,37 +1,52 @@
 /**
- * Clasificación de flujos de caja. **Módulo puro.**
+ * Clasificación de movimientos. **Módulo puro.**
  *
- * Este archivo existe porque confundir un flujo externo con uno interno es el error
- * número uno en todo cálculo de rendimiento de cartera, y es exactamente el error que
- * tenía la versión anterior de /rendimientos.
+ * El perímetro que mide este motor es **el capital invertido en activos**, no la cuenta
+ * del broker. Esa decisión es la que hace que el cálculo funcione sin depender de que
+ * el usuario cargue sus depósitos:
  *
- * Un **flujo externo** es plata que entra o sale del portfolio. Cambia el capital
- * sobre el que se mide, así que hay que descontarlo del rendimiento.
+ *   - Una **compra ya es la prueba de que entró plata**. Si compraste $1.000 de un
+ *     ticker, invertiste $1.000, haya o no un `DEPOSIT` cargado.
+ *   - Una **venta saca capital** del perímetro. Vender no genera rendimiento: si vendés
+ *     a lo que valía, ese mes da 0 % y la ganancia ya quedó registrada en el mes en que
+ *     el precio subió.
+ *   - Los **depósitos, retiros y transferencias se ignoran por completo**. Mover plata
+ *     entre tu banco y el broker no cambia cuánto rindieron tus activos, y depender de
+ *     esos registros hacía que dos usuarios con la misma cartera vieran rendimientos
+ *     distintos según qué tan prolijos fueran cargando movimientos.
  *
- * Un **flujo interno** reasigna o genera valor dentro del portfolio. NO se descuenta:
- *   - `BUY` / `SELL` convierten efectivo en activo y viceversa. El valor total no se
- *     mueve. Contar una compra como aporte es lo que hacía que un mes de compras
- *     apareciera como un rendimiento inventado.
- *   - `DIVIDEND_CASH`, `COUPON`, `AMORTIZATION`, `INTEREST` son **retorno generado**
- *     por la cartera. Descontarlos borraría justamente la ganancia que hay que medir.
- *   - `FEE`, `TAX_WITHHOLDING` son costos que deben impactar el rendimiento a la baja.
- *   - `FX_CONVERSION` cambia la composición por moneda, no el valor total.
+ * La renta que generan las posiciones (dividendos, cupones, intereses) **no es un
+ * aporte**: es justamente el retorno que hay que medir. Se acumula dentro del perímetro
+ * en vez de tratarse como salida de capital — si se ignorara, la ganancia quedaría
+ * subestimada. Las comisiones e impuestos entran con signo negativo por el mismo motivo,
+ * al revés: son costos que tienen que empujar el rendimiento hacia abajo.
  */
 
 import type { TransactionType } from "@/lib/generated/prisma";
 
-/** Los únicos tipos que mueven capital hacia adentro o afuera del portfolio. */
-export const EXTERNAL_FLOW_TYPES: readonly TransactionType[] = [
-  "DEPOSIT",
-  "WITHDRAWAL",
-  "TRANSFER_IN",
-  "TRANSFER_OUT",
+/** Tipos que mueven capital hacia o desde las posiciones. */
+export const CAPITAL_FLOW_TYPES: readonly TransactionType[] = ["BUY", "SELL"] as const;
+
+/** Tipos que representan renta generada por las posiciones, o costos sobre ellas. */
+export const INCOME_TYPES: readonly TransactionType[] = [
+  "DIVIDEND_CASH",
+  "COUPON",
+  "AMORTIZATION",
+  "INTEREST",
+  "FEE",
+  "TAX_WITHHOLDING",
 ] as const;
 
-const EXTERNAL_FLOW_SET = new Set<TransactionType>(EXTERNAL_FLOW_TYPES);
+const CAPITAL_FLOW_SET = new Set<TransactionType>(CAPITAL_FLOW_TYPES);
+const INCOME_SET = new Set<TransactionType>(INCOME_TYPES);
 
-/** Tipos que suman capital; el resto de los externos lo restan. */
-const INBOUND_TYPES = new Set<TransactionType>(["DEPOSIT", "TRANSFER_IN"]);
+/** Renta que suma; el resto de los tipos de renta (comisiones, impuestos) resta. */
+const POSITIVE_INCOME = new Set<TransactionType>([
+  "DIVIDEND_CASH",
+  "COUPON",
+  "AMORTIZATION",
+  "INTEREST",
+]);
 
 /**
  * Códigos de moneda que tratamos como USD.
@@ -53,8 +68,14 @@ export function isUsdCurrency(currencyCode: string): boolean {
   return USD_CURRENCY_SET.has(currencyCode.toUpperCase());
 }
 
-export function isExternalFlow(type: TransactionType): boolean {
-  return EXTERNAL_FLOW_SET.has(type);
+/** ¿Mueve capital hacia/desde las posiciones? */
+export function isCapitalFlow(type: TransactionType): boolean {
+  return CAPITAL_FLOW_SET.has(type);
+}
+
+/** ¿Es renta generada por las posiciones, o un costo sobre ellas? */
+export function isIncome(type: TransactionType): boolean {
+  return INCOME_SET.has(type);
 }
 
 export type TransactionForFlows = {
@@ -63,41 +84,71 @@ export type TransactionForFlows = {
   /** Monto neto del movimiento. Se usa su valor absoluto; el signo lo fija el tipo. */
   netAmount: number;
   currencyCode: string;
+  /**
+   * Si el instrumento del movimiento entra en el cálculo de rendimientos.
+   *
+   * Los movimientos sin instrumento, o de instrumentos excluidos (renta fija, cripto),
+   * quedan afuera: un cupón de una ON no puede sumar renta a un perímetro del que la ON
+   * ni siquiera forma parte.
+   */
+  instrumentEligible: boolean;
 };
 
-export type ClassifiedFlow = {
+export type MonetaryEvent = {
   date: Date;
-  /** Positivo = aporte, negativo = retiro. */
+  /** Capital: positivo = compra, negativo = venta. Renta: positivo = cobro, negativo = costo. */
   amount: number;
-  /** Moneda nativa del movimiento. */
   currency: "ARS" | "USD";
 };
 
 /**
- * Convierte transacciones en flujos externos con signo, descartando todo lo interno.
+ * Capital invertido: compras en positivo, ventas en negativo.
  *
- * Se toma `Math.abs(netAmount)` a propósito: distintos importadores registran el signo
- * de forma inconsistente (algunos ponen los retiros en negativo, otros no). El único
- * dato en el que confiamos para el signo es el `type`.
+ * Es el equivalente a los "aportes" del enfoque anterior, pero derivado de las
+ * operaciones en vez de los depósitos, así que siempre está disponible.
  */
-export function classifyExternalFlows(
+export function classifyCapitalFlows(
   transactions: TransactionForFlows[]
-): ClassifiedFlow[] {
-  const flows: ClassifiedFlow[] = [];
+): MonetaryEvent[] {
+  return collect(transactions, (tx) =>
+    isCapitalFlow(tx.type) ? (tx.type === "BUY" ? 1 : -1) : null
+  );
+}
+
+/** Renta generada por las posiciones, neta de comisiones e impuestos. */
+export function classifyIncome(transactions: TransactionForFlows[]): MonetaryEvent[] {
+  return collect(transactions, (tx) =>
+    isIncome(tx.type) ? (POSITIVE_INCOME.has(tx.type) ? 1 : -1) : null
+  );
+}
+
+/**
+ * Se toma `Math.abs(netAmount)` a propósito: distintos importadores registran el signo
+ * de forma inconsistente (algunos ponen las ventas en negativo, otros no). El único dato
+ * en el que confiamos para el signo es el `type`.
+ */
+function collect(
+  transactions: TransactionForFlows[],
+  sign: (tx: TransactionForFlows) => 1 | -1 | null
+): MonetaryEvent[] {
+  const events: MonetaryEvent[] = [];
 
   for (const tx of transactions) {
-    if (!isExternalFlow(tx.type)) continue;
+    if (!tx.instrumentEligible) continue;
     if (!Number.isFinite(tx.netAmount)) continue;
+
+    const direction = sign(tx);
+    if (direction === null) continue;
 
     const magnitude = Math.abs(tx.netAmount);
     if (magnitude === 0) continue;
 
-    flows.push({
+    events.push({
       date: tx.tradeDate,
-      amount: INBOUND_TYPES.has(tx.type) ? magnitude : -magnitude,
+      amount: direction * magnitude,
       currency: isUsdCurrency(tx.currencyCode) ? "USD" : "ARS",
     });
   }
 
-  return flows.sort((a, b) => a.date.getTime() - b.date.getTime());
+  return events.sort((a, b) => a.date.getTime() - b.date.getTime());
 }

@@ -9,15 +9,17 @@ export type ViewCurrency = "ARS" | "USD";
 /**
  * Tipos de instrumento que entran en el cálculo de rendimientos.
  *
- * El criterio es uno solo: **¿existe serie de precios histórica?** Sin histórico
- * no se puede valuar un mes pasado, y valuar en cero es peor que excluir.
+ * Dos criterios, y hay que cumplir los dos:
+ *
+ * 1. **¿Existe serie de precios histórica?** Sin histórico no se puede valuar un mes
+ *    pasado, y valuar en cero es peor que excluir.
+ * 2. **¿Cotiza en ARS?** `buildHoldings` suma `marketValueArs` y `costBasisArs` como
+ *    pesos. Un instrumento cotizado en dólares mezclaría monedas dentro del mismo total
+ *    sin que nada avise, así que `STOCK_US` y `ETF` quedan afuera hasta que la valuación
+ *    sea multi-moneda. CEDEAR y STOCK_AR cotizan en BYMA en pesos y son los únicos tipos
+ *    que la app opera hoy junto con ON.
  */
-export const PERFORMANCE_INSTRUMENT_TYPES: InstrumentType[] = [
-  "CEDEAR",
-  "STOCK_AR",
-  "STOCK_US",
-  "ETF",
-];
+export const PERFORMANCE_INSTRUMENT_TYPES: InstrumentType[] = ["CEDEAR", "STOCK_AR"];
 
 /**
  * Por qué queda afuera cada tipo excluido. Se muestra en la UI: el usuario tiene
@@ -28,6 +30,8 @@ export const EXCLUSION_REASONS: Partial<Record<InstrumentType, string>> = {
   BOND_AR: "Sin histórico de precios disponible.",
   LETRA: "Sin histórico de precios disponible.",
   FCI: "Sin histórico de cuotapartes disponible.",
+  STOCK_US: "Cotiza en dólares y la valuación todavía es en pesos.",
+  ETF: "Cotiza en dólares y la valuación todavía es en pesos.",
   CRYPTO: "Todavía no integrado al motor de rendimientos.",
   STABLECOIN: "Todavía no integrado al motor de rendimientos.",
   OPTION: "Fuera de alcance.",
@@ -83,16 +87,26 @@ export type MonthlyPerformanceRow = {
   /** CCL del cierre del mes. `null` si no hay cotización para ese rango. */
   cclMonthEnd: number | null;
 
+  /**
+   * Valor **invertido**: posiciones a precio de mercado + renta acumulada.
+   *
+   * No incluye el efectivo de la cuenta. El perímetro es el capital puesto en activos,
+   * no el saldo del broker — ver `cashflows.ts`.
+   */
   valueArs: number;
   valueUsd: number;
 
-  /** Flujos **externos** netos del mes (aportes − retiros). Ver `cashflows.ts`. */
-  netFlowArs: number;
-  netFlowUsd: number;
-  cumulativeFlowArs: number;
-  cumulativeFlowUsd: number;
+  /** Capital neto invertido en el mes: compras − ventas. Ver `cashflows.ts`. */
+  netInvestedArs: number;
+  netInvestedUsd: number;
+  cumulativeInvestedArs: number;
+  cumulativeInvestedUsd: number;
 
-  /** Ganancia del mes en moneda: ΔValor − flujos externos. */
+  /** Renta cobrada en el mes (dividendos, cupones, intereses) neta de costos. */
+  incomeArs: number;
+  incomeUsd: number;
+
+  /** Ganancia del mes en moneda: ΔValor − capital neto invertido. */
   gainArs: number;
   gainUsd: number;
   cumulativeGainArs: number;
@@ -164,8 +178,9 @@ export type PerformanceSummary = {
   cumulativeReturnUsd: number | null;
   cumulativeGainArs: number;
   cumulativeGainUsd: number;
-  netFlowArs: number;
-  netFlowUsd: number;
+  /** Capital neto invertido en el período: compras − ventas. */
+  netInvestedArs: number;
+  netInvestedUsd: number;
   /** Rendimiento anualizado a partir del acumulado y los meses transcurridos. */
   annualizedReturnArs: number | null;
   annualizedReturnUsd: number | null;
@@ -183,13 +198,6 @@ export type DataQuality = {
   missingCclMonths: string[];
   /** Fecha del último precio EOD que hay en la base, o `null` si nunca se backfilleó. */
   lastPriceSyncDate: string | null;
-  /**
-   * La caja implícita se fue a negativo en algún mes, o sea que faltan aportes en
-   * los datos cargados (típico de un import que trae solo operaciones). Cuando esto
-   * pasa el rendimiento puede estar sobrestimado, porque parte del capital invertido
-   * no figura como aporte y se computa como ganancia.
-   */
-  impliedNegativeCash: boolean;
   /** Primer mes efectivamente reportado, en ISO. */
   seriesFloor: string | null;
 };
@@ -202,15 +210,4 @@ export type PerformanceReport = {
   summary: PerformanceSummary;
   excludedHoldings: ExcludedHolding[];
   dataQuality: DataQuality;
-};
-
-/** Punto listo para graficar, ya resuelto a una sola moneda. */
-export type ChartPoint = {
-  month: string;
-  value: number;
-  cumulativeFlow: number;
-  netFlow: number;
-  monthlyReturn: number | null;
-  cumulativeReturn: number | null;
-  drawdown: number;
 };

@@ -12,6 +12,10 @@
  * El insight que lo habilita: `buildHoldings` es una función pura de replay y no
  * conoce "hoy". Filtrando trades a `tradeDate <= D` y pasándole precios as-of D,
  * devuelve la cartera al cierre de D.
+ *
+ * El perímetro medido es **el capital invertido en activos**, no el saldo del broker:
+ * las compras son el aporte y las ventas el retiro, así que el cálculo no depende de que
+ * el usuario cargue depósitos. Ver `cashflows.ts` para el razonamiento completo.
  */
 
 import Decimal from "decimal.js";
@@ -21,7 +25,12 @@ import { EOD_PRICE_SOURCE } from "@/lib/market/history-sync";
 import { buildHoldings, type TradeForHoldings } from "@/lib/transactions/holdings";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { buildIndexBenchmark, buildInflationBenchmark } from "./benchmarks";
-import { classifyExternalFlows, isUsdCurrency, type ClassifiedFlow } from "./cashflows";
+import {
+  classifyCapitalFlows,
+  classifyIncome,
+  type MonetaryEvent,
+  type TransactionForFlows,
+} from "./cashflows";
 import {
   dayOfMonth,
   daysInMonth,
@@ -198,16 +207,16 @@ export async function buildPerformanceReport(
     });
   }
 
-  const flows = classifyExternalFlows(
-    transactions.map((tx) => ({
-      type: tx.type,
-      tradeDate: tx.tradeDate,
-      netAmount: Number(tx.netAmount),
-      currencyCode: tx.currencyCode,
-    }))
-  );
+  const forFlows: TransactionForFlows[] = transactions.map((tx) => ({
+    type: tx.type,
+    tradeDate: tx.tradeDate,
+    netAmount: Number(tx.netAmount),
+    currencyCode: tx.currencyCode,
+    instrumentEligible: tx.instrument ? ELIGIBLE_TYPES.has(tx.instrument.type) : false,
+  }));
 
-  const cashEvents = buildCashEvents(transactions);
+  const capitalFlows = classifyCapitalFlows(forFlows);
+  const incomeEvents = classifyIncome(forFlows);
 
   // ---- Valuación mes a mes -------------------------------------------------
 
@@ -221,9 +230,11 @@ export async function buildPerformanceReport(
     coverage: MonthCoverage;
     staleTickers: string[];
     unrealizedReturnPct: number | null;
-    /** La caja cruda se fue a negativo: faltan aportes en los datos importados. */
-    impliedNegativeCash: boolean;
   };
+
+  // Renta acumulada hasta cada cierre. Vive dentro del perímetro en vez de tratarse
+  // como salida de capital: un dividendo es retorno generado, no plata que se fue.
+  const incomeArsByDate = accumulateInArs(incomeEvents, ccl);
 
   const valuations: MonthValuation[] = months.map((month) => {
     const valuationDate = monthEnd(month);
@@ -254,18 +265,8 @@ export async function buildPerformanceReport(
     }
 
     const holdings = buildHoldings(tradesToDate, priceMap, eventsByInstrument);
-    const cash = cashAt(cashEvents, cutoff);
     const cclHit = ccl.asOf(valuationDate);
     const cclMid = cclHit?.value ?? null;
-
-    // La caja se clampea a 0 para valuar, igual que hacía la valuación original:
-    // muchos imports traen solo operaciones y ningún depósito, lo que dejaría una
-    // caja fuertemente negativa y un valor de cartera absurdo. Pero el hecho de
-    // que haya sido negativa se reporta (`impliedNegativeCash`), porque implica
-    // que los aportes están incompletos y el rendimiento puede estar sobrestimado.
-    const impliedNegativeCash = cash.ars.lt(0) || cash.usd.lt(0);
-    const safeCashArs = Decimal.max(0, cash.ars);
-    const safeCashUsd = Decimal.max(0, cash.usd);
 
     let holdingsValueArs = new Decimal(0);
     let costBasisArs = new Decimal(0);
@@ -274,9 +275,10 @@ export async function buildPerformanceReport(
       costBasisArs = costBasisArs.plus(new Decimal(holding.costBasisArs));
     }
 
-    const valueArs = holdingsValueArs
-      .plus(safeCashArs)
-      .plus(cclMid && cclMid > 0 ? safeCashUsd.mul(cclMid) : 0);
+    // Valor invertido = posiciones a mercado + renta acumulada. Sin efectivo: el saldo
+    // de la cuenta no forma parte del perímetro que se mide.
+    const accumulatedIncomeArs = sumUpTo(incomeArsByDate, cutoff);
+    const valueArs = holdingsValueArs.plus(accumulatedIncomeArs);
     const valueUsd = cclMid && cclMid > 0 ? valueArs.div(cclMid) : new Decimal(0);
 
     const positions: PositionDetail[] = holdings.map((holding) => {
@@ -298,12 +300,12 @@ export async function buildPerformanceReport(
       };
     });
 
-    const hasPortfolio = holdings.length > 0 || !safeCashArs.plus(safeCashUsd).isZero();
-    const coverage: MonthCoverage = !hasPortfolio
-      ? "empty"
-      : staleTickers.length > 0 || !anyPriced
-        ? "partial"
-        : "full";
+    const coverage: MonthCoverage =
+      holdings.length === 0
+        ? "empty"
+        : staleTickers.length > 0 || !anyPriced
+          ? "partial"
+          : "full";
 
     return {
       month,
@@ -318,13 +320,13 @@ export async function buildPerformanceReport(
         holdingsValueArs.toNumber(),
         costBasisArs.toNumber()
       ),
-      impliedNegativeCash,
     };
   });
 
-  // ---- Flujos por mes, en cada moneda -------------------------------------
+  // ---- Capital y renta por mes, en cada moneda ----------------------------
 
-  const flowsByMonth = groupFlowsByMonth(flows, ccl);
+  const flowsByMonth = groupByMonth(capitalFlows, ccl);
+  const incomeByMonth = groupByMonth(incomeEvents, ccl);
 
   // ---- Rendimientos --------------------------------------------------------
 
@@ -363,23 +365,26 @@ export async function buildPerformanceReport(
   const drawdownArs = drawdownFromCumulative(cumulativeArs);
   const drawdownUsd = drawdownFromCumulative(cumulativeUsd);
 
-  let cumulativeFlowArs = 0;
-  let cumulativeFlowUsd = 0;
+  let cumulativeInvestedArs = 0;
+  let cumulativeInvestedUsd = 0;
   let cumulativeGainArs = 0;
   let cumulativeGainUsd = 0;
 
   const rows: MonthlyPerformanceRow[] = valuations.map((valuation, index) => {
     const previous = index > 0 ? valuations[index - 1] : undefined;
     const monthFlows = flowsByMonth.get(valuation.month);
+    const monthIncome = incomeByMonth.get(valuation.month);
 
-    const netFlowArs = sumFlows(monthFlows?.ars);
-    const netFlowUsd = sumFlows(monthFlows?.usd);
-    // Ganancia del mes = variación de valor menos lo que entró/salió por caja.
-    const gainArs = valuation.valueArs - (previous?.valueArs ?? 0) - netFlowArs;
-    const gainUsd = valuation.valueUsd - (previous?.valueUsd ?? 0) - netFlowUsd;
+    const netInvestedArs = sumAmounts(monthFlows?.ars);
+    const netInvestedUsd = sumAmounts(monthFlows?.usd);
+    // Ganancia del mes = variación del valor invertido menos el capital que se puso
+    // o se sacó. La renta cobrada NO se descuenta acá: ya entró al valor como parte
+    // del perímetro, y descontarla borraría justamente la ganancia que hay que medir.
+    const gainArs = valuation.valueArs - (previous?.valueArs ?? 0) - netInvestedArs;
+    const gainUsd = valuation.valueUsd - (previous?.valueUsd ?? 0) - netInvestedUsd;
 
-    cumulativeFlowArs += netFlowArs;
-    cumulativeFlowUsd += netFlowUsd;
+    cumulativeInvestedArs += netInvestedArs;
+    cumulativeInvestedUsd += netInvestedUsd;
     cumulativeGainArs += gainArs;
     cumulativeGainUsd += gainUsd;
 
@@ -389,10 +394,12 @@ export async function buildPerformanceReport(
       cclMonthEnd: valuation.cclMonthEnd,
       valueArs: valuation.valueArs,
       valueUsd: valuation.valueUsd,
-      netFlowArs,
-      netFlowUsd,
-      cumulativeFlowArs,
-      cumulativeFlowUsd,
+      netInvestedArs,
+      netInvestedUsd,
+      cumulativeInvestedArs,
+      cumulativeInvestedUsd,
+      incomeArs: sumAmounts(monthIncome?.ars),
+      incomeUsd: sumAmounts(monthIncome?.usd),
       gainArs,
       gainUsd,
       cumulativeGainArs,
@@ -437,115 +444,85 @@ export async function buildPerformanceReport(
       partialMonths: rows.filter((row) => row.coverage === "partial").map((row) => row.month),
       missingCclMonths: rows.filter((row) => row.cclMonthEnd === null).map((row) => row.month),
       lastPriceSyncDate: prices.latestDate()?.toISOString() ?? null,
-      impliedNegativeCash: valuations.some((valuation) => valuation.impliedNegativeCash),
       seriesFloor: seriesFloor.toISOString(),
     },
   };
 }
 
 // ============================================================
-// CAJA
+// RENTA ACUMULADA
 // ============================================================
 
-type CashEvent = { time: number; ars: Decimal; usd: Decimal };
+type DatedAmount = { time: number; amount: Decimal };
 
 /**
- * Convierte transacciones en deltas de caja acumulables.
+ * Expresa cada evento de renta en ARS al CCL **de su propia fecha** y los ordena.
  *
- * Mismo criterio que la valuación original (`calculatePortfolioValuation`) para que
- * el valor de hoy siga siendo consistente con el dashboard.
+ * Se convierte al momento del cobro y no al cierre del mes porque es un importe
+ * histórico: se recibió esa cantidad de pesos ese día. Un evento en dólares sin CCL
+ * disponible se descarta en lugar de convertirse a un valor inventado.
  */
-function buildCashEvents(
-  transactions: Array<{
-    type: string;
-    tradeDate: Date;
-    netAmount: { toString(): string };
-    currencyCode: string;
-  }>
-): CashEvent[] {
-  const events: CashEvent[] = [];
+function accumulateInArs(events: MonetaryEvent[], ccl: TimeSeries): DatedAmount[] {
+  const amounts: DatedAmount[] = [];
 
-  for (const tx of transactions) {
-    const magnitude = new Decimal(tx.netAmount.toString()).abs();
-    if (magnitude.isZero()) continue;
-
-    let delta: Decimal | null = null;
-    switch (tx.type) {
-      case "DEPOSIT":
-      case "TRANSFER_IN":
-      case "SELL":
-      case "DIVIDEND_CASH":
-      case "COUPON":
-      case "AMORTIZATION":
-      case "INTEREST":
-        delta = magnitude;
-        break;
-      case "WITHDRAWAL":
-      case "TRANSFER_OUT":
-      case "BUY":
-      case "FEE":
-      case "TAX_WITHHOLDING":
-        delta = magnitude.neg();
-        break;
-      default:
-        delta = null;
-    }
-    if (!delta) continue;
-
-    const isUsd = isUsdCurrency(tx.currencyCode);
-    events.push({
-      time: tx.tradeDate.getTime(),
-      ars: isUsd ? new Decimal(0) : delta,
-      usd: isUsd ? delta : new Decimal(0),
-    });
-  }
-
-  return events.sort((a, b) => a.time - b.time);
-}
-
-function cashAt(events: CashEvent[], cutoff: number): { ars: Decimal; usd: Decimal } {
-  let ars = new Decimal(0);
-  let usd = new Decimal(0);
   for (const event of events) {
-    if (event.time > cutoff) break;
-    ars = ars.plus(event.ars);
-    usd = usd.plus(event.usd);
+    if (event.currency === "ARS") {
+      amounts.push({ time: event.date.getTime(), amount: new Decimal(event.amount) });
+      continue;
+    }
+    const rate = ccl.asOf(event.date)?.value ?? null;
+    if (!rate || rate <= 0) continue;
+    amounts.push({ time: event.date.getTime(), amount: new Decimal(event.amount * rate) });
   }
-  return { ars, usd };
+
+  return amounts.sort((a, b) => a.time - b.time);
+}
+
+/** Suma acumulada hasta `cutoff` inclusive. Asume `amounts` ordenado ascendente. */
+function sumUpTo(amounts: DatedAmount[], cutoff: number): Decimal {
+  let total = new Decimal(0);
+  for (const entry of amounts) {
+    if (entry.time > cutoff) break;
+    total = total.plus(entry.amount);
+  }
+  return total;
 }
 
 // ============================================================
-// FLUJOS
+// AGRUPACIÓN MENSUAL
 // ============================================================
 
-type MonthFlows = { ars: ExternalFlow[]; usd: ExternalFlow[] };
+type MonthAmounts = { ars: ExternalFlow[]; usd: ExternalFlow[] };
 
 /**
- * Agrupa flujos externos por mes y los expresa en ambas monedas.
+ * Agrupa eventos por mes y los expresa en ambas monedas, con su día dentro del mes.
  *
- * Cada flujo se convierte al CCL **de su propia fecha de operación**, no al del cierre
- * del mes: un aporte del día 3 y otro del día 28 en un mes de salto cambiario no valen
- * lo mismo en dólares. Un flujo sin CCL disponible se omite de la serie en la moneda
+ * Cada evento se convierte al CCL **de su propia fecha de operación**, no al del cierre
+ * del mes: una compra del día 3 y otra del día 28 en un mes de salto cambiario no valen
+ * lo mismo en dólares. Un evento sin CCL disponible se omite de la serie en la moneda
  * que no puede expresarse, en vez de convertirse a un valor inventado.
+ *
+ * El `day` es el `d_i` que Modified Dietz usa para ponderar cuánto tiempo estuvo
+ * invertido ese capital.
  */
-function groupFlowsByMonth(
-  flows: ClassifiedFlow[],
+function groupByMonth(
+  events: MonetaryEvent[],
   ccl: TimeSeries
-): Map<MonthKey, MonthFlows> {
-  const byMonth = new Map<MonthKey, MonthFlows>();
+): Map<MonthKey, MonthAmounts> {
+  const byMonth = new Map<MonthKey, MonthAmounts>();
 
-  for (const flow of flows) {
-    const key = `${flow.date.getUTCFullYear()}-${String(flow.date.getUTCMonth() + 1).padStart(2, "0")}`;
+  for (const event of events) {
+    const key = `${event.date.getUTCFullYear()}-${String(event.date.getUTCMonth() + 1).padStart(2, "0")}`;
     const entry = byMonth.get(key) ?? { ars: [], usd: [] };
-    const day = dayOfMonth(flow.date);
-    const rate = ccl.asOf(flow.date)?.value ?? null;
+    const day = dayOfMonth(event.date);
+    const rate = ccl.asOf(event.date)?.value ?? null;
 
-    if (flow.currency === "ARS") {
-      entry.ars.push({ day, amount: flow.amount });
-      if (rate && rate > 0) entry.usd.push({ day, amount: flow.amount / rate });
+    if (event.currency === "ARS") {
+      entry.ars.push({ day, amount: event.amount });
+      if (rate && rate > 0) entry.usd.push({ day, amount: event.amount / rate });
     } else {
-      entry.usd.push({ day, amount: flow.amount });
-      if (rate && rate > 0) entry.ars.push({ day, amount: flow.amount * rate });
+      entry.usd.push({ day, amount: event.amount });
+      if (rate && rate > 0) entry.ars.push({ day, amount: event.amount * rate });
     }
 
     byMonth.set(key, entry);
@@ -554,8 +531,8 @@ function groupFlowsByMonth(
   return byMonth;
 }
 
-function sumFlows(flows: ExternalFlow[] | undefined): number {
-  return (flows ?? []).reduce((total, flow) => total + flow.amount, 0);
+function sumAmounts(amounts: ExternalFlow[] | undefined): number {
+  return (amounts ?? []).reduce((total, entry) => total + entry.amount, 0);
 }
 
 // ============================================================
@@ -578,8 +555,8 @@ function buildSummary(rows: MonthlyPerformanceRow[]): PerformanceSummary {
     cumulativeReturnUsd: last.cumulativeReturnUsd,
     cumulativeGainArs: last.cumulativeGainArs,
     cumulativeGainUsd: last.cumulativeGainUsd,
-    netFlowArs: last.cumulativeFlowArs,
-    netFlowUsd: last.cumulativeFlowUsd,
+    netInvestedArs: last.cumulativeInvestedArs,
+    netInvestedUsd: last.cumulativeInvestedUsd,
     annualizedReturnArs: annualizeReturn(last.cumulativeReturnArs, measuredMonths),
     annualizedReturnUsd: annualizeReturn(last.cumulativeReturnUsd, measuredMonths),
     maxDrawdownArs: Math.min(0, ...rows.map((row) => row.drawdownArs)),
@@ -644,8 +621,8 @@ function emptySummary(): PerformanceSummary {
     cumulativeReturnUsd: null,
     cumulativeGainArs: 0,
     cumulativeGainUsd: 0,
-    netFlowArs: 0,
-    netFlowUsd: 0,
+    netInvestedArs: 0,
+    netInvestedUsd: 0,
     annualizedReturnArs: null,
     annualizedReturnUsd: null,
     maxDrawdownArs: 0,
@@ -667,7 +644,6 @@ function emptyReport(portfolioName: string): PerformanceReport {
       partialMonths: [],
       missingCclMonths: [],
       lastPriceSyncDate: null,
-      impliedNegativeCash: false,
       seriesFloor: null,
     },
   };

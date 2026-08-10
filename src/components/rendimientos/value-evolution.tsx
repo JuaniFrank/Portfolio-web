@@ -22,11 +22,14 @@ import type { MonthlyChartRow } from "@/lib/rendimientos/view";
 const HEIGHT = 300;
 
 /**
- * Valor del portfolio contra aportes acumulados, mes a mes.
+ * Valor invertido contra capital invertido, mes a mes.
  *
- * La distancia entre las dos curvas **es** la ganancia: si el valor va por encima de
- * los aportes, la cartera generó plata; si va por debajo, la perdió. Es la lectura más
- * directa de "¿me está yendo bien?" y no depende de entender ningún porcentaje.
+ * La distancia entre las dos curvas **es** la ganancia: si el valor va por encima del
+ * capital puesto, la cartera generó plata; si va por debajo, la perdió. Es la lectura
+ * más directa de "¿me está yendo bien?" y no depende de entender ningún porcentaje.
+ *
+ * El capital invertido sale de las compras y ventas, no de los depósitos, así que la
+ * curva existe aunque el usuario nunca haya cargado un movimiento de efectivo.
  */
 export function ValueEvolution({
   data,
@@ -40,13 +43,18 @@ export function ValueEvolution({
   return (
     <ChartCard
       title="Evolución del portfolio"
-      description="Valor de mercado contra aportes netos acumulados. La brecha entre las curvas es la ganancia."
+      description="Valor de mercado contra el capital que pusiste (compras − ventas). La brecha entre las curvas es la ganancia."
       headerExtra={
         <LegendRow>
-          <LegendToggle color={SERIES_COLORS.portfolio} label="Valor" active onClick={() => {}} />
+          <LegendToggle
+            color={SERIES_COLORS.portfolio}
+            label="Valor invertido"
+            active
+            onClick={() => {}}
+          />
           <LegendToggle
             color={SERIES_COLORS.contributions}
-            label="Aportes acumulados"
+            label="Capital invertido"
             active={showFlows}
             onClick={() => setShowFlows((value) => !value)}
           />
@@ -95,14 +103,14 @@ export function ValueEvolution({
                       month={label}
                       entries={[
                         {
-                          label: "Valor",
+                          label: "Valor invertido",
                           color: SERIES_COLORS.portfolio,
                           value: formatMoney(row.value, currency),
                         },
                         {
-                          label: "Aportes acumulados",
+                          label: "Capital invertido",
                           color: SERIES_COLORS.contributions,
-                          value: formatMoney(row.cumulativeFlow, currency),
+                          value: formatMoney(row.cumulativeInvested, currency),
                         },
                         {
                           label: "Ganancia del mes",
@@ -122,7 +130,7 @@ export function ValueEvolution({
               <Area
                 type="monotone"
                 dataKey="value"
-                name="Valor"
+                name="Valor invertido"
                 stroke={SERIES_COLORS.portfolio}
                 fill="url(#evolutionGradient)"
                 strokeWidth={2}
@@ -132,8 +140,8 @@ export function ValueEvolution({
               {showFlows ? (
                 <Line
                   type="monotone"
-                  dataKey="cumulativeFlow"
-                  name="Aportes acumulados"
+                  dataKey="cumulativeInvested"
+                  name="Capital invertido"
                   stroke={SERIES_COLORS.contributions}
                   strokeWidth={1.5}
                   strokeDasharray="5 4"
