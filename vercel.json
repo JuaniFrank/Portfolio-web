@@ -8,6 +8,14 @@
     {
       "path": "/api/cron/snapshots",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/backfill-macro",
+      "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/backfill-prices",
+      "schedule": "0 4 * * *"
     }
   ]
 }

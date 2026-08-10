@@ -2,7 +2,8 @@ import { Prisma, type InstrumentType } from "@/lib/generated/prisma";
 import { prisma } from "@/lib/prisma";
 import { buildYahooSymbol, fetchYahooQuote } from "./yahoo";
 
-const ARGENTINIAN_TYPES = new Set<InstrumentType>([
+/** Tipos que cotizan en BYMA y por lo tanto llevan sufijo `.BA` en Yahoo. */
+export const ARGENTINIAN_TYPES = new Set<InstrumentType>([
   "CEDEAR",
   "STOCK_AR",
   "BOND_AR",
