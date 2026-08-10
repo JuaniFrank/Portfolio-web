@@ -210,20 +210,66 @@ con mi broker".
 Acá se decide si los números son correctos o no. Es la diferencia entre la página actual y
 la app de las capturas.
 
-### 6.1 Flujos externos vs internos
+### 6.1 El perímetro: capital invertido, no saldo del broker
 
-Es el error #1 en todo cálculo de rendimiento de cartera:
+> **Corrección sobre la primera versión de este documento.** Originalmente el perímetro
+> eran *posiciones + efectivo*, con los `DEPOSIT` como aporte. Eso hacía que todo el
+> cálculo dependiera de que el usuario cargara sus movimientos de efectivo — y **no se
+> puede depender de eso**. Un import que trae solo operaciones dejaba el primer mes sin
+> medir y sobrestimaba cualquier mes con compras.
 
-| Tipo de transacción | ¿Flujo externo? | Por qué |
+Lo que se mide es **el capital puesto en activos**. Y la clave es que ese dato ya está en
+las operaciones: **una compra es la prueba de que entró plata**.
+
+| Tipo de transacción | ¿Mueve capital? | Por qué |
 |---|---|---|
-| `DEPOSIT`, `TRANSFER_IN` | ✅ Sí | Entra plata nueva al portfolio |
-| `WITHDRAWAL`, `TRANSFER_OUT` | ✅ Sí | Sale plata del portfolio |
-| `BUY`, `SELL` | ❌ No | Reasignación interna: cash ↔ activo. El valor total no cambia |
-| `DIVIDEND_CASH`, `COUPON`, `AMORTIZATION`, `INTEREST` | ❌ No | Es **retorno generado**, no aporte |
-| `FEE`, `TAX_WITHHOLDING` | ❌ No | Costo que debe impactar el rendimiento |
+| `BUY` | ✅ Entra | Invertiste esa plata, haya o no un `DEPOSIT` cargado |
+| `SELL` | ✅ Sale | Saca capital del perímetro. Vender no genera rendimiento |
+| `DEPOSIT`, `WITHDRAWAL`, `TRANSFER_IN/OUT` | ❌ **Se ignoran** | Mover plata entre tu banco y el broker no cambia cuánto rindieron tus activos |
+| `DIVIDEND_CASH`, `COUPON`, `AMORTIZATION`, `INTEREST` | ❌ No | Es **retorno generado**: se acumula dentro del perímetro |
+| `FEE`, `TAX_WITHHOLDING` | ❌ No | Costo que debe empujar el rendimiento hacia abajo |
 | `FX_CONVERSION` | ❌ No | Cambia la composición, no el valor |
 
-Contar un `BUY` como aporte es lo que hace que el rendimiento mensual actual sea inútil.
+Entonces:
+
+```
+Valor invertido = posiciones a precio de mercado + renta acumulada
+Capital neto    = compras − ventas
+```
+
+**El efectivo queda afuera por completo**, incluso si está cargado. Plata quieta en el
+broker no rinde, y hacerla entrar al cálculo significaría que dos usuarios con la misma
+cartera vean rendimientos distintos según qué tan prolijos fueron cargando movimientos —
+que es justamente el problema del que salimos.
+
+Consecuencia en la UI: la columna es **"Valor invertido"**, no "Valor del portfolio", y
+"Aportes" pasa a ser **"Capital invertido"**. Los nombres tienen que decir lo que miden.
+
+**Ejemplo — 3 compras con 15 días de gap, sin ningún depósito cargado:**
+
+| | Compra | Importe |
+|---|---|---|
+| 1 ene | 10 nominales × $100 | $1.000 |
+| 16 ene | 10 nominales × $110 | $1.100 |
+| 31 ene | 10 nominales × $120 | $1.200 |
+
+Cierre de enero: 30 × $120 = **$3.600**.
+
+```
+día  1: +1.000 × 30/31 = 967
+día 16: +1.100 × 15/31 = 532
+día 31: +1.200 ×  0/31 =   0
+                 capital medio = 1.500
+
+ganancia = 3.600 − 3.300 = 300
+enero    = 300 / 1.500 = +20%
+```
+
+Febrero sin compras, precio $120 → $132: **+10%**. Acumulado encadenado: `1,20 × 1,10 − 1
+= +32%`. Cubierto por tests en `returns.test.ts`.
+
+Pendiente para más adelante: un apartado aparte que compare entradas y salidas de efectivo.
+Es una vista distinta a la de rendimiento y no tiene por qué contaminar este número.
 
 ### 6.2 Rendimiento mensual = Modified Dietz
 
@@ -232,13 +278,13 @@ Contar un `BUY` como aporte es lo que hace que el rendimiento mensual actual sea
 R_m  =  ─────────────────────────────────
           V_start + Σ (w_i · F_i)
 
-  F    = suma de flujos externos del mes
-  w_i  = (D − d_i) / D     fracción del mes que el flujo i estuvo invertido
-  D    = días del mes,  d_i = día del flujo i
+  F    = capital neto invertido en el mes (compras − ventas)
+  w_i  = (D − d_i) / D     fracción del mes que ese capital estuvo invertido
+  D    = días del mes,  d_i = día de la operación
 ```
 
-**Por qué Dietz y no `V_end / V_start − 1`:** neutraliza el momento y el tamaño de los
-aportes. Un depósito el día 28 pesa 2/30 en el denominador, no 1.
+**Por qué Dietz y no `V_end / V_start − 1`:** neutraliza el momento y el tamaño de las
+compras. Una compra el día 28 pesa 2/30 en el denominador, no 1.
 
 **Por qué Dietz y no TWR diario completo:** el TWR exacto exige valuar la cartera cada día
 en que hay un flujo. Es factible con este motor (los precios diarios están), pero cuesta N
@@ -317,14 +363,18 @@ El modelo "el snapshot es la verdad" se retira. Recomendación:
 Sé honesto con estos en la UI; son la diferencia entre una herramienta confiable y una que
 el usuario deja de creer.
 
-**1. Renta fija no se puede reconstruir.**
+**1. Renta fija no se puede reconstruir.** *(decidido: se excluye y se avisa)*
 data912 solo expone `/live/*`. Probé `historical/arg_stocks` → **404**. Sin serie histórica,
 `ON`, `LETRA` y `BOND_AR` no son backfilleables. Coincide con el disclaimer de la app de
-referencia ("no incluyen renta fija ni cripto por ahora"). Opciones:
-- **(recomendada, fase 1)** excluirlas del cálculo y decirlo en la UI, como hace la app de
-  referencia;
-- valuarlas a costo — miente menos que valuarlas en cero, pero sigue mintiendo;
-- buscar otra fuente (IAMC, BYMA) en una fase posterior.
+referencia ("no incluyen renta fija ni cripto por ahora"). Quedan fuera del cálculo y la UI
+lo declara ticker por ticker. Alternativa descartada: valuarlas a costo miente menos que
+valuarlas en cero, pero sigue mintiendo. Buscar otra fuente (IAMC, BYMA) queda para después.
+
+**1-bis. Instrumentos en dólares tampoco entran, por ahora.**
+`buildHoldings` suma `marketValueArs` y `costBasisArs` como pesos. Un `STOCK_US` o un `ETF`
+cotizado en USD mezclaría monedas dentro del mismo total **sin que nada avise**, así que
+`PERFORMANCE_INSTRUMENT_TYPES` se limita a `CEDEAR` y `STOCK_AR`, que cotizan en BYMA en
+pesos. Habilitarlos requiere valuación multi-moneda primero.
 
 **2. Splits y cambios de ratio de CEDEAR — el riesgo silencioso.**
 Yahoo ajusta sus precios históricos retroactivamente. Nuestras `quantity` están guardadas
@@ -411,16 +461,28 @@ Casos mínimos:
 
 ---
 
-## 11. Decisiones abiertas
+## 11. Decisiones tomadas
 
-1. **Renta fija:** ¿excluirla y avisarlo (como la app de referencia), o valuarla a costo?
-2. **Caché:** ¿on-demand con `unstable_cache`, o tabla materializada desde el arranque?
-3. **Profundidad del backfill:** ¿desde la primera transacción del usuario, o tope fijo de
-   N años?
-4. **Migración:** ¿los `PortfolioSnapshot` existentes se conservan como referencia, o se
-   descartan porque el motor los reemplaza con mejores números?
-5. **Multi-portfolio:** las capturas tienen un selector "Todos". Hoy `page.tsx:215` agarra
-   **solo el primer portfolio**. ¿Entra la agregación en esta feature?
+1. **Renta fija:** se excluye del cálculo y se avisa en la UI, ticker por ticker.
+2. **Caché:** on-demand con `revalidate = 300`. Al recalcular siempre, el histórico nunca
+   puede quedar desactualizado — que era la enfermedad de los snapshots. Materializar la
+   serie queda para si el cálculo se pone lento, y siempre como caché reconstruible.
+3. **Profundidad del backfill:** todo el histórico del usuario. Macro desde la primera
+   transacción de la base; precios desde la primera operación **de cada instrumento**.
+4. **`PortfolioSnapshot`:** se conserva por ahora, alimentando el valor de hoy del
+   dashboard. Deja de ser fuente de verdad del histórico y se puede retirar más adelante.
+5. **Multi-portfolio:** la feature todavía no existe. El motor ya acepta N portfolios y los
+   agrega (`portfolioIds: string[]`); la página le pasa uno. Habilitar el selector no
+   requiere tocar el motor.
+6. **Perímetro:** capital invertido, efectivo afuera. Ver §6.1.
+
+### Pendiente
+
+- Apartado separado de **entradas/salidas de efectivo**. Es una vista distinta a la de
+  rendimiento y no debe contaminar este número.
+- **Organizador de columnas** de la tabla (arrastrar para reordenar/ocultar), como en la app
+  de referencia. No implementado.
+- Valuación **multi-moneda** para habilitar `STOCK_US` y `ETF`.
 
 ---
 
