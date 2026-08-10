@@ -337,22 +337,29 @@ model Transaction {
 // ============================================================
 
 model PortfolioSnapshot {
-  id                String    @id @default(cuid())
-  portfolioId       String
-  portfolio         Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
-  date              DateTime // EOD UTC
-  totalValueArs     Decimal   @db.Decimal(20, 8)
-  totalValueUsd     Decimal   @db.Decimal(20, 8)
-  cashArs           Decimal   @default(0) @db.Decimal(20, 8)
-  cashUsd           Decimal   @default(0) @db.Decimal(20, 8)
-  netDepositsArs    Decimal   @default(0) @db.Decimal(20, 8) // aportes netos acumulados desde inicio
-  netDepositsUsd    Decimal   @default(0) @db.Decimal(20, 8)
-  twrSinceInception Decimal?  @db.Decimal(20, 8)
-  positions         Json // snapshot completo de posiciones del día
-  createdAt         DateTime  @default(now())
+  id              String    @id @default(cuid())
+  portfolioId     String
+  portfolio       Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  date            DateTime   // snapshot UTC timestamp
+  totalValueArs   Decimal    @db.Decimal(20,8) // value in base currency (ARS)
+  totalValueUsd   Decimal    @db.Decimal(20,8) // value converted to USD for comparison
+  cashArs         Decimal    @default(0) @db.Decimal(20,8)
+  cashUsd         Decimal    @default(0) @db.Decimal(20,8)
+  netDepositsArs  Decimal    @default(0) @db.Decimal(20,8) // net deposits cumulative
+  netDepositsUsd  Decimal    @default(0) @db.Decimal(20,8)
+  twrSinceInception Decimal? @db.Decimal(20,8)
+  positions       Json      // JSON snapshot of holdings for the day
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
   @@unique([portfolioId, date])
   @@index([portfolioId, date])
+}
+
+model Sp500Snapshot {
+  id    String   @id @default(cuid())
+  date  DateTime @unique
+  close Decimal  @db.Decimal(20,8)
 }
 
 // ============================================================
