@@ -7,7 +7,7 @@ import {
 } from "@/lib/generated/prisma";
 import { prisma } from "@/lib/prisma";
 import { buildImportIdempotencyHash } from "./idempotency";
-import type { CommitImportRow, ParsedImportRowData } from "./types";
+import type { CommitImportRow, DuplicateStrategy, ParsedImportRowData } from "./types";
 
 export type CommitImportInput = {
   userId: string;
@@ -17,10 +17,24 @@ export type CommitImportInput = {
   fileName: string;
   fileHash: string;
   rows: CommitImportRow[];
+  /**
+   * Qué hacer con las filas cuyo hash ya existe en la base. Por defecto `skip`,
+   * que preserva el comportamiento histórico. `import` las inserta igual con
+   * `idempotencyVersion` incrementada — lo elige el usuario en el diálogo de
+   * duplicados.
+   */
+  duplicateStrategy?: DuplicateStrategy;
 };
 
 export type CommitImportResult =
-  | { ok: true; importBatchId: string; imported: number; skipped: number }
+  | {
+      ok: true;
+      importBatchId: string;
+      imported: number;
+      skipped: number;
+      /** Filas insertadas pese a colisionar con una transacción existente. */
+      duplicatesImported: number;
+    }
   | { ok: false; error: string };
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
@@ -158,6 +172,7 @@ export async function commitImportBatch(input: CommitImportInput): Promise<Commi
   // 1. Hash every row up front.
   const hashed = importable.map((row) => ({
     parsed: row.parsed!,
+    edited: row.edited === true,
     idempotencyHash: buildImportIdempotencyHash({
       brokerAccountId: input.brokerAccountId,
       row: row.parsed!,
@@ -165,18 +180,58 @@ export async function commitImportBatch(input: CommitImportInput): Promise<Commi
     }),
   }));
 
-  // 2. Drop duplicates in a single query (against the DB) plus within the batch.
+  // 2. Resolve collisions against the DB and within the batch, in one query.
+  //    `Transaction` is unique on [idempotencyHash, idempotencyVersion], so a
+  //    forced re-import is representable by bumping the version rather than by
+  //    weakening the constraint.
   const existingHashes = await prisma.transaction.findMany({
     where: { idempotencyHash: { in: hashed.map((h) => h.idempotencyHash) } },
-    select: { idempotencyHash: true },
+    select: { idempotencyHash: true, idempotencyVersion: true },
   });
-  const seen = new Set(existingHashes.map((e) => e.idempotencyHash));
-  const toInsert = hashed.filter(({ idempotencyHash }) => {
-    if (seen.has(idempotencyHash)) return false;
-    seen.add(idempotencyHash);
-    return true;
-  });
-  const skipped = hashed.length - toInsert.length;
+
+  const maxVersionByHash = new Map<string, number>();
+  for (const e of existingHashes) {
+    const prev = maxVersionByHash.get(e.idempotencyHash) ?? 0;
+    if (e.idempotencyVersion > prev) {
+      maxVersionByHash.set(e.idempotencyHash, e.idempotencyVersion);
+    }
+  }
+
+  const strategy: DuplicateStrategy = input.duplicateStrategy ?? "skip";
+  // Versions handed out during this batch, so two identical rows inside the
+  // same file do not collide with each other either.
+  const assignedInBatch = new Map<string, number>();
+
+  const toInsert: Array<{
+    parsed: ParsedImportRowData;
+    idempotencyHash: string;
+    idempotencyVersion: number;
+  }> = [];
+  let skipped = 0;
+  let duplicatesImported = 0;
+  let editedCount = 0;
+
+  for (const row of hashed) {
+    const storedMax = maxVersionByHash.get(row.idempotencyHash) ?? 0;
+    const batchMax = assignedInBatch.get(row.idempotencyHash) ?? 0;
+    const collides = storedMax > 0 || batchMax > 0;
+
+    if (collides && strategy === "skip") {
+      skipped += 1;
+      continue;
+    }
+
+    const idempotencyVersion = Math.max(storedMax, batchMax) + 1;
+    assignedInBatch.set(row.idempotencyHash, idempotencyVersion);
+    if (collides) duplicatesImported += 1;
+    if (row.edited) editedCount += 1;
+
+    toInsert.push({
+      parsed: row.parsed,
+      idempotencyHash: row.idempotencyHash,
+      idempotencyVersion,
+    });
+  }
 
   // 3. Resolve all instruments in bulk.
   let instrumentMap: Map<string, string>;
@@ -219,13 +274,20 @@ export async function commitImportBatch(input: CommitImportInput): Promise<Commi
             rowsImported: toInsert.length,
             rowsSkipped: skipped,
             committedAt: new Date(),
-            rawSummary: { valid: importable.length, imported: toInsert.length, skipped },
+            rawSummary: {
+              valid: importable.length,
+              imported: toInsert.length,
+              skipped,
+              duplicatesImported,
+              editedRows: editedCount,
+              duplicateStrategy: strategy,
+            },
           },
         });
 
         if (toInsert.length > 0) {
           await tx.transaction.createMany({
-            data: toInsert.map(({ parsed, idempotencyHash }) => ({
+            data: toInsert.map(({ parsed, idempotencyHash, idempotencyVersion }) => ({
               portfolioId: input.portfolioId,
               brokerAccountId: input.brokerAccountId,
               instrumentId: instrumentIdFor(parsed),
@@ -242,13 +304,19 @@ export async function commitImportBatch(input: CommitImportInput): Promise<Commi
               importBatchId: batch.id,
               externalId: parsed.externalId,
               idempotencyHash,
+              idempotencyVersion,
               notes: parsed.description,
             })),
             skipDuplicates: true,
           });
         }
 
-        return { importBatchId: batch.id, imported: toInsert.length, skipped };
+        return {
+          importBatchId: batch.id,
+          imported: toInsert.length,
+          skipped,
+          duplicatesImported,
+        };
       },
       { timeout: TRANSACTION_TIMEOUT_MS }
     );
@@ -262,6 +330,29 @@ export async function commitImportBatch(input: CommitImportInput): Promise<Commi
       error: "No se guardó ningún movimiento. Revisá el archivo y volvé a intentar.",
     };
   }
+}
+
+/**
+ * Read-only counterpart of `ensureDefaultImportTargets`.
+ *
+ * The duplicate check needs the very same `brokerAccountId` the commit will use
+ * (it is part of the idempotency hash), but a check must not create rows. When
+ * either target is missing there is nothing imported yet, so no row can collide.
+ */
+export async function findDefaultImportTargets(userId: string, brokerId: string) {
+  const [portfolio, account] = await Promise.all([
+    prisma.portfolio.findFirst({
+      where: { userId, archivedAt: null },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    }),
+    prisma.brokerAccount.findFirst({
+      where: { userId, brokerId, archivedAt: null },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    }),
+  ]);
+  return { portfolio, account };
 }
 
 export async function ensureDefaultImportTargets(userId: string, brokerId: string) {

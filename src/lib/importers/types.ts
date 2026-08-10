@@ -42,7 +42,29 @@ export interface NormalizedImportRow {
   messages: string[];
   raw: BalanzRawRow;
   parsed?: ParsedImportRowData;
+  /** True once the user corrected the row by hand in the preview editor. */
+  edited?: boolean;
 }
+
+/**
+ * Fields the preview editor lets the user correct. Everything else in
+ * `ParsedImportRowData` is derived and stays under the parser's control.
+ */
+export type RowPatch = Partial<
+  Pick<
+    ParsedImportRowData,
+    | "type"
+    | "tradeDate"
+    | "settlementDate"
+    | "ticker"
+    | "instrumentType"
+    | "quantity"
+    | "price"
+    | "currencyCode"
+    | "grossAmount"
+    | "netAmount"
+  >
+>;
 
 export interface ImportPreviewSummary {
   brokerCode: BrokerImportCode;
@@ -63,4 +85,16 @@ export interface CommitImportRow {
   rowNumber: number;
   status: ImportRowStatus;
   parsed: ParsedImportRowData;
+  /** Se propaga para poder contabilizar cuántas filas se corrigieron a mano. */
+  edited?: boolean;
 }
+
+/**
+ * Qué hacer con las filas cuyo hash de idempotencia ya existe en la base.
+ *
+ * - `skip`   → se omiten (comportamiento histórico).
+ * - `import` → se insertan igual, con `idempotencyVersion` incrementada para no
+ *              violar el unique compuesto. El usuario lo elige explícitamente
+ *              en el diálogo de duplicados.
+ */
+export type DuplicateStrategy = "skip" | "import";
