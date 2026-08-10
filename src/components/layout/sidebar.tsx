@@ -12,6 +12,7 @@ import {
   Landmark,
   Settings,
   Shapes,
+  TrendingUp,
   Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -19,6 +20,7 @@ import { cn } from "@/lib/utils";
 const items = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/portfolios", label: "Portfolios", icon: Wallet },
+  { href: "/rendimientos", label: "Rendimientos", icon: TrendingUp },
   { href: "/transactions", label: "Transacciones", icon: LineChart },
   { href: "/dividends", label: "Dividendos", icon: Coins },
   { href: "/bonds", label: "Bonos (ONs)", icon: Landmark },
