@@ -31,23 +31,16 @@ import {
   type MonetaryEvent,
   type TransactionForFlows,
 } from "./cashflows";
-import {
-  dayOfMonth,
-  daysInMonth,
-  enumerateMonths,
-  monthEnd,
-  monthStart,
-  type MonthKey,
-} from "./months";
+import { enumerateMonths, monthEnd, monthStart, type MonthKey } from "./months";
 import { PriceIndex, TimeSeries } from "./price-series";
 import {
   annualizeReturn,
   chainReturns,
+  combineSubPeriods,
   drawdownFromCumulative,
   findExtremeMonths,
-  modifiedDietzReturn,
+  subPeriodReturn,
   unrealizedReturn,
-  type ExternalFlow,
 } from "./returns";
 import {
   EXCLUSION_REASONS,
@@ -218,9 +211,9 @@ export async function buildPerformanceReport(
   const capitalFlows = classifyCapitalFlows(forFlows);
   const incomeEvents = classifyIncome(forFlows);
 
-  // ---- Valuación mes a mes -------------------------------------------------
+  // ---- Valuación ----------------------------------------------------------
 
-  type MonthValuation = {
+  type Valuation = {
     month: MonthKey;
     valuationDate: Date;
     cclMonthEnd: number | null;
@@ -236,9 +229,13 @@ export async function buildPerformanceReport(
   // como salida de capital: un dividendo es retorno generado, no plata que se fue.
   const incomeArsByDate = accumulateInArs(incomeEvents, ccl);
 
-  const valuations: MonthValuation[] = months.map((month) => {
-    const valuationDate = monthEnd(month);
-    const windowStart = monthStart(month);
+  /**
+   * Valúa la cartera al cierre de una fecha cualquiera.
+   *
+   * `windowStart` define desde cuándo un precio se considera "del período": si el
+   * último precio disponible es anterior, viene por arrastre y se marca.
+   */
+  const valuateAt = (valuationDate: Date, month: MonthKey, windowStart: Date): Valuation => {
     const cutoff = valuationDate.getTime();
 
     const tradesToDate = trades.filter(
@@ -321,44 +318,75 @@ export async function buildPerformanceReport(
         costBasisArs.toNumber()
       ),
     };
-  });
+  };
 
   // ---- Capital y renta por mes, en cada moneda ----------------------------
 
   const flowsByMonth = groupByMonth(capitalFlows, ccl);
   const incomeByMonth = groupByMonth(incomeEvents, ccl);
 
+  // ---- Puntos de quiebre ---------------------------------------------------
+
+  // Se valúa a fin de cada mes Y en cada fecha en que entra o sale capital. Sin las
+  // fechas intermedias habría que estimar el capital medio del mes con pesos por día
+  // (Modified Dietz), y esa estimación se rompe cuando el capital entra sobre el
+  // cierre: con compras el 27 y el 31, el capital medio queda en ~9 % del invertido y
+  // una caída del 11 % se reporta como −131 %. Valuando en cada operación, cada tramo
+  // se mide contra el capital que realmente había, y el problema desaparece.
+  const breakpointsByMonth = new Map<MonthKey, Date[]>();
+  for (const month of months) breakpointsByMonth.set(month, []);
+
+  for (const flow of capitalFlows) {
+    const key = monthKeyOf(flow.date);
+    const list = breakpointsByMonth.get(key);
+    // Un flujo del último día del mes coincide con el cierre: no agrega un punto nuevo.
+    if (list) list.push(utcDay(flow.date));
+  }
+
+  const valuations: Valuation[] = [];
+  /** Índice del cierre de cada mes dentro de `valuations`. */
+  const monthEndIndex = new Map<MonthKey, number>();
+
+  for (const month of months) {
+    const windowStart = monthStart(month);
+    const end = monthEnd(month);
+    const dates = [...new Set((breakpointsByMonth.get(month) ?? []).map((d) => d.getTime()))]
+      .filter((time) => time < end.getTime())
+      .sort((a, b) => a - b)
+      .map((time) => new Date(time));
+
+    for (const date of dates) valuations.push(valuateAt(date, month, windowStart));
+    monthEndIndex.set(month, valuations.length);
+    valuations.push(valuateAt(end, month, windowStart));
+  }
+
   // ---- Rendimientos --------------------------------------------------------
 
-  const monthlyArs: Array<number | null> = [];
-  const monthlyUsd: Array<number | null> = [];
+  // Capital que entra o sale en cada fecha exacta, en ambas monedas.
+  const flowsByDate = sumByDate(capitalFlows, ccl);
 
-  valuations.forEach((valuation, index) => {
-    const previous = index > 0 ? valuations[index - 1] : undefined;
-    const monthFlows = flowsByMonth.get(valuation.month);
-    const days = daysInMonth(valuation.month);
+  const subReturnsByMonth = new Map<MonthKey, { ars: Array<number | null>; usd: Array<number | null> }>();
+  for (const month of months) subReturnsByMonth.set(month, { ars: [], usd: [] });
 
-    monthlyArs.push(
-      modifiedDietzReturn({
-        startValue: previous?.valueArs ?? 0,
-        endValue: valuation.valueArs,
-        flows: monthFlows?.ars ?? [],
-        daysInMonth: days,
-      })
-    );
+  let previousArs = 0;
+  let previousUsd = 0;
 
+  for (const valuation of valuations) {
+    const flow = flowsByDate.get(valuation.valuationDate.getTime());
+    const bucket = subReturnsByMonth.get(valuation.month)!;
+
+    bucket.ars.push(subPeriodReturn(previousArs, valuation.valueArs, flow?.ars ?? 0));
     // La serie en USD se calcula sobre sus propios valores y sus propios flujos
     // convertidos al CCL del día de cada operación. NO se deriva de la serie en
     // ARS restando devaluación: eso arrastra error y da un número distinto.
-    monthlyUsd.push(
-      modifiedDietzReturn({
-        startValue: previous?.valueUsd ?? 0,
-        endValue: valuation.valueUsd,
-        flows: monthFlows?.usd ?? [],
-        daysInMonth: days,
-      })
-    );
-  });
+    bucket.usd.push(subPeriodReturn(previousUsd, valuation.valueUsd, flow?.usd ?? 0));
+
+    previousArs = valuation.valueArs;
+    previousUsd = valuation.valueUsd;
+  }
+
+  const monthlyArs = months.map((month) => combineSubPeriods(subReturnsByMonth.get(month)!.ars));
+  const monthlyUsd = months.map((month) => combineSubPeriods(subReturnsByMonth.get(month)!.usd));
 
   const cumulativeArs = chainReturns(monthlyArs);
   const cumulativeUsd = chainReturns(monthlyUsd);
@@ -370,18 +398,26 @@ export async function buildPerformanceReport(
   let cumulativeGainArs = 0;
   let cumulativeGainUsd = 0;
 
-  const rows: MonthlyPerformanceRow[] = valuations.map((valuation, index) => {
-    const previous = index > 0 ? valuations[index - 1] : undefined;
-    const monthFlows = flowsByMonth.get(valuation.month);
-    const monthIncome = incomeByMonth.get(valuation.month);
+  // Una fila por mes: se toma la valuación del cierre, ignorando los puntos de
+  // quiebre intermedios, que solo existen para medir bien los tramos.
+  let previousMonthEndArs = 0;
+  let previousMonthEndUsd = 0;
 
-    const netInvestedArs = sumAmounts(monthFlows?.ars);
-    const netInvestedUsd = sumAmounts(monthFlows?.usd);
+  const rows: MonthlyPerformanceRow[] = months.map((month, index) => {
+    const valuation = valuations[monthEndIndex.get(month)!]!;
+    const monthFlows = flowsByMonth.get(month);
+    const monthIncome = incomeByMonth.get(month);
+
+    const netInvestedArs = monthFlows?.ars ?? 0;
+    const netInvestedUsd = monthFlows?.usd ?? 0;
     // Ganancia del mes = variación del valor invertido menos el capital que se puso
     // o se sacó. La renta cobrada NO se descuenta acá: ya entró al valor como parte
     // del perímetro, y descontarla borraría justamente la ganancia que hay que medir.
-    const gainArs = valuation.valueArs - (previous?.valueArs ?? 0) - netInvestedArs;
-    const gainUsd = valuation.valueUsd - (previous?.valueUsd ?? 0) - netInvestedUsd;
+    const gainArs = valuation.valueArs - previousMonthEndArs - netInvestedArs;
+    const gainUsd = valuation.valueUsd - previousMonthEndUsd - netInvestedUsd;
+
+    previousMonthEndArs = valuation.valueArs;
+    previousMonthEndUsd = valuation.valueUsd;
 
     cumulativeInvestedArs += netInvestedArs;
     cumulativeInvestedUsd += netInvestedUsd;
@@ -389,7 +425,7 @@ export async function buildPerformanceReport(
     cumulativeGainUsd += gainUsd;
 
     return {
-      month: valuation.month,
+      month,
       valuationDate: valuation.valuationDate.toISOString(),
       cclMonthEnd: valuation.cclMonthEnd,
       valueArs: valuation.valueArs,
@@ -398,8 +434,8 @@ export async function buildPerformanceReport(
       netInvestedUsd,
       cumulativeInvestedArs,
       cumulativeInvestedUsd,
-      incomeArs: sumAmounts(monthIncome?.ars),
-      incomeUsd: sumAmounts(monthIncome?.usd),
+      incomeArs: monthIncome?.ars ?? 0,
+      incomeUsd: monthIncome?.usd ?? 0,
       gainArs,
       gainUsd,
       cumulativeGainArs,
@@ -489,50 +525,83 @@ function sumUpTo(amounts: DatedAmount[], cutoff: number): Decimal {
 }
 
 // ============================================================
-// AGRUPACIÓN MENSUAL
+// FECHAS
 // ============================================================
 
-type MonthAmounts = { ars: ExternalFlow[]; usd: ExternalFlow[] };
+/** Medianoche UTC de la fecha dada — la granularidad a la que se valúa. */
+function utcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function monthKeyOf(date: Date): MonthKey {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
 
 /**
- * Agrupa eventos por mes y los expresa en ambas monedas, con su día dentro del mes.
+ * Capital neto que entra o sale en cada fecha exacta, en ambas monedas.
  *
- * Cada evento se convierte al CCL **de su propia fecha de operación**, no al del cierre
- * del mes: una compra del día 3 y otra del día 28 en un mes de salto cambiario no valen
- * lo mismo en dólares. Un evento sin CCL disponible se omite de la serie en la moneda
- * que no puede expresarse, en vez de convertirse a un valor inventado.
- *
- * El `day` es el `d_i` que Modified Dietz usa para ponderar cuánto tiempo estuvo
- * invertido ese capital.
+ * Es el `F` de cada tramo del TWR: se resta del numerador para que poner plata no se
+ * confunda con ganarla. Cada evento se convierte al CCL de su propia fecha.
  */
-function groupByMonth(
+function sumByDate(
   events: MonetaryEvent[],
   ccl: TimeSeries
-): Map<MonthKey, MonthAmounts> {
-  const byMonth = new Map<MonthKey, MonthAmounts>();
+): Map<number, { ars: number; usd: number }> {
+  const byDate = new Map<number, { ars: number; usd: number }>();
 
   for (const event of events) {
-    const key = `${event.date.getUTCFullYear()}-${String(event.date.getUTCMonth() + 1).padStart(2, "0")}`;
-    const entry = byMonth.get(key) ?? { ars: [], usd: [] };
-    const day = dayOfMonth(event.date);
+    const time = utcDay(event.date).getTime();
+    const entry = byDate.get(time) ?? { ars: 0, usd: 0 };
     const rate = ccl.asOf(event.date)?.value ?? null;
 
     if (event.currency === "ARS") {
-      entry.ars.push({ day, amount: event.amount });
-      if (rate && rate > 0) entry.usd.push({ day, amount: event.amount / rate });
+      entry.ars += event.amount;
+      if (rate && rate > 0) entry.usd += event.amount / rate;
     } else {
-      entry.usd.push({ day, amount: event.amount });
-      if (rate && rate > 0) entry.ars.push({ day, amount: event.amount * rate });
+      entry.usd += event.amount;
+      if (rate && rate > 0) entry.ars += event.amount * rate;
+    }
+
+    byDate.set(time, entry);
+  }
+
+  return byDate;
+}
+
+// ============================================================
+// AGRUPACIÓN MENSUAL
+// ============================================================
+
+type MonthAmounts = { ars: number; usd: number };
+
+/**
+ * Totales por mes en ambas monedas, para las columnas de la tabla.
+ *
+ * Cada evento se convierte al CCL **de su propia fecha de operación**, no al del cierre
+ * del mes: una compra del día 3 y otra del día 28 en un mes de salto cambiario no valen
+ * lo mismo en dólares. Un evento sin CCL disponible no suma a la moneda que no puede
+ * expresarse, en vez de convertirse a un valor inventado.
+ */
+function groupByMonth(events: MonetaryEvent[], ccl: TimeSeries): Map<MonthKey, MonthAmounts> {
+  const byMonth = new Map<MonthKey, MonthAmounts>();
+
+  for (const event of events) {
+    const key = monthKeyOf(event.date);
+    const entry = byMonth.get(key) ?? { ars: 0, usd: 0 };
+    const rate = ccl.asOf(event.date)?.value ?? null;
+
+    if (event.currency === "ARS") {
+      entry.ars += event.amount;
+      if (rate && rate > 0) entry.usd += event.amount / rate;
+    } else {
+      entry.usd += event.amount;
+      if (rate && rate > 0) entry.ars += event.amount * rate;
     }
 
     byMonth.set(key, entry);
   }
 
   return byMonth;
-}
-
-function sumAmounts(amounts: ExternalFlow[] | undefined): number {
-  return (amounts ?? []).reduce((total, entry) => total + entry.amount, 0);
 }
 
 // ============================================================
