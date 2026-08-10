@@ -3,201 +3,105 @@ import {
   annualizeReturn,
   chainBenchmark,
   chainReturns,
+  combineSubPeriods,
   drawdownFromCumulative,
   findExtremeMonths,
-  modifiedDietzReturn,
+  subPeriodReturn,
   unrealizedReturn,
 } from "./returns";
 
-/** 30 días es el mes de referencia de los casos, salvo donde importe otro. */
-const DAYS = 30;
-
-describe("modifiedDietzReturn", () => {
-  it("sin flujos equivale al retorno simple", () => {
-    const result = modifiedDietzReturn({
-      startValue: 1000,
-      endValue: 1100,
-      flows: [],
-      daysInMonth: DAYS,
-    });
-    expect(result).toBeCloseTo(10, 10);
+describe("subPeriodReturn", () => {
+  it("sin capital nuevo mide la variación pura del valor", () => {
+    expect(subPeriodReturn(1000, 1100, 0)).toBeCloseTo(10, 10);
   });
 
-  it("NO infla el rendimiento cuando el aporte duplica la cartera", () => {
-    // Este es el bug que tenía la versión anterior: `V_end / V_start - 1` daría
-    // +100 % cuando en realidad no se ganó un peso.
-    const result = modifiedDietzReturn({
-      startValue: 1_000_000,
-      endValue: 2_000_000,
-      flows: [{ day: 1, amount: 1_000_000 }],
-      daysInMonth: DAYS,
-    });
-    expect(result).toBeCloseTo(0, 6);
+  it("descuenta el capital que entra: poner plata no es ganarla", () => {
+    // Valor pasa de 1000 a 2000, pero 1000 fueron aporte → no hubo ganancia.
+    expect(subPeriodReturn(1000, 2000, 1000)).toBeCloseTo(0, 10);
   });
 
-  it("pondera el aporte por los días que estuvo invertido", () => {
-    // Mismo aporte y misma ganancia; solo cambia el día. El aporte tardío pesa menos
-    // en el denominador, así que la misma ganancia representa un rendimiento mayor.
-    const early = modifiedDietzReturn({
-      startValue: 1000,
-      endValue: 2100,
-      flows: [{ day: 1, amount: 1000 }],
-      daysInMonth: DAYS,
-    })!;
-    const late = modifiedDietzReturn({
-      startValue: 1000,
-      endValue: 2100,
-      flows: [{ day: 28, amount: 1000 }],
-      daysInMonth: DAYS,
-    })!;
-
-    expect(late).toBeGreaterThan(early);
-    // day 1  → w = 29/30 → denom = 1000 + 966.67 = 1966.67 → 100/1966.67
-    expect(early).toBeCloseTo((100 / (1000 + (29 / 30) * 1000)) * 100, 8);
-    // day 28 → w = 2/30  → denom = 1000 + 66.67  = 1066.67 → 100/1066.67
-    expect(late).toBeCloseTo((100 / (1000 + (2 / 30) * 1000)) * 100, 8);
+  it("mide contra el capital desplegado cuando el tramo arranca desde cero", () => {
+    // Primer despliegue: la base es el capital puesto, no un valor previo inexistente.
+    expect(subPeriodReturn(0, 950, 1000)).toBeCloseTo(-5, 10);
+    expect(subPeriodReturn(0, 1100, 1000)).toBeCloseTo(10, 10);
   });
 
-  it("un flujo del último día no pesa nada en el capital medio", () => {
-    const result = modifiedDietzReturn({
-      startValue: 1000,
-      endValue: 2100,
-      flows: [{ day: DAYS, amount: 1000 }],
-      daysInMonth: DAYS,
-    });
-    expect(result).toBeCloseTo(10, 10);
-  });
-
-  it("mide el primer mes aunque arranque desde cero", () => {
-    // V_start = 0 pero hay un aporte el día 1: el capital medio es positivo,
-    // así que el primer mes de una cartera nueva sí tiene rendimiento medible.
-    const result = modifiedDietzReturn({
-      startValue: 0,
-      endValue: 1100,
-      flows: [{ day: 1, amount: 1000 }],
-      daysInMonth: DAYS,
-    });
-    expect(result).toBeCloseTo((100 / ((29 / 30) * 1000)) * 100, 8);
-  });
-
-  it("descuenta los retiros del numerador", () => {
-    // Empieza en 1000, se retiran 200, termina en 900 → se ganaron 100.
-    const result = modifiedDietzReturn({
-      startValue: 1000,
-      endValue: 900,
-      flows: [{ day: DAYS, amount: -200 }],
-      daysInMonth: DAYS,
-    });
-    expect(result).toBeCloseTo(10, 10);
-  });
-
-  it("devuelve null cuando no hay capital sobre el que medir", () => {
-    expect(
-      modifiedDietzReturn({ startValue: 0, endValue: 0, flows: [], daysInMonth: DAYS })
-    ).toBeNull();
-  });
-
-  it("devuelve null si un retiro deja el capital medio en cero o negativo", () => {
-    expect(
-      modifiedDietzReturn({
-        startValue: 1000,
-        endValue: 0,
-        flows: [{ day: 1, amount: -2000 }],
-        daysInMonth: DAYS,
-      })
-    ).toBeNull();
-  });
-
-  it("devuelve null ante entradas no finitas en vez de propagar NaN", () => {
-    expect(
-      modifiedDietzReturn({
-        startValue: Number.NaN,
-        endValue: 100,
-        flows: [],
-        daysInMonth: DAYS,
-      })
-    ).toBeNull();
-    expect(
-      modifiedDietzReturn({ startValue: 100, endValue: 110, flows: [], daysInMonth: 0 })
-    ).toBeNull();
-  });
-
-  it("usa los días reales del mes al ponderar", () => {
-    // Mismo día calendario, distinto largo de mes → distinto peso.
-    const febrero = modifiedDietzReturn({
-      startValue: 1000,
-      endValue: 2100,
-      flows: [{ day: 14, amount: 1000 }],
-      daysInMonth: 28,
-    })!;
-    const enero = modifiedDietzReturn({
-      startValue: 1000,
-      endValue: 2100,
-      flows: [{ day: 14, amount: 1000 }],
-      daysInMonth: 31,
-    })!;
-    expect(febrero).not.toBeCloseTo(enero, 6);
-  });
-});
-
-describe("capital invertido derivado de las compras", () => {
-  // El escenario que motivó el rediseño: sin un solo depósito cargado, las compras
-  // mismas son el aporte. Tres compras de un ticker con 15 días de gap.
-  const ENERO = 31;
-
-  it("mide enero aunque no exista ningún depósito", () => {
-    const result = modifiedDietzReturn({
-      startValue: 0,
-      endValue: 3600, // 30 nominales × $120 al cierre
-      flows: [
-        { day: 1, amount: 1000 }, // 10 × $100
-        { day: 16, amount: 1100 }, // 10 × $110
-        { day: 31, amount: 1200 }, // 10 × $120
-      ],
-      daysInMonth: ENERO,
-    });
-
-    // capital medio = 1000×30/31 + 1100×15/31 + 1200×0/31 = 1500
-    // ganancia      = 3600 − 0 − 3300 = 300
-    expect(result).toBeCloseTo((300 / 1500) * 100, 6);
-    expect(result).toBeCloseTo(20, 6);
-  });
-
-  it("el mes siguiente sin compras mide la variación de precio pura", () => {
-    const result = modifiedDietzReturn({
-      startValue: 3600,
-      endValue: 3960, // el precio pasa de $120 a $132
-      flows: [],
-      daysInMonth: 28,
-    });
-    expect(result).toBeCloseTo(10, 6);
-  });
-
-  it("encadena los dos meses sin sumarlos", () => {
-    const cumulative = chainReturns([20, 10]);
-    expect(cumulative.at(-1)!).toBeCloseTo(32, 6); // 1,20 × 1,10 − 1
-  });
-
-  it("vender a lo que vale no genera rendimiento", () => {
-    // La ganancia ya quedó registrada en el mes en que el precio subió; el acto de
-    // vender solo saca capital del perímetro.
-    const result = modifiedDietzReturn({
-      startValue: 1200,
-      endValue: 0,
-      flows: [{ day: 15, amount: -1200 }],
-      daysInMonth: 30,
-    });
-    expect(result).toBeCloseTo(0, 6);
+  it("una venta a valor de mercado no genera rendimiento", () => {
+    expect(subPeriodReturn(1200, 0, -1200)).toBeCloseTo(0, 10);
   });
 
   it("una venta por encima del valor previo sí registra ganancia", () => {
-    const result = modifiedDietzReturn({
-      startValue: 1000,
-      endValue: 0,
-      flows: [{ day: 30, amount: -1100 }],
-      daysInMonth: 30,
-    });
-    expect(result).toBeCloseTo(10, 6);
+    expect(subPeriodReturn(1000, 0, -1100)).toBeCloseTo(10, 10);
+  });
+
+  it("devuelve null cuando no hay base sobre la que medir", () => {
+    expect(subPeriodReturn(0, 0, 0)).toBeNull();
+    expect(subPeriodReturn(0, 100, -50)).toBeNull();
+  });
+
+  it("devuelve null ante entradas no finitas en vez de propagar NaN", () => {
+    expect(subPeriodReturn(Number.NaN, 100, 0)).toBeNull();
+    expect(subPeriodReturn(100, Number.NaN, 0)).toBeNull();
+    expect(subPeriodReturn(100, 100, Number.NaN)).toBeNull();
+  });
+
+  it("acota la pérdida a −100 %: no se puede perder más de lo invertido", () => {
+    // Un valor por debajo de −100 % vuelve negativo el factor de encadenamiento y
+    // arruina todos los meses siguientes.
+    expect(subPeriodReturn(1000, 0, 2000)).toBe(-100);
+  });
+});
+
+describe("combineSubPeriods", () => {
+  it("encadena los tramos del mes por producto", () => {
+    expect(combineSubPeriods([10, 10])).toBeCloseTo(21, 10);
+  });
+
+  it("saltea tramos sin base sin anular el mes entero", () => {
+    expect(combineSubPeriods([10, null, 10])).toBeCloseTo(21, 10);
+  });
+
+  it("devuelve null si ningún tramo fue medible", () => {
+    expect(combineSubPeriods([null, null])).toBeNull();
+    expect(combineSubPeriods([])).toBeNull();
+  });
+
+  it("nunca devuelve menos de −100 %", () => {
+    expect(combineSubPeriods([-100, -50])).toBe(-100);
+  });
+});
+
+describe("regresión: capital que entra sobre el cierre del mes", () => {
+  // Caso real del import de movimientos.xlsx, 10/2025: todas las compras cayeron los
+  // días 27 y 31 de un mes de 31 días. Modified Dietz calculaba el capital medio con
+  // pesos por día — (31−27)/31 = 0,129 y (31−31)/31 = 0 — y ese denominador quedaba en
+  // el 8,8 % del capital invertido, así que una caída real del 11,6 % se reportaba como
+  // −131,8 %. Valuando en cada fecha de operación el problema no existe.
+
+  it("una caída del 11,6 % se reporta como 11,6 %, no como −131 %", () => {
+    // Tramo 1 (día 27): se despliegan 16.861.534; cierra el día 27 en el mismo valor.
+    // Tramo 2 (día 31): entran 8.087.971 más y la cartera cae.
+    const dia27 = subPeriodReturn(0, 16_861_534, 16_861_534)!;
+    const dia31 = subPeriodReturn(16_861_534, 22_654_612, 8_087_971)!;
+    const mes = combineSubPeriods([dia27, dia31])!;
+
+    expect(dia27).toBeCloseTo(0, 6);
+    expect(mes).toBeGreaterThan(-30);
+    expect(mes).toBeLessThan(0);
+  });
+
+  it("el capital del último día no puede producir un rendimiento desmedido", () => {
+    // Compra el último día del mes: el tramo mide contra el capital realmente puesto.
+    // Con Dietz su peso era 0 y el denominador colapsaba.
+    const result = subPeriodReturn(0, 9_900, 10_000);
+    expect(result).toBeCloseTo(-1, 10);
+  });
+
+  it("nunca produce un acumulado que invierta el signo de los meses siguientes", () => {
+    const cumulative = chainReturns([combineSubPeriods([-100]), 5, 8]);
+    // Tras una pérdida total el índice queda en 0 y ahí se queda: sin factores negativos.
+    expect(cumulative.every((value) => value === null || value >= -100)).toBe(true);
+    expect(cumulative.at(-1)!).toBeGreaterThanOrEqual(-100);
   });
 });
 
@@ -217,7 +121,6 @@ describe("chainReturns", () => {
   it("reproduce el caso de la app de referencia: mensual negativo con acumulado positivo", () => {
     const cumulative = chainReturns([14.6, -3.14, 1.82, 3.79, -15.64, 7.65]);
     expect(cumulative.at(-1)!).toBeGreaterThan(0);
-    // El acumulado no es la suma de los mensuales.
     const naiveSum = 14.6 - 3.14 + 1.82 + 3.79 - 15.64 + 7.65;
     expect(cumulative.at(-1)!).not.toBeCloseTo(naiveSum, 2);
   });
@@ -235,6 +138,13 @@ describe("chainReturns", () => {
     expect(cumulative[2]).toBeCloseTo(5, 10);
   });
 
+  it("acota un mes fuera de rango en vez de invertir el signo de la serie", () => {
+    // Sin la cota, el factor pasaría a negativo y un mes de +5 % BAJARÍA el acumulado.
+    const cumulative = chainReturns([-150, 5]);
+    expect(cumulative[0]).toBe(-100);
+    expect(cumulative[1]).toBe(-100);
+  });
+
   it("devuelve serie vacía para entrada vacía", () => {
     expect(chainReturns([])).toEqual([]);
   });
@@ -248,7 +158,6 @@ describe("chainBenchmark", () => {
   });
 
   it("corta el acumulado en el primer mes sin publicar, en vez de asumir 0 %", () => {
-    // Es el lag del INDEC: rellenar con 0 le regalaría rendimiento real al portfolio.
     const cumulative = chainBenchmark([2.9, null, 3.4]);
     expect(cumulative[0]).toBeCloseTo(2.9, 10);
     expect(cumulative[1]).toBeNull();
@@ -262,7 +171,6 @@ describe("annualizeReturn", () => {
   });
 
   it("extrapola cuando hay menos de 12 meses", () => {
-    // 10 % en 6 meses → (1,1)^2 − 1 = 21 %.
     expect(annualizeReturn(10, 6)).toBeCloseTo(21, 8);
   });
 
@@ -282,7 +190,6 @@ describe("drawdownFromCumulative", () => {
   });
 
   it("mide la caída desde el pico del acumulado", () => {
-    // Pico en índice 1,10; cae a 1,045 → −5 %.
     const drawdowns = drawdownFromCumulative([10, 4.5]);
     expect(drawdowns[0]).toBe(0);
     expect(drawdowns[1]).toBeCloseTo((1.045 / 1.1 - 1) * 100, 8);
@@ -291,6 +198,14 @@ describe("drawdownFromCumulative", () => {
   it("nunca devuelve valores positivos", () => {
     for (const drawdown of drawdownFromCumulative([10, -5, 30, -50, 0])) {
       expect(drawdown).toBeLessThanOrEqual(0);
+    }
+  });
+
+  it("NUNCA baja de −100 %", () => {
+    // Un índice negativo producía drawdowns de −131 %, que no significan nada:
+    // no se puede perder más del 100 % de una cartera long-only.
+    for (const drawdown of drawdownFromCumulative([-131.8, -150, -99])) {
+      expect(drawdown).toBeGreaterThanOrEqual(-100);
     }
   });
 

@@ -58,7 +58,7 @@ export function MonthlyReturnChart({
   return (
     <ChartCard
       title="Rendimiento mensual"
-      description={`Modified Dietz: el rendimiento ya está neutralizado por aportes y retiros (${currency}).`}
+      description={`Modified cada tramo se mide contra el capital que realmente había invertido (${currency}).`}
       headerExtra={
         benchmarks.length > 0 ? (
           <LegendRow>

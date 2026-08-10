@@ -148,8 +148,8 @@ export function MonthlyTable({
         &quot;Valor invertido&quot; son tus posiciones a precio de mercado más la renta
         cobrada; no incluye el efectivo de la cuenta. Cada mes se valúa con el último
         precio disponible hasta el cierre, así que puede no coincidir exactamente con el
-        estado de cuenta de tu broker. El rendimiento mensual usa Modified Dietz y el
-        acumulado está encadenado, no sumado.
+        estado de cuenta de tu broker. El rendimiento mensual se calcula valuando la cartera
+        en cada operación, y el acumulado está encadenado, no sumado.
       </p>
     </ChartCard>
   );

@@ -11,74 +11,77 @@
  *     "no pasó nada", que es una afirmación distinta a "no lo puedo medir".
  */
 
-/** Un flujo externo de caja dentro de un mes. */
-export type ExternalFlow = {
-  /** Día del mes en que ocurrió, 1-based. */
-  day: number;
-  /** Positivo = aporte, negativo = retiro. */
-  amount: number;
-};
-
-export type ModifiedDietzInput = {
-  /** Valor de la cartera al cierre del mes anterior. */
-  startValue: number;
-  /** Valor de la cartera al cierre de este mes. */
-  endValue: number;
-  flows: ExternalFlow[];
-  /** Días del mes calendario. */
-  daysInMonth: number;
-};
+/**
+ * Pérdida total: una cartera long-only no puede rendir menos de −100 %.
+ *
+ * No es una preferencia estética. Un rendimiento por debajo de −100 % vuelve negativo
+ * el factor `1 + R/100`, y a partir de ahí el encadenamiento **invierte el signo** de
+ * todos los meses siguientes: un mes con +5 % pasaría a bajar el acumulado. Un solo
+ * valor fuera de rango envenena toda la serie.
+ */
+const MIN_RETURN_PERCENT = -100;
 
 /**
- * Rendimiento del período por **Modified Dietz**.
+ * Rendimiento de un subperíodo entre dos valuaciones consecutivas.
  *
  * ```
- *              V_end − V_start − F
- * R  =  ─────────────────────────────────
- *          V_start + Σ (w_i · F_i)
+ *        V_fin − V_ini − F
+ * r  =  ───────────────────
+ *              base
  *
- *   w_i = (D − d_i) / D
+ *   base = V_ini   si había cartera al empezar
+ *        = F       si el subperíodo arranca desde cero (primer despliegue de capital)
  * ```
  *
- * ¿Por qué no `V_end / V_start − 1`? Porque con aportes eso no mide rendimiento,
- * mide variación de saldo: un aporte de $1M en una cartera de $1M daría "+100 %".
- * Modified Dietz descuenta los flujos del numerador y los pondera en el denominador
- * por el tiempo que estuvieron invertidos, así que un depósito el día 28 pesa 2/30
- * y no 1.
+ * Esta es la pieza del **TWR real**: en vez de estimar el capital medio del mes con
+ * pesos por día, se valúa la cartera en cada fecha en que entra o sale capital y se
+ * mide cada tramo contra el capital que efectivamente había al empezarlo.
  *
- * ¿Por qué no TWR diario exacto? Porque exige valuar la cartera cada día en que hay
- * un flujo. Para períodos mensuales Dietz da prácticamente lo mismo a una fracción
- * del costo. El motor soporta granularidad diaria si algún día hace falta el exacto.
+ * Reemplaza a Modified Dietz, que dividía por el capital medio ponderado del mes
+ * calendario. Ese denominador **colapsa** cuando el capital entra sobre el final del
+ * mes: con compras los días 27 y 31 de un mes de 31 días, el capital medio queda en
+ * ~9 % del invertido y una caída real del 11 % se reporta como −131 %. El error es
+ * peor justo en el primer mes de una cartera, que es cuando todo el capital es nuevo.
  *
- * Devuelve `null` cuando el capital medio invertido es ≤ 0 (mes sin cartera y sin
- * aportes, o un retiro que deja el denominador sin sentido): no hay rendimiento
- * definible sobre una base nula.
+ * Devuelve `null` si no hay base sobre la que medir (tramo sin cartera y sin capital
+ * nuevo): no hay rendimiento definible sobre una base nula.
  */
-export function modifiedDietzReturn(input: ModifiedDietzInput): number | null {
-  const { startValue, endValue, flows, daysInMonth } = input;
+export function subPeriodReturn(
+  previousValue: number,
+  currentValue: number,
+  flow: number
+): number | null {
+  if (!Number.isFinite(previousValue) || !Number.isFinite(currentValue)) return null;
+  if (!Number.isFinite(flow)) return null;
 
-  if (!Number.isFinite(startValue) || !Number.isFinite(endValue)) return null;
-  if (!Number.isFinite(daysInMonth) || daysInMonth <= 0) return null;
+  const base = previousValue > 0 ? previousValue : flow;
+  if (base <= 0) return null;
 
-  let totalFlow = 0;
-  let weightedFlow = 0;
+  const gain = currentValue - previousValue - flow;
+  const result = (gain / base) * 100;
 
-  for (const flow of flows) {
-    if (!Number.isFinite(flow.amount)) continue;
-    // Un flujo del último día pesa 0 (no estuvo invertido); uno del día 1 pesa casi 1.
-    const day = Math.min(Math.max(flow.day, 1), daysInMonth);
-    const weight = (daysInMonth - day) / daysInMonth;
-    totalFlow += flow.amount;
-    weightedFlow += weight * flow.amount;
+  if (!Number.isFinite(result)) return null;
+  return Math.max(MIN_RETURN_PERCENT, result);
+}
+
+/**
+ * Encadena los subperíodos de un mes en el rendimiento mensual: `Π (1 + r_k) − 1`.
+ *
+ * Un tramo sin base medible se saltea (factor 1) en vez de anular el mes entero.
+ * Devuelve `null` solo si ningún tramo del mes fue medible.
+ */
+export function combineSubPeriods(subReturns: Array<number | null>): number | null {
+  let factor = 1;
+  let measured = false;
+
+  for (const subReturn of subReturns) {
+    if (subReturn === null || !Number.isFinite(subReturn)) continue;
+    factor *= 1 + Math.max(MIN_RETURN_PERCENT, subReturn) / 100;
+    measured = true;
   }
 
-  const averageCapital = startValue + weightedFlow;
-  if (averageCapital <= 0) return null;
-
-  const gain = endValue - startValue - totalFlow;
-  const result = (gain / averageCapital) * 100;
-
-  return Number.isFinite(result) ? result : null;
+  if (!measured) return null;
+  return Math.max(MIN_RETURN_PERCENT, (factor - 1) * 100);
 }
 
 /**
@@ -99,7 +102,10 @@ export function chainReturns(monthlyReturns: Array<number | null>): Array<number
 
   for (const monthly of monthlyReturns) {
     if (monthly !== null && Number.isFinite(monthly)) {
-      factor *= 1 + monthly / 100;
+      // Acotar a −100 % antes de multiplicar: un factor negativo invertiría el signo
+      // de todos los meses siguientes y el acumulado dejaría de tener sentido.
+      factor *= 1 + Math.max(MIN_RETURN_PERCENT, monthly) / 100;
+      factor = Math.max(0, factor);
       started = true;
     }
     cumulative.push(started ? (factor - 1) * 100 : null);
@@ -152,9 +158,13 @@ export function drawdownFromCumulative(
       drawdowns.push(0);
       continue;
     }
-    const index = 1 + cumulative / 100;
+    // El índice nunca puede ser negativo: perder más del 100 % de una cartera
+    // long-only es imposible, y un índice negativo produce drawdowns por debajo
+    // de −100 %, que no significan nada.
+    const index = Math.max(0, 1 + cumulative / 100);
     if (index > peak) peak = index;
-    drawdowns.push(peak > 0 ? Math.min(0, (index / peak - 1) * 100) : 0);
+    const drawdown = peak > 0 ? (index / peak - 1) * 100 : 0;
+    drawdowns.push(Math.max(MIN_RETURN_PERCENT, Math.min(0, drawdown)));
   }
 
   return drawdowns;
