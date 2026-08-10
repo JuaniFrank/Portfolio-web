@@ -1,225 +1,92 @@
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth";
 import { RendimientosPage } from "@/components/rendimientos/rendimientos-page";
-import type {
-  MonthlyReturn,
-  PerformanceData,
-  PerformancePoint,
-  PerformanceSummary,
-} from "@/lib/rendimientos/types";
+import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { buildPerformanceReport } from "@/lib/rendimientos/series";
+import type { PerformanceReport } from "@/lib/rendimientos/types";
 
+/**
+ * El reporte se calcula on-demand en cada revalidación en vez de leerse de una tabla.
+ *
+ * Es la decisión de fondo de este rediseño: al recalcular siempre, el histórico **nunca
+ * puede quedar desactualizado**, que era exactamente la enfermedad del enfoque anterior
+ * basado en `PortfolioSnapshot`. Cuesta cuatro queries más matemática pura, así que 5
+ * minutos de caché alcanzan de sobra. Si con muchos meses se pusiera lento, el paso
+ * siguiente es materializar la serie mensual — pero siempre como caché reconstruible,
+ * nunca como fuente de verdad.
+ */
 export const revalidate = 300;
-
-function safeReturn(current: number, previous: number | undefined): number | null {
-  if (previous === undefined || previous === 0) return null;
-  return (current / previous - 1) * 100;
-}
-
-function valueAtOrBefore(
-  points: PerformancePoint[],
-  target: number,
-  currency: "ARS" | "USD"
-): number | undefined {
-  for (let index = points.length - 1; index >= 0; index -= 1) {
-    const point = points[index];
-    if (point && new Date(point.date).getTime() <= target) {
-      return currency === "ARS" ? point.valueArs : point.valueUsd;
-    }
-  }
-  return undefined;
-}
-
-function buildMonthlyReturns(points: PerformancePoint[]): MonthlyReturn[] {
-  const groups = new Map<string, PerformancePoint[]>();
-  for (const point of points) {
-    const date = new Date(point.date);
-    const key = `${date.getUTCFullYear()}-${date.getUTCMonth()}`;
-    const group = groups.get(key) ?? [];
-    group.push(point);
-    groups.set(key, group);
-  }
-
-  const sortedGroups = [...groups.entries()].sort(([a], [b]) => {
-    const yearA = Number(a.split("-")[0] ?? 0);
-    const monthA = Number(a.split("-")[1] ?? 0);
-    const yearB = Number(b.split("-")[0] ?? 0);
-    const monthB = Number(b.split("-")[1] ?? 0);
-    return yearA - yearB || monthA - monthB;
-  });
-  return sortedGroups.map(([key, group], groupIndex) => {
-    const [yearText, monthText] = key.split("-");
-    const previous = groupIndex > 0 ? sortedGroups[groupIndex - 1]?.[1].at(-1) : undefined;
-    const last = group.at(-1);
-    return {
-      year: Number(yearText),
-      month: Number(monthText),
-      returnArs: last && previous ? safeReturn(last.valueArs, previous.valueArs) : null,
-      returnUsd: last && previous ? safeReturn(last.valueUsd, previous.valueUsd) : null,
-    };
-  });
-}
-
-function emptySummary(): PerformanceSummary {
-  return {
-    totalReturnArs: null,
-    totalReturnUsd: null,
-    gainVsDepositsArs: null,
-    gainVsDepositsUsd: null,
-    dailyReturnArs: null,
-    dailyReturnUsd: null,
-    weeklyReturnArs: null,
-    weeklyReturnUsd: null,
-    monthlyReturnArs: null,
-    monthlyReturnUsd: null,
-    maxDrawdownArs: 0,
-    maxDrawdownUsd: 0,
-  };
-}
-
-function buildSummary(points: PerformancePoint[]): PerformanceSummary {
-  const first = points[0];
-  const last = points.at(-1);
-  if (!first || !last) return emptySummary();
-
-  const lastTime = new Date(last.date).getTime();
-  const weekAgo = lastTime - 7 * 24 * 60 * 60 * 1000;
-  const monthAgo = lastTime - 30 * 24 * 60 * 60 * 1000;
-  const weekArs = valueAtOrBefore(points, weekAgo, "ARS");
-  const weekUsd = valueAtOrBefore(points, weekAgo, "USD");
-  const monthArs = valueAtOrBefore(points, monthAgo, "ARS");
-  const monthUsd = valueAtOrBefore(points, monthAgo, "USD");
-
-  return {
-    totalReturnArs: safeReturn(last.valueArs, first.valueArs),
-    totalReturnUsd: safeReturn(last.valueUsd, first.valueUsd),
-    gainVsDepositsArs: last.valueArs - last.depositsArs,
-    gainVsDepositsUsd: last.valueUsd - last.depositsUsd,
-    dailyReturnArs: last.dailyReturnArs,
-    dailyReturnUsd: last.dailyReturnUsd,
-    weeklyReturnArs: safeReturn(last.valueArs, weekArs),
-    weeklyReturnUsd: safeReturn(last.valueUsd, weekUsd),
-    monthlyReturnArs: safeReturn(last.valueArs, monthArs),
-    monthlyReturnUsd: safeReturn(last.valueUsd, monthUsd),
-    maxDrawdownArs: Math.min(...points.map((point) => point.drawdownArs)),
-    maxDrawdownUsd: Math.min(...points.map((point) => point.drawdownUsd)),
-  };
-}
-
-async function fetchData(
-  portfolioId: string,
-  portfolioName: string
-): Promise<PerformanceData | null> {
-  try {
-    const [snapshots, spySnapshots] = await Promise.all([
-      prisma.portfolioSnapshot.findMany({
-        where: { portfolioId },
-        orderBy: [{ date: "asc" }],
-        select: {
-          date: true,
-          totalValueArs: true,
-          totalValueUsd: true,
-          cashArs: true,
-          cashUsd: true,
-          netDepositsArs: true,
-          netDepositsUsd: true,
-          twrSinceInception: true,
-          positions: true,
-        },
-      }),
-      prisma.sp500Snapshot.findMany({
-        orderBy: [{ date: "asc" }],
-        select: { date: true, close: true },
-      }),
-    ]);
-
-    let benchmarkIndex = 0;
-    let latestBenchmarkClose: number | null = null;
-    let peakArs = 0;
-    let peakUsd = 0;
-    let previousArs: number | undefined;
-    let previousUsd: number | undefined;
-
-    const points: PerformancePoint[] = snapshots.map((snapshot) => {
-      while (
-        benchmarkIndex < spySnapshots.length &&
-        spySnapshots[benchmarkIndex]!.date.getTime() <= snapshot.date.getTime()
-      ) {
-        latestBenchmarkClose = Number(spySnapshots[benchmarkIndex]!.close);
-        benchmarkIndex += 1;
-      }
-
-      const valueArs = Number(snapshot.totalValueArs);
-      const valueUsd = Number(snapshot.totalValueUsd);
-      peakArs = Math.max(peakArs, valueArs);
-      peakUsd = Math.max(peakUsd, valueUsd);
-      const point: PerformancePoint = {
-        date: snapshot.date.toISOString(),
-        valueArs,
-        valueUsd,
-        depositsArs: Number(snapshot.netDepositsArs),
-        depositsUsd: Number(snapshot.netDepositsUsd),
-        benchmarkClose: latestBenchmarkClose,
-        dailyReturnArs: safeReturn(valueArs, previousArs),
-        dailyReturnUsd: safeReturn(valueUsd, previousUsd),
-        drawdownArs: peakArs > 0 ? (valueArs / peakArs - 1) * 100 : 0,
-        drawdownUsd: peakUsd > 0 ? (valueUsd / peakUsd - 1) * 100 : 0,
-      };
-      previousArs = valueArs;
-      previousUsd = valueUsd;
-      return point;
-    });
-
-    const latestSnapshot = snapshots.at(-1);
-    return {
-      portfolioName,
-      points,
-      monthlyReturns: buildMonthlyReturns(points),
-      summary: buildSummary(points),
-      lastSnapshotDate: latestSnapshot?.date.toISOString() ?? null,
-      latestSnapshot: latestSnapshot
-        ? {
-            cashArs: Number(latestSnapshot.cashArs),
-            cashUsd: Number(latestSnapshot.cashUsd),
-            twrSinceInception:
-              latestSnapshot.twrSinceInception === null
-                ? null
-                : Number(latestSnapshot.twrSinceInception),
-            positions: latestSnapshot.positions,
-          }
-        : null,
-      benchmarkAvailable: points.some((point) => point.benchmarkClose !== null),
-    };
-  } catch (error) {
-    console.error("Rendimientos data fetch error", error);
-    return null;
-  }
-}
-
-function emptyData(portfolioName: string): PerformanceData {
-  return {
-    portfolioName,
-    points: [],
-    monthlyReturns: [],
-    summary: emptySummary(),
-    lastSnapshotDate: null,
-    latestSnapshot: null,
-    benchmarkAvailable: false,
-  };
-}
 
 export default async function RendimientosRoutePage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const portfolio = await prisma.portfolio.findFirst({
+  // El motor acepta N portfolios y los agrega. Hoy la app maneja uno solo, así que se
+  // le pasa uno; cuando exista multi-portfolio basta con pasarle la lista completa sin
+  // tocar el motor.
+  const portfolios = await prisma.portfolio.findMany({
     where: { userId: user.id, archivedAt: null },
     orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
     select: { id: true, name: true },
+    take: 1,
   });
 
-  if (!portfolio) return <RendimientosPage data={emptyData("Sin portfolio")} />;
+  const portfolio = portfolios[0];
+  if (!portfolio) return <RendimientosPage report={emptyReport("Sin portfolio")} />;
 
-  const data = await fetchData(portfolio.id, portfolio.name);
-  return <RendimientosPage data={data ?? emptyData(portfolio.name)} />;
+  const report = await safeBuildReport(portfolio.id, portfolio.name);
+  return <RendimientosPage report={report} />;
+}
+
+/**
+ * Una caída del motor no puede dejar la pantalla en blanco: se degrada a un reporte
+ * vacío y los avisos de la UI explican que falta el histórico.
+ *
+ * El `try/catch` vive acá y no alrededor del JSX a propósito: React no renderiza el
+ * componente en el momento en que se construye el elemento, así que un `catch` sobre
+ * JSX no atraparía errores de render — solo daría una falsa sensación de seguridad.
+ */
+async function safeBuildReport(
+  portfolioId: string,
+  portfolioName: string
+): Promise<PerformanceReport> {
+  try {
+    return await buildPerformanceReport({ portfolioIds: [portfolioId], portfolioName });
+  } catch (error) {
+    console.error("Rendimientos report error", error);
+    return emptyReport(portfolioName);
+  }
+}
+
+function emptyReport(portfolioName: string): PerformanceReport {
+  return {
+    portfolioName,
+    months: [],
+    benchmarks: [],
+    summary: {
+      currentValueArs: 0,
+      currentValueUsd: 0,
+      cumulativeReturnArs: null,
+      cumulativeReturnUsd: null,
+      cumulativeGainArs: 0,
+      cumulativeGainUsd: 0,
+      netFlowArs: 0,
+      netFlowUsd: 0,
+      annualizedReturnArs: null,
+      annualizedReturnUsd: null,
+      maxDrawdownArs: 0,
+      maxDrawdownUsd: 0,
+      bestMonthArs: null,
+      worstMonthArs: null,
+      monthsTracked: 0,
+    },
+    excludedHoldings: [],
+    dataQuality: {
+      partialMonths: [],
+      missingCclMonths: [],
+      lastPriceSyncDate: null,
+      impliedNegativeCash: false,
+      seriesFloor: null,
+    },
+  };
 }
