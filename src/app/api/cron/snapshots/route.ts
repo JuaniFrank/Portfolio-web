@@ -1,10 +1,24 @@
 import { Prisma } from "@/lib/generated/prisma";
 import { prisma } from "@/lib/prisma";
 
+// Vercel Cron hits this on a schedule (see vercel.json). Requests carry
+// `Authorization: Bearer $CRON_SECRET`, which we verify so the endpoint can't
+// be triggered by anyone who guesses the URL.
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function POST(_request: Request) {
+function verifyCronSecret(request: Request): Response | null {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return null;
+
+  const auth = request.headers.get("authorization");
+  if (auth !== `Bearer ${secret}`) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+  return null;
+}
+
+async function runSnapshotsCron() {
   try {
     const now = new Date();
     // Truncar al inicio del día (UTC) para que el upsert diario sea idempotente
@@ -57,6 +71,19 @@ export async function POST(_request: Request) {
     console.error("Snapshot cron error", e);
     return Response.json({ ok: false, error: String(e) }, { status: 500 });
   }
+}
+
+export async function GET(request: Request) {
+  const unauthorized = verifyCronSecret(request);
+  if (unauthorized) return unauthorized;
+  return runSnapshotsCron();
+}
+
+// POST queda para pruebas locales: curl -X POST http://localhost:3000/api/cron/snapshots
+export async function POST(request: Request) {
+  const unauthorized = verifyCronSecret(request);
+  if (unauthorized) return unauthorized;
+  return runSnapshotsCron();
 }
 
 type PortfolioPerformance = {
