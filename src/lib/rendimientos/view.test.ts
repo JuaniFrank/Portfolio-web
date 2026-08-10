@@ -22,10 +22,12 @@ function month(
     cclMonthEnd: 1500,
     valueArs: 1_000_000,
     valueUsd: 666.67,
-    netFlowArs: 0,
-    netFlowUsd: 0,
-    cumulativeFlowArs: 0,
-    cumulativeFlowUsd: 0,
+    netInvestedArs: 0,
+    netInvestedUsd: 0,
+    cumulativeInvestedArs: 0,
+    cumulativeInvestedUsd: 0,
+    incomeArs: 0,
+    incomeUsd: 0,
     gainArs: 0,
     gainUsd: 0,
     cumulativeGainArs: 0,
@@ -56,8 +58,8 @@ function report(months: MonthlyPerformanceRow[], benchmarks: BenchmarkSeries[] =
       cumulativeReturnUsd: null,
       cumulativeGainArs: 0,
       cumulativeGainUsd: 0,
-      netFlowArs: 0,
-      netFlowUsd: 0,
+      netInvestedArs: 0,
+      netInvestedUsd: 0,
       annualizedReturnArs: null,
       annualizedReturnUsd: null,
       maxDrawdownArs: 0,
@@ -71,7 +73,6 @@ function report(months: MonthlyPerformanceRow[], benchmarks: BenchmarkSeries[] =
       partialMonths: [],
       missingCclMonths: [],
       lastPriceSyncDate: null,
-      impliedNegativeCash: false,
       seriesFloor: null,
     },
   };
@@ -136,12 +137,12 @@ describe("resolveView", () => {
 
   it("recalcula el resumen sobre el período visible", () => {
     const months = [
-      month("2026-01", { monthlyReturnArs: 10, gainArs: 100, netFlowArs: 1000 }),
-      month("2026-02", { monthlyReturnArs: 10, gainArs: 200, netFlowArs: 500 }),
+      month("2026-01", { monthlyReturnArs: 10, gainArs: 100, netInvestedArs: 1000 }),
+      month("2026-02", { monthlyReturnArs: 10, gainArs: 200, netInvestedArs: 500 }),
     ];
     const view = resolveView(report(months), "ARS", "ALL");
     expect(view.summary.cumulativeGainArs).toBeCloseTo(300, 6);
-    expect(view.summary.netFlowArs).toBeCloseTo(1500, 6);
+    expect(view.summary.netInvestedArs).toBeCloseTo(1500, 6);
     expect(view.summary.monthsTracked).toBe(2);
   });
 

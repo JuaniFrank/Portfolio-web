@@ -53,7 +53,7 @@ export function MonthlyTable({
               <tr className="border-b border-zinc-800 text-left text-[11px] uppercase tracking-wide text-zinc-500">
                 <Th>Mes</Th>
                 <Th align="right">CCL cierre</Th>
-                <Th align="right">Valor</Th>
+                <Th align="right">Valor invertido</Th>
                 <Th align="right">Ganancia mes</Th>
                 <Th align="right">Ganancia acum.</Th>
                 <Th align="right">Rend. mensual</Th>
@@ -126,6 +126,12 @@ export function MonthlyTable({
                           <PositionsDetail
                             positions={source?.positions ?? []}
                             staleTickers={source?.staleTickers ?? []}
+                            income={currency === "ARS" ? source?.incomeArs : source?.incomeUsd}
+                            netInvested={
+                              currency === "ARS"
+                                ? source?.netInvestedArs
+                                : source?.netInvestedUsd
+                            }
                             currency={currency}
                           />
                         </td>
@@ -139,9 +145,11 @@ export function MonthlyTable({
         </div>
       )}
       <p className="mt-3 text-xs leading-relaxed text-zinc-500">
-        Cada mes se valúa con el último precio disponible hasta el cierre, así que puede
-        no coincidir exactamente con el estado de cuenta de tu broker. El rendimiento
-        mensual usa Modified Dietz y el acumulado está encadenado, no sumado.
+        &quot;Valor invertido&quot; son tus posiciones a precio de mercado más la renta
+        cobrada; no incluye el efectivo de la cuenta. Cada mes se valúa con el último
+        precio disponible hasta el cierre, así que puede no coincidir exactamente con el
+        estado de cuenta de tu broker. El rendimiento mensual usa Modified Dietz y el
+        acumulado está encadenado, no sumado.
       </p>
     </ChartCard>
   );
@@ -150,10 +158,16 @@ export function MonthlyTable({
 function PositionsDetail({
   positions,
   staleTickers,
+  income,
+  netInvested,
   currency,
 }: {
   positions: MonthlyPerformanceRow["positions"];
   staleTickers: string[];
+  /** Renta cobrada en el mes, neta de comisiones. */
+  income: number | undefined;
+  /** Capital puesto en el mes: compras − ventas. */
+  netInvested: number | undefined;
   currency: ViewCurrency;
 }) {
   if (positions.length === 0) {
@@ -166,6 +180,21 @@ function PositionsDetail({
 
   return (
     <div className="space-y-2">
+      <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
+        <span className="text-zinc-500">
+          Capital del mes{" "}
+          <span className={returnToneClass(netInvested ?? 0)}>
+            {formatMoney(netInvested ?? 0, currency)}
+          </span>
+        </span>
+        {income ? (
+          <span className="text-zinc-500">
+            Renta cobrada{" "}
+            <span className={returnToneClass(income)}>{formatMoney(income, currency)}</span>
+          </span>
+        ) : null}
+      </div>
+
       {staleTickers.length > 0 ? (
         <p className="flex items-start gap-1.5 text-xs text-amber-400/90">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

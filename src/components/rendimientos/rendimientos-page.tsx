@@ -135,9 +135,9 @@ function Header({ report }: { report: PerformanceReport }) {
         ) : null}
       </div>
       <p className="max-w-3xl text-sm leading-relaxed text-zinc-400">
-        Serie reconstruida desde tus operaciones y el histórico de precios de cada ticker —
-        no depende de capturas diarias, así que corregir o importar una operación vieja
-        actualiza todo el histórico.
+        Serie reconstruida desde tus compras y ventas contra el histórico de precios de
+        cada ticker. No depende de capturas diarias ni de que cargues tus depósitos, así
+        que corregir o importar una operación vieja actualiza todo el histórico.
       </p>
     </div>
   );

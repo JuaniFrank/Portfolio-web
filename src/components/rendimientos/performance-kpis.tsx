@@ -39,9 +39,9 @@ export function PerformanceKpis({
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       <KpiCard
         icon={Wallet}
-        label="Valor actual"
+        label="Valor invertido"
         value={formatMoney(summary.currentValue, currency)}
-        detail={`Aportes netos ${formatMoney(summary.netFlow, currency)}`}
+        detail={`Capital puesto ${formatMoney(summary.netInvested, currency)}`}
         accent="indigo"
       />
       <KpiCard
@@ -59,7 +59,7 @@ export function PerformanceKpis({
         icon={positive ? ArrowUpRight : ArrowDownRight}
         label="Ganancia del período"
         value={formatMoney(summary.gain, currency)}
-        detail="Neta de aportes y retiros"
+        detail="Neta del capital que pusiste"
         accent={summary.gain >= 0 ? "emerald" : "rose"}
       />
       <KpiCard

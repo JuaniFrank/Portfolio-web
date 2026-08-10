@@ -70,8 +70,8 @@ function emptyReport(portfolioName: string): PerformanceReport {
       cumulativeReturnUsd: null,
       cumulativeGainArs: 0,
       cumulativeGainUsd: 0,
-      netFlowArs: 0,
-      netFlowUsd: 0,
+      netInvestedArs: 0,
+      netInvestedUsd: 0,
       annualizedReturnArs: null,
       annualizedReturnUsd: null,
       maxDrawdownArs: 0,
@@ -85,7 +85,6 @@ function emptyReport(portfolioName: string): PerformanceReport {
       partialMonths: [],
       missingCclMonths: [],
       lastPriceSyncDate: null,
-      impliedNegativeCash: false,
       seriesFloor: null,
     },
   };

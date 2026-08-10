@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, DatabaseZap, Info } from "lucide-react";
+import { AlertTriangle, Coins, DatabaseZap, Info } from "lucide-react";
 import { formatMonthLabel } from "@/lib/rendimientos/months";
 import type { DataQuality, ExcludedHolding } from "@/lib/rendimientos/types";
 import { cn } from "@/lib/utils";
@@ -39,6 +39,14 @@ export function DataNotices({
         </Notice>
       ) : null}
 
+      <Notice tone="info" icon={Coins} title="Se mide el capital invertido, no el saldo">
+        El rendimiento sale de tus compras y ventas contra el precio histórico de cada
+        ticker, así que <span className="text-zinc-300">no depende de que cargues tus
+        depósitos</span>. El efectivo que tengas quieto en el broker queda fuera del
+        cálculo: no rinde, y no debería diluir ni inflar el rendimiento de lo que sí
+        invertiste.
+      </Notice>
+
       {excludedHoldings.length > 0 ? (
         <Notice tone="info" icon={Info} title="Qué queda fuera de este cálculo">
           <p>
@@ -53,16 +61,6 @@ export function DataNotices({
               </li>
             ))}
           </ul>
-        </Notice>
-      ) : null}
-
-      {quality.impliedNegativeCash ? (
-        <Notice tone="warning" icon={AlertTriangle} title="Faltan aportes en tus datos">
-          Las compras registradas superan el efectivo disponible, así que hay depósitos que
-          no están cargados. Cuando falta un aporte, parte del capital invertido se computa
-          como ganancia y{" "}
-          <span className="font-medium text-amber-300">el rendimiento queda sobrestimado</span>.
-          Cargá los depósitos faltantes para que los números cierren.
         </Notice>
       ) : null}
 
