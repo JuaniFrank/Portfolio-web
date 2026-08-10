@@ -1,5 +1,5 @@
-import { Prisma } from "@/lib/generated/prisma";
 import { prisma } from "@/lib/prisma";
+import { calculatePortfolioValuation } from "@/lib/calculations/performance";
 
 // Vercel Cron hits this on a schedule (see vercel.json). Requests carry
 // `Authorization: Bearer $CRON_SECRET`, which we verify so the endpoint can't
@@ -30,7 +30,7 @@ async function runSnapshotsCron() {
 
     for (const user of users) {
       for (const portfolio of user.portfolios) {
-        const perf = await getPortfolioPerformance(portfolio.id);
+        const perf = await calculatePortfolioValuation(portfolio.id);
 
         await prisma.portfolioSnapshot.upsert({
           where: {
@@ -84,32 +84,4 @@ export async function POST(request: Request) {
   const unauthorized = verifyCronSecret(request);
   if (unauthorized) return unauthorized;
   return runSnapshotsCron();
-}
-
-type PortfolioPerformance = {
-  totalValueArs: number;
-  totalValueUsd: number;
-  cashArs: number;
-  cashUsd: number;
-  netDepositsArs: number;
-  netDepositsUsd: number;
-  twrSinceInception: number | null;
-  positions: Prisma.InputJsonValue;
-};
-
-// TODO: implementar la valuación real del portafolio (suma de holdings + cash,
-// conversión CCL a USD, TWR). Ver src/lib/calculations/performance.ts (hoy stub)
-// y src/lib/dashboard/build.ts. Hasta entonces se registra un snapshot en cero
-// en lugar de datos aleatorios que contaminarían la tabla que lee /rendimientos.
-async function getPortfolioPerformance(_portfolioId: string): Promise<PortfolioPerformance> {
-  return {
-    totalValueArs: 0,
-    totalValueUsd: 0,
-    cashArs: 0,
-    cashUsd: 0,
-    netDepositsArs: 0,
-    netDepositsUsd: 0,
-    twrSinceInception: null,
-    positions: {},
-  };
 }
