@@ -79,7 +79,7 @@ reconstruye la serie desde el histórico de cada ticker.
 ┌─ CAPA 2 · MOTOR DE REPLAY (nuevo, puro, testeable) ─────────────────────┐
 │  PriceSeries.asOf(D)  →  lookup con forward-fill                        │
 │  buildHoldings(...)   →  YA EXISTE, se reutiliza tal cual               │
-│  returns.ts           →  Modified Dietz + TWR encadenado                │
+│  returns.ts           →  TWR por subperíodos + encadenamiento           │
 │  → buildPerformanceSeries(portfolioId, { from, to, granularity })       │
 └──────────────────────────┬───────────────────────────────────────────────┘
                            │ MonthlyPerformanceRow[]
@@ -161,7 +161,7 @@ src/lib/rendimientos/
   types.ts          # extender el existente
   price-series.ts   # PriceSeries: as-of con forward-fill (búsqueda binaria)
   cashflows.ts      # clasificación flujo externo vs interno
-  returns.ts        # Modified Dietz + encadenamiento TWR  ← PURO, es el que se testea
+  returns.ts        # TWR por subperíodos + encadenamiento  ← PURO, el más testeado
   benchmarks.ts     # normalización de IPC / MERVAL / SP500 a series comparables
   series.ts         # buildPerformanceSeries: orquestador
 ```
@@ -176,7 +176,7 @@ export type MonthlyPerformanceRow = {
   valueUsd: number
   netFlowArs: number         // aportes netos DEL mes (externos)
   cumulativeFlowArs: number
-  monthlyReturnArs: number | null   // Modified Dietz
+  monthlyReturnArs: number | null   // TWR por subperíodos
   monthlyReturnUsd: number | null
   cumulativeReturnArs: number | null // TWR encadenado
   cumulativeReturnUsd: number | null
@@ -271,26 +271,63 @@ Febrero sin compras, precio $120 → $132: **+10%**. Acumulado encadenado: `1,20
 Pendiente para más adelante: un apartado aparte que compare entradas y salidas de efectivo.
 Es una vista distinta a la de rendimiento y no tiene por qué contaminar este número.
 
-### 6.2 Rendimiento mensual = Modified Dietz
+### 6.2 Rendimiento mensual = TWR por subperíodos
+
+> **Segunda corrección.** Este documento proponía **Modified Dietz**, que estima el capital
+> medio del mes ponderando cada flujo por los días que estuvo invertido. Se implementó así
+> y **produjo un número absurdo con datos reales**: en 10/2025 reportó **−131,8 %**.
+>
+> El motivo: todas las compras de ese mes cayeron los días **27 y 31** de un mes de 31 días.
+> Los pesos quedaron en `(31−27)/31 = 0,129` y `(31−31)/31 = 0`, así que el capital medio
+> ponderado fue el **8,8 %** del capital realmente invertido. Una caída real del 11,6 %
+> dividida por 0,088 da −131,8 %. El error es peor justo en el **primer mes** de una
+> cartera, que es cuando todo el capital es nuevo — y una compra el último día del mes pesa
+> **cero** en el denominador aunque sus comisiones sí pesen en el numerador.
+>
+> Dietz asume que `V_start` domina el denominador. Cuando el capital entra sobre el cierre,
+> esa premisa no se cumple y el número deja de significar lo que uno lee.
+
+La cartera se valúa **en cada fecha en que entra o sale capital**, no solo a fin de mes, y
+cada tramo se mide contra el capital que realmente había:
 
 ```
-              V_end − V_start − F
-R_m  =  ─────────────────────────────────
-          V_start + Σ (w_i · F_i)
+        V_fin − V_ini − F
+r_k  =  ─────────────────
+              base
 
-  F    = capital neto invertido en el mes (compras − ventas)
-  w_i  = (D − d_i) / D     fracción del mes que ese capital estuvo invertido
-  D    = días del mes,  d_i = día de la operación
+  base = V_ini   si había cartera al empezar el tramo
+       = F       si el tramo arranca desde cero (primer despliegue)
+
+R_mes = Π (1 + r_k) − 1        sobre los tramos del mes
 ```
 
-**Por qué Dietz y no `V_end / V_start − 1`:** neutraliza el momento y el tamaño de las
-compras. Una compra el día 28 pesa 2/30 en el denominador, no 1.
+Con el mismo octubre: tramo del 27 → −0,50 %, tramo del 31 → −15,12 %, mes → **−15,55 %**.
 
-**Por qué Dietz y no TWR diario completo:** el TWR exacto exige valuar la cartera cada día
-en que hay un flujo. Es factible con este motor (los precios diarios están), pero cuesta N
-valuaciones por mes. Para períodos mensuales Dietz da resultados prácticamente idénticos y
-es el estándar de facto en apps retail. Si más adelante querés TWR diario exacto, el motor
-ya lo soporta cambiando `granularity: "day"`.
+**Por qué se puede hacer el TWR exacto:** porque el backfill ya deja los precios diarios en
+`PriceCache`. La objeción original a este método era el costo de valuar en cada flujo, pero
+son unas pocas decenas de valuaciones extra sobre el histórico completo.
+
+**Cota dura en −100 %.** Ninguna cartera long-only puede perder más de lo invertido, y un
+valor por debajo vuelve **negativo** el factor `1 + R/100`: a partir de ahí el
+encadenamiento **invierte el signo** de todos los meses siguientes (con el bug, un mes de
++5 % llevaba el acumulado de −131,8 % a −133,4 %) y el drawdown daba por debajo de −100 %,
+que no significa nada. La cota va en `subPeriodReturn`, `chainReturns` y
+`drawdownFromCumulative`: un solo valor fuera de rango no puede envenenar la serie entera.
+
+<details>
+<summary>Por qué tampoco alcanzaba <code>V_end / V_start − 1</code></summary>
+
+Con compras de por medio eso no mide rendimiento, mide variación de saldo: un aporte de $1M
+en una cartera de $1M daría "+100 %". El TWR por subperíodos descuenta `F` del numerador de
+cada tramo, así que poner plata nunca se confunde con ganarla.
+
+La premisa que rompía a Dietz era asumir que Dietz y el TWR exacto dan "prácticamente lo
+mismo". Es cierto **solo cuando `V_start` domina el denominador**, es decir cuando el
+capital ya estaba invertido al empezar el mes. En el primer mes de una cartera, o en
+cualquier mes donde el grueso del capital entra sobre el cierre, la aproximación se rompe
+por completo.
+
+</details>
 
 ### 6.3 Rendimiento acumulado = TWR encadenado
 
@@ -320,7 +357,7 @@ V_ars(D) = Σ (qty_i × price_ars_i(D)) + cash_ars + cash_usd × ccl(D)
 V_usd(D) = V_ars(D) / ccl(D)
 ```
 
-y después se corre Dietz **por separado** sobre cada serie, convirtiendo **cada flujo al
+y después se corre el TWR **por separado** sobre cada serie, convirtiendo **cada flujo al
 CCL de su propia fecha de operación**. Por eso el CCL histórico no es opcional: sin él, la
 serie USD es una aproximación con error acumulativo.
 
@@ -448,7 +485,7 @@ Casos mínimos:
 
 | Caso | Qué se verifica |
 |---|---|
-| Mes sin flujos | Dietz == `V_end/V_start − 1` |
+| Tramo sin capital nuevo | mide la variación pura del valor |
 | Depósito el día 28 | el rendimiento **no** se infla; el flujo pesa 2/30 |
 | Depósito el día 1 | el flujo pesa casi 30/30 |
 | `BUY` de todo el cash | rendimiento ≈ 0, no un salto |
@@ -457,7 +494,7 @@ Casos mínimos:
 | Acumulado de 3 meses | producto encadenado ≠ suma de mensuales |
 | Mes sin precio para un ticker | `null` / `coverage: "partial"`, nunca `0` |
 | `V_start == 0` (primer mes) | `null`, no `Infinity` ni `NaN` |
-| Serie USD | Dietz sobre USD ≠ Dietz ARS menos devaluación |
+| Serie USD | TWR sobre USD ≠ TWR ARS menos devaluación |
 
 ---
 
