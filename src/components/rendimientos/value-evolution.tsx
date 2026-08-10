@@ -1,42 +1,81 @@
 "use client";
 
-import { Area, AreaChart, CartesianGrid, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { useState } from "react";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { ChartCard } from "@/components/dashboard/chart-card";
-import { formatCompact, type ViewCurrency } from "@/components/dashboard/format";
-import { formatDateLong, formatDateTick } from "@/components/rendimientos/chart-utils";
-import type { ChartPoint } from "@/lib/rendimientos/types";
+import { formatCompact, formatMoney } from "@/components/dashboard/format";
+import { ChartPlaceholder, MonthTooltip } from "@/components/rendimientos/chart-tooltip";
+import { SERIES_COLORS, formatMonthTick } from "@/components/rendimientos/chart-utils";
+import { LegendRow, LegendToggle } from "@/components/rendimientos/legend-toggle";
+import type { ViewCurrency } from "@/lib/rendimientos/types";
+import type { MonthlyChartRow } from "@/lib/rendimientos/view";
 
-type Props = { data: ChartPoint[]; currency: ViewCurrency };
+const HEIGHT = 300;
 
-export function ValueEvolution({ data, currency }: Props) {
+/**
+ * Valor del portfolio contra aportes acumulados, mes a mes.
+ *
+ * La distancia entre las dos curvas **es** la ganancia: si el valor va por encima de
+ * los aportes, la cartera generó plata; si va por debajo, la perdió. Es la lectura más
+ * directa de "¿me está yendo bien?" y no depende de entender ningún porcentaje.
+ */
+export function ValueEvolution({
+  data,
+  currency,
+}: {
+  data: MonthlyChartRow[];
+  currency: ViewCurrency;
+}) {
+  const [showFlows, setShowFlows] = useState(true);
+
   return (
     <ChartCard
-      title="Evolución del valor"
-      description="Valor de mercado y aportes netos acumulados."
-      headerExtra={<span className="text-xs text-amber-400">Aportes netos</span>}
+      title="Evolución del portfolio"
+      description="Valor de mercado contra aportes netos acumulados. La brecha entre las curvas es la ganancia."
+      headerExtra={
+        <LegendRow>
+          <LegendToggle color={SERIES_COLORS.portfolio} label="Valor" active onClick={() => {}} />
+          <LegendToggle
+            color={SERIES_COLORS.contributions}
+            label="Aportes acumulados"
+            active={showFlows}
+            onClick={() => setShowFlows((value) => !value)}
+          />
+        </LegendRow>
+      }
     >
       {data.length < 2 ? (
-        <div className="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-zinc-800 text-sm text-zinc-500">
-          Se necesitan al menos dos snapshots para graficar la evolución.
-        </div>
+        <ChartPlaceholder
+          height={HEIGHT}
+          text="Se necesitan al menos dos meses de historia para graficar la evolución."
+        />
       ) : (
-        <div className="h-[280px] w-full">
+        <div className="w-full" style={{ height: HEIGHT }}>
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={data} margin={{ top: 12, right: 8, left: 4, bottom: 0 }}>
               <defs>
-                <linearGradient id="valueGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#6366f1" stopOpacity={0.35} />
-                  <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                <linearGradient id="evolutionGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={SERIES_COLORS.portfolio} stopOpacity={0.35} />
+                  <stop offset="100%" stopColor={SERIES_COLORS.portfolio} stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid stroke="#27272a" strokeDasharray="3 3" vertical={false} />
               <XAxis
-                dataKey="date"
-                tickFormatter={formatDateTick}
+                dataKey="month"
+                tickFormatter={formatMonthTick}
                 tick={{ fill: "#a1a1aa", fontSize: 11 }}
                 axisLine={{ stroke: "#71717a" }}
                 tickLine={false}
-                minTickGap={36}
+                minTickGap={24}
               />
               <YAxis
                 tickFormatter={(value: number) => formatCompact(value, currency)}
@@ -45,61 +84,67 @@ export function ValueEvolution({ data, currency }: Props) {
                 tickLine={false}
                 width={76}
               />
-              <Tooltip content={<ValueTooltip currency={currency} />} cursor={{ stroke: "#52525b" }} />
+              <Tooltip
+                cursor={{ stroke: "#52525b" }}
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  const row = payload[0]?.payload as MonthlyChartRow | undefined;
+                  if (!row) return null;
+                  return (
+                    <MonthTooltip
+                      month={label}
+                      entries={[
+                        {
+                          label: "Valor",
+                          color: SERIES_COLORS.portfolio,
+                          value: formatMoney(row.value, currency),
+                        },
+                        {
+                          label: "Aportes acumulados",
+                          color: SERIES_COLORS.contributions,
+                          value: formatMoney(row.cumulativeFlow, currency),
+                        },
+                        {
+                          label: "Ganancia del mes",
+                          color: row.gain >= 0 ? SERIES_COLORS.positive : SERIES_COLORS.negative,
+                          value: formatMoney(row.gain, currency),
+                        },
+                      ]}
+                      footer={
+                        row.coverage === "partial"
+                          ? "Algún precio de este mes viene por arrastre."
+                          : undefined
+                      }
+                    />
+                  );
+                }}
+              />
               <Area
                 type="monotone"
                 dataKey="value"
                 name="Valor"
-                stroke="#6366f1"
-                fill="url(#valueGradient)"
+                stroke={SERIES_COLORS.portfolio}
+                fill="url(#evolutionGradient)"
                 strokeWidth={2}
                 dot={false}
                 isAnimationActive={false}
               />
-              <Line
-                type="monotone"
-                dataKey="deposits"
-                name="Aportes netos"
-                stroke="#f59e0b"
-                strokeWidth={1.5}
-                strokeDasharray="5 4"
-                dot={false}
-                isAnimationActive={false}
-              />
+              {showFlows ? (
+                <Line
+                  type="monotone"
+                  dataKey="cumulativeFlow"
+                  name="Aportes acumulados"
+                  stroke={SERIES_COLORS.contributions}
+                  strokeWidth={1.5}
+                  strokeDasharray="5 4"
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              ) : null}
             </AreaChart>
           </ResponsiveContainer>
         </div>
       )}
     </ChartCard>
-  );
-}
-
-function ValueTooltip({
-  active,
-  payload,
-  label,
-  currency,
-}: {
-  active?: boolean;
-  payload?: Array<{ name?: string; value?: number | string; color?: string }>;
-  label?: string | number;
-  currency: ViewCurrency;
-}) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="rounded-lg border border-[#27272a] bg-[#09090b] p-3 text-xs shadow-xl">
-      <p className="mb-2 text-zinc-500">{typeof label === "string" ? formatDateLong(label) : label}</p>
-      {payload.map((item) => (
-        <div key={item.name} className="flex items-center justify-between gap-6 py-0.5">
-          <span className="flex items-center gap-1.5 text-zinc-400">
-            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
-            {item.name}
-          </span>
-          <span className="font-medium tabular-nums text-zinc-100">
-            {formatCompact(Number(item.value), currency)}
-          </span>
-        </div>
-      ))}
-    </div>
   );
 }

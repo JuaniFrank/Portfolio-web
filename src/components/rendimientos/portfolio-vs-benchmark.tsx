@@ -1,165 +1,181 @@
 "use client";
 
 import { useState } from "react";
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { ChartCard } from "@/components/dashboard/chart-card";
-import { formatDateTick, formatPercentValue, formatSignedPercentValue } from "@/components/rendimientos/chart-utils";
-import type { ChartPoint } from "@/lib/rendimientos/types";
+import { ChartPlaceholder, MonthTooltip } from "@/components/rendimientos/chart-tooltip";
+import {
+  SERIES_COLORS,
+  formatMonthTick,
+  formatSignedPercentOrEmpty,
+  formatSignedPercentValue,
+} from "@/components/rendimientos/chart-utils";
+import { LegendRow, LegendToggle } from "@/components/rendimientos/legend-toggle";
+import { formatMonthLabel } from "@/lib/rendimientos/months";
+import type { BenchmarkKey, BenchmarkSeries, ViewCurrency } from "@/lib/rendimientos/types";
+import { benchmarkCumulativeKey, type MonthlyChartRow } from "@/lib/rendimientos/view";
 
-type Props = {
-  data: ChartPoint[];
-  benchmarkAvailable: boolean;
-};
+const HEIGHT = 320;
 
-export function PortfolioVsBenchmark({ data, benchmarkAvailable }: Props) {
-  const [visible, setVisible] = useState({ portfolio: true, benchmark: true });
+/**
+ * Rendimiento acumulado del portfolio contra sus benchmarks.
+ *
+ * Reemplaza la versión anterior en base 100 por porcentaje acumulado: es la misma
+ * información pero legible sin traducir mentalmente ("+22 %" en vez de "base 122"), y
+ * permite superponer varios benchmarks en la misma escala.
+ *
+ * El acumulado está **encadenado** (`Π (1 + Rₘ) − 1`), no sumado, y se recalcula
+ * dentro del período visible: si el usuario elige 6 meses, la línea arranca en 0 % en
+ * el primer mes de esa ventana.
+ */
+export function PortfolioVsBenchmark({
+  data,
+  benchmarks,
+  currency,
+}: {
+  data: MonthlyChartRow[];
+  benchmarks: BenchmarkSeries[];
+  currency: ViewCurrency;
+}) {
+  const [hiddenPortfolio, setHiddenPortfolio] = useState(false);
+  const [hidden, setHidden] = useState<Set<BenchmarkKey>>(new Set());
+
+  const toggle = (key: BenchmarkKey) =>
+    setHidden((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const visible = benchmarks.filter((series) => !hidden.has(series.key));
 
   return (
     <ChartCard
-      title="Portfolio vs S&P 500"
-      description="Evolución normalizada a base 100 dentro del período seleccionado."
+      title="Rendimiento acumulado"
+      description={`Encadenado desde el inicio del período seleccionado (${currency}).`}
       headerExtra={
-        <div className="flex items-center gap-3 text-xs">
-          <LegendButton
-            color="#6366f1"
-            label="Portfolio"
-            active={visible.portfolio}
-            onClick={() => setVisible((state) => ({ ...state, portfolio: !state.portfolio }))}
+        <LegendRow>
+          <LegendToggle
+            color={SERIES_COLORS.portfolio}
+            label="Tu portfolio"
+            active={!hiddenPortfolio}
+            onClick={() => setHiddenPortfolio((value) => !value)}
           />
-          {benchmarkAvailable ? (
-            <LegendButton
-              color="#10b981"
-              label="S&P 500"
-              active={visible.benchmark}
-              onClick={() => setVisible((state) => ({ ...state, benchmark: !state.benchmark }))}
+          {benchmarks.map((series) => (
+            <LegendToggle
+              key={series.key}
+              color={series.color}
+              label={series.label}
+              active={!hidden.has(series.key)}
+              onClick={() => toggle(series.key)}
+              hint={
+                series.lastAvailableMonth
+                  ? `${series.label}: último dato publicado ${formatMonthLabel(series.lastAvailableMonth)}.`
+                  : `${series.label}: sin datos en el período.`
+              }
             />
-          ) : null}
-        </div>
+          ))}
+        </LegendRow>
       }
     >
       {data.length < 2 ? (
-        <ChartPlaceholder text="Se necesitan al menos dos snapshots para comparar evolución." />
+        <ChartPlaceholder
+          height={HEIGHT}
+          text="Se necesitan al menos dos meses de historia para comparar rendimientos."
+        />
       ) : (
-        <div className="h-[320px] w-full">
+        <div className="w-full" style={{ height: HEIGHT }}>
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={data} margin={{ top: 12, right: 8, left: 4, bottom: 0 }}>
-              <defs>
-                <linearGradient id="portfolioIndexGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#6366f1" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="benchmarkIndexGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.18} />
-                  <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
-                </linearGradient>
-              </defs>
+            <LineChart data={data} margin={{ top: 12, right: 8, left: 4, bottom: 0 }}>
               <CartesianGrid stroke="#27272a" strokeDasharray="3 3" vertical={false} />
               <XAxis
-                dataKey="date"
-                tickFormatter={formatDateTick}
+                dataKey="month"
+                tickFormatter={formatMonthTick}
                 tick={{ fill: "#a1a1aa", fontSize: 11 }}
                 axisLine={{ stroke: "#71717a" }}
                 tickLine={false}
-                minTickGap={36}
+                minTickGap={24}
               />
               <YAxis
-                tickFormatter={(value: number) => `${Math.round(value)}`}
+                tickFormatter={(value: number) => formatSignedPercentValue(value)}
                 tick={{ fill: "#a1a1aa", fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
-                width={38}
+                width={58}
                 domain={["auto", "auto"]}
               />
-              <Tooltip content={<BenchmarkTooltip />} cursor={{ stroke: "#52525b" }} />
-              {visible.portfolio ? (
-                <Area
+              <ReferenceLine y={0} stroke="#52525b" strokeDasharray="4 4" />
+              <Tooltip
+                cursor={{ stroke: "#52525b" }}
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  const row = payload[0]?.payload as MonthlyChartRow | undefined;
+                  if (!row) return null;
+                  return (
+                    <MonthTooltip
+                      month={label}
+                      entries={[
+                        ...(hiddenPortfolio
+                          ? []
+                          : [
+                              {
+                                label: "Tu portfolio",
+                                color: SERIES_COLORS.portfolio,
+                                value: formatSignedPercentOrEmpty(row.cumulativeReturn),
+                              },
+                            ]),
+                        ...visible.map((series) => ({
+                          label: series.label,
+                          color: series.color,
+                          value: formatSignedPercentOrEmpty(
+                            (row[benchmarkCumulativeKey(series.key)] as number | null) ?? null
+                          ),
+                        })),
+                      ]}
+                    />
+                  );
+                }}
+              />
+              {hiddenPortfolio ? null : (
+                <Line
                   type="monotone"
-                  dataKey="portfolioIndex"
-                  name="Portfolio"
-                  stroke="#6366f1"
-                  fill="url(#portfolioIndexGradient)"
-                  strokeWidth={2}
-                  dot={false}
+                  dataKey="cumulativeReturn"
+                  name="Tu portfolio"
+                  stroke={SERIES_COLORS.portfolio}
+                  strokeWidth={2.5}
+                  dot={{ r: 2.5, fill: SERIES_COLORS.portfolio, strokeWidth: 0 }}
                   connectNulls
                   isAnimationActive={false}
                 />
-              ) : null}
-              {visible.benchmark && benchmarkAvailable ? (
-                <Area
+              )}
+              {visible.map((series) => (
+                <Line
+                  key={series.key}
                   type="monotone"
-                  dataKey="benchmarkIndex"
-                  name="S&P 500"
-                  stroke="#10b981"
-                  fill="url(#benchmarkIndexGradient)"
-                  strokeWidth={2}
-                  dot={false}
-                  connectNulls
+                  dataKey={benchmarkCumulativeKey(series.key)}
+                  name={series.label}
+                  stroke={series.color}
+                  strokeWidth={1.75}
+                  dot={{ r: 2, fill: series.color, strokeWidth: 0 }}
+                  // Sin connectNulls: si la fuente dejó de publicar, la línea se corta
+                  // ahí en vez de inventar una continuidad que no existe.
                   isAnimationActive={false}
                 />
-              ) : null}
-            </AreaChart>
+              ))}
+            </LineChart>
           </ResponsiveContainer>
         </div>
       )}
     </ChartCard>
   );
-}
-
-function LegendButton({
-  color,
-  label,
-  active,
-  onClick,
-}: {
-  color: string;
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`inline-flex items-center gap-1.5 transition-colors ${active ? "text-zinc-300" : "text-zinc-600 line-through"}`}
-      aria-pressed={active}
-    >
-      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
-      {label}
-    </button>
-  );
-}
-
-function BenchmarkTooltip({
-  active,
-  payload,
-  label,
-}: {
-  active?: boolean;
-  payload?: Array<{ name?: string; value?: number | string; color?: string }>;
-  label?: string | number;
-}) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="rounded-lg border border-[#27272a] bg-[#09090b] p-3 text-xs shadow-xl">
-      <p className="mb-2 text-zinc-500">{typeof label === "string" ? formatDateTick(label) : label}</p>
-      {payload.map((item) => (
-        <div key={item.name} className="flex items-center justify-between gap-6 py-0.5">
-          <span className="flex items-center gap-1.5 text-zinc-400">
-            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
-            {item.name}
-          </span>
-          <span className="font-medium tabular-nums text-zinc-100">
-            Base {formatPercentValue(Number(item.value))}
-            <span className="ml-1 text-zinc-500">
-              ({formatSignedPercentValue(Number(item.value) - 100)})
-            </span>
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ChartPlaceholder({ text }: { text: string }) {
-  return <div className="flex h-[320px] items-center justify-center rounded-lg border border-dashed border-zinc-800 text-sm text-zinc-500">{text}</div>;
 }
