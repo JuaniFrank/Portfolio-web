@@ -361,7 +361,14 @@ export async function syncPriceHistory(
           from: opts.from,
           to: new Date(),
         });
-        const written = await writePriceBars(instrument.id, bars);
+        // Yahoo **reescribe retroactivamente** toda la serie cuando hay un split o
+        // un cambio de ratio de CEDEAR: verificado en SPY.BA, donde el 01/06/2026
+        // pasó de 20:1 a 60:1 y los cierres anteriores quedaron divididos por 3, sin
+        // salto en la curva. Con la ventana de revisión normal solo se reescribirían
+        // los últimos días y todo el histórico anterior quedaría con los precios
+        // viejos para siempre — valuando las posiciones 3× de más contra cantidades
+        // ya ajustadas por `CorporateEvent`. Ante un split se reescribe la serie entera.
+        const written = await writePriceBars(instrument.id, bars, splits.length > 0);
         return {
           ...written,
           unregisteredSplits: findUnregisteredSplits(
@@ -402,7 +409,9 @@ async function writePriceBars(
     low: number | null;
     close: number;
     volume: number | null;
-  }>
+  }>,
+  /** Reescribe la serie completa en vez de solo la ventana de revisión. */
+  rewriteAll = false
 ): Promise<SyncResult> {
   if (bars.length === 0) return { ...EMPTY_RESULT };
 
@@ -412,7 +421,7 @@ async function writePriceBars(
     select: { datetime: true },
   });
   const existingTimes = new Set(existing.map((row) => row.datetime.getTime()));
-  const cutoff = revisionCutoff();
+  const cutoff = rewriteAll ? Number.NEGATIVE_INFINITY : revisionCutoff();
 
   const toInsert = bars.filter(
     (bar) => !existingTimes.has(bar.date.getTime()) && bar.date.getTime() < cutoff
