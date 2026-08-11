@@ -36,6 +36,36 @@ function heading(text: string) {
 async function main() {
   const targetMonth = process.argv[2];
 
+  // ---- 0. Portfolios ------------------------------------------------------
+  heading("0. PORTFOLIOS");
+  const portfolios = await prisma.portfolio.findMany({
+    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+    select: {
+      id: true,
+      name: true,
+      archivedAt: true,
+      _count: { select: { transactions: true } },
+    },
+  });
+  for (const entry of portfolios) {
+    console.log(
+      `  ${entry.name.padEnd(24)} | ${String(entry._count.transactions).padStart(4)} operaciones` +
+        `${entry.archivedAt ? " | archivado" : ""}`
+    );
+  }
+  const analyzed = portfolios.find((entry) => entry.archivedAt === null);
+  if (portfolios.filter((entry) => entry.archivedAt === null).length > 1) {
+    console.log(
+      `\n  ⚠️  Hay más de un portfolio activo. /rendimientos analiza SOLO el primero\n` +
+        `      (“${analyzed?.name}”), que es el que se detalla más abajo.`
+    );
+  }
+  if (!analyzed) {
+    console.log("  Sin portfolios activos.");
+    await prisma.$disconnect();
+    return;
+  }
+
   // ---- 1. Eventos corporativos -------------------------------------------
   heading("1. EVENTOS CORPORATIVOS CARGADOS");
   const events = await prisma.corporateEvent.findMany({
@@ -60,7 +90,7 @@ async function main() {
   heading("2. INSTRUMENTOS CON OPERACIONES");
   const eligible = new Set<string>(PERFORMANCE_INSTRUMENT_TYPES);
   const instruments = await prisma.instrument.findMany({
-    where: { transactions: { some: { type: { in: ["BUY", "SELL"] } } } },
+    where: { transactions: { some: { portfolioId: analyzed.id, type: { in: ["BUY", "SELL"] } } } },
     select: { id: true, ticker: true, type: true },
     orderBy: { ticker: "asc" },
   });
@@ -69,7 +99,7 @@ async function main() {
   for (const instrument of instruments) {
     const [trades, priceCount, first, last] = await Promise.all([
       prisma.transaction.count({
-        where: { instrumentId: instrument.id, type: { in: ["BUY", "SELL"] } },
+        where: { instrumentId: instrument.id, portfolioId: analyzed.id, type: { in: ["BUY", "SELL"] } },
       }),
       prisma.priceCache.count({
         where: { instrumentId: instrument.id, source: EOD_PRICE_SOURCE },
@@ -105,7 +135,7 @@ async function main() {
   for (const instrument of instruments) {
     if (!eligible.has(instrument.type)) continue;
     const trades = await prisma.transaction.findMany({
-      where: { instrumentId: instrument.id, type: { in: ["BUY", "SELL"] } },
+      where: { instrumentId: instrument.id, portfolioId: analyzed.id, type: { in: ["BUY", "SELL"] } },
       orderBy: { tradeDate: "asc" },
       select: { tradeDate: true, type: true, quantity: true, price: true, netAmount: true },
     });
@@ -142,21 +172,9 @@ async function main() {
 
   // ---- 4. Serie resultante ------------------------------------------------
   heading("4. SERIE MENSUAL QUE PRODUCE EL MOTOR");
-  const portfolio = await prisma.portfolio.findFirst({
-    where: { archivedAt: null },
-    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
-    select: { id: true, name: true },
-  });
-
-  if (!portfolio) {
-    console.log("  Sin portfolios.");
-    await prisma.$disconnect();
-    return;
-  }
-
   const report = await buildPerformanceReport({
-    portfolioIds: [portfolio.id],
-    portfolioName: portfolio.name,
+    portfolioIds: [analyzed.id],
+    portfolioName: analyzed.name,
   });
 
   console.log(`  Portfolio: ${report.portfolioName}\n`);

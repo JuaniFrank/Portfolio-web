@@ -31,7 +31,14 @@ import {
   type MonetaryEvent,
   type TransactionForFlows,
 } from "./cashflows";
-import { enumerateMonths, monthEnd, monthStart, type MonthKey } from "./months";
+import {
+  enumerateMonths,
+  isOnOrBeforeUtcDay,
+  monthEnd,
+  monthStart,
+  toUtcDay,
+  type MonthKey,
+} from "./months";
 import { PriceIndex, TimeSeries } from "./price-series";
 import {
   annualizeReturn,
@@ -238,8 +245,13 @@ export async function buildPerformanceReport(
   const valuateAt = (valuationDate: Date, month: MonthKey, windowStart: Date): Valuation => {
     const cutoff = valuationDate.getTime();
 
-    const tradesToDate = trades.filter(
-      (trade) => new Date(trade.tradeDate).getTime() <= cutoff
+    // Comparación por DÍA, no por instante: `tradeDate` se guarda con hora (mediodía
+    // UTC en los imports) y el cierre de mes es medianoche UTC, así que comparar
+    // instantes dejaba las compras del último día del mes fuera de la valuación
+    // mientras su capital sí contaba como flujo — una pérdida inventada del tamaño
+    // exacto de esas compras.
+    const tradesToDate = trades.filter((trade) =>
+      isOnOrBeforeUtcDay(new Date(trade.tradeDate), valuationDate)
     );
 
     const priceMap = new Map<string, string>();
@@ -340,7 +352,7 @@ export async function buildPerformanceReport(
     const key = monthKeyOf(flow.date);
     const list = breakpointsByMonth.get(key);
     // Un flujo del último día del mes coincide con el cierre: no agrega un punto nuevo.
-    if (list) list.push(utcDay(flow.date));
+    if (list) list.push(toUtcDay(flow.date));
   }
 
   const valuations: Valuation[] = [];
@@ -502,13 +514,17 @@ function accumulateInArs(events: MonetaryEvent[], ccl: TimeSeries): DatedAmount[
   const amounts: DatedAmount[] = [];
 
   for (const event of events) {
+    // Normalizado a día UTC por el mismo motivo que los trades: un dividendo cobrado
+    // el último día del mes se compara contra un cierre a medianoche UTC.
+    const time = toUtcDay(event.date).getTime();
+
     if (event.currency === "ARS") {
-      amounts.push({ time: event.date.getTime(), amount: new Decimal(event.amount) });
+      amounts.push({ time, amount: new Decimal(event.amount) });
       continue;
     }
     const rate = ccl.asOf(event.date)?.value ?? null;
     if (!rate || rate <= 0) continue;
-    amounts.push({ time: event.date.getTime(), amount: new Decimal(event.amount * rate) });
+    amounts.push({ time, amount: new Decimal(event.amount * rate) });
   }
 
   return amounts.sort((a, b) => a.time - b.time);
@@ -528,11 +544,6 @@ function sumUpTo(amounts: DatedAmount[], cutoff: number): Decimal {
 // FECHAS
 // ============================================================
 
-/** Medianoche UTC de la fecha dada — la granularidad a la que se valúa. */
-function utcDay(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-}
-
 function monthKeyOf(date: Date): MonthKey {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
@@ -550,7 +561,7 @@ function sumByDate(
   const byDate = new Map<number, { ars: number; usd: number }>();
 
   for (const event of events) {
-    const time = utcDay(event.date).getTime();
+    const time = toUtcDay(event.date).getTime();
     const entry = byDate.get(time) ?? { ars: 0, usd: 0 };
     const rate = ccl.asOf(event.date)?.value ?? null;
 

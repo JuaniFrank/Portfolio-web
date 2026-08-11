@@ -5,11 +5,13 @@ import {
   enumerateMonths,
   formatMonthLabel,
   formatMonthLong,
+  isOnOrBeforeUtcDay,
   monthEnd,
   monthKey,
   monthStart,
   parseMonthKey,
   previousMonth,
+  toUtcDay,
 } from "./months";
 
 const utc = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
@@ -72,6 +74,44 @@ describe("dayOfMonth", () => {
   it("es 1-based", () => {
     expect(dayOfMonth(utc("2026-08-01"))).toBe(1);
     expect(dayOfMonth(utc("2026-08-31"))).toBe(31);
+  });
+});
+
+describe("toUtcDay / isOnOrBeforeUtcDay", () => {
+  it("trunca la hora a medianoche UTC", () => {
+    expect(toUtcDay(new Date("2025-10-31T12:00:00.000Z")).toISOString()).toBe(
+      "2025-10-31T00:00:00.000Z"
+    );
+  });
+
+  it("una operación del último día del mes ENTRA en el cierre de ese mes", () => {
+    // Regresión: `tradeDate` se guarda a mediodía UTC y el cierre de mes es
+    // medianoche UTC. Comparando instantes, las compras del 31 quedaban fuera de la
+    // valuación de octubre mientras su capital sí contaba como flujo, y eso producía
+    // una pérdida inventada del tamaño exacto de esas compras (-100 % en 10/2025).
+    const compra = new Date("2025-10-31T12:00:00.000Z");
+    const cierre = new Date("2025-10-31T00:00:00.000Z");
+    expect(isOnOrBeforeUtcDay(compra, cierre)).toBe(true);
+  });
+
+  it("una operación del día siguiente NO entra", () => {
+    expect(
+      isOnOrBeforeUtcDay(new Date("2025-11-01T00:00:00.000Z"), new Date("2025-10-31T00:00:00.000Z"))
+    ).toBe(false);
+  });
+
+  it("una operación anterior entra", () => {
+    expect(
+      isOnOrBeforeUtcDay(new Date("2025-10-27T12:00:00.000Z"), new Date("2025-10-31T00:00:00.000Z"))
+    ).toBe(true);
+  });
+
+  it("no depende del huso horario del server", () => {
+    // 2025-10-31 21:00 ART = 2025-11-01 00:00 UTC → es noviembre en UTC, y el motor
+    // trabaja en UTC de punta a punta.
+    expect(
+      isOnOrBeforeUtcDay(new Date("2025-11-01T00:00:00.000Z"), new Date("2025-10-31T23:59:59.999Z"))
+    ).toBe(false);
   });
 });
 

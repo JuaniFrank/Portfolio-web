@@ -43,9 +43,28 @@ export function previousMonth(key: MonthKey): MonthKey {
   return monthKey(new Date(Date.UTC(year, monthIndex - 1, 1)));
 }
 
-/** Día del mes de una fecha, 1-based — el `d_i` de Modified Dietz. */
+/** Día del mes de una fecha, 1-based. */
 export function dayOfMonth(date: Date): number {
   return date.getUTCDate();
+}
+
+/**
+ * Medianoche UTC del día de la fecha dada.
+ *
+ * Todas las comparaciones temporales del motor tienen que pasar por acá. Las fechas
+ * de operación se guardan con hora (mediodía UTC en los imports) mientras que los
+ * cierres de mes y los precios EOD son medianoche UTC. Comparar instantes en vez de
+ * días hace que una compra del último día del mes quede **fuera** de la valuación de
+ * ese mes — aunque su capital sí cuente como flujo — y eso produce una pérdida
+ * inventada del tamaño de la compra.
+ */
+export function toUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+/** ¿`date` cae el mismo día que `cutoff` o antes? Compara días, no instantes. */
+export function isOnOrBeforeUtcDay(date: Date, cutoff: Date): boolean {
+  return toUtcDay(date).getTime() <= toUtcDay(cutoff).getTime();
 }
 
 /**
