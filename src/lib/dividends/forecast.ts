@@ -45,6 +45,22 @@ function pickCurrency(meta: string | null): DividendCurrency {
   return "ARS";
 }
 
+/** ¿`ts` cae en el mismo mes calendario (UTC) que `now`? */
+function isInCurrentMonth(ts: number, now: number): boolean {
+  const d = new Date(ts);
+  const ref = new Date(now);
+  return (
+    d.getUTCFullYear() === ref.getUTCFullYear() &&
+    d.getUTCMonth() === ref.getUTCMonth()
+  );
+}
+
+/** Inicio (00:00 UTC) del mes calendario al que pertenece `ts`. */
+function startOfMonth(ts: number): number {
+  const d = new Date(ts);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+}
+
 export type ForecastResult = {
   upcoming: UpcomingDividend[];
   errors: string[];
@@ -153,25 +169,34 @@ function projectFutureDividends(args: {
   const { amountPerUnit, qty, lastTimestampMs, cadenceDays, now, horizonMs } = args;
   const projections: UpcomingDividend[] = [];
 
+  // Si el último pago real cayó dentro del mes en curso, lo mostramos
+  // igual (ya cobrado), sin importar que el día exacto ya haya pasado.
+  if (isInCurrentMonth(lastTimestampMs, now)) {
+    projections.push(makeProjection(args, amountPerUnit, qty, lastTimestampMs, false));
+  }
+
+  // Filtro único: entra si cae en el mes calendario actual (pase o no el
+  // día exacto) o si es una proyección futura dentro del horizonte.
+  const include = (ts: number) =>
+    isInCurrentMonth(ts, now) || (ts > now && ts - now <= horizonMs);
+
   if (!cadenceDays) {
     const nextTs = lastTimestampMs + 365 * MS_PER_DAY;
-    if (nextTs > now && nextTs - now <= horizonMs) {
-      projections.push(makeProjection(args, amountPerUnit, qty, nextTs));
+    if (include(nextTs)) {
+      projections.push(makeProjection(args, amountPerUnit, qty, nextTs, true));
     }
     return projections;
   }
 
-  // Tolerancia: los gaps reales suelen variar ±15% alrededor de la mediana
-  // (PM: 83–99 días con mediana 91). Si la proyección cae apenas en el pasado
-  // por esa variabilidad, la mantenemos como "próxima" en vez de saltar al
-  // siguiente ciclo y perder el pago real que está por venir.
-  const graceDays = Math.max(15, cadenceDays * 0.2);
-  const graceMs = graceDays * MS_PER_DAY;
-
+  // Arrancamos en el primer ciclo posterior al último pago y lo adelantamos
+  // hasta entrar (como mínimo) en el mes en curso; de ahí en más incluimos
+  // todo lo que caiga en el mes actual o dentro del horizonte futuro.
+  const monthStart = startOfMonth(now);
   let nextTs = lastTimestampMs + cadenceDays * MS_PER_DAY;
-  while (nextTs < now - graceMs) nextTs += cadenceDays * MS_PER_DAY;
-  while (nextTs - now <= horizonMs) {
-    projections.push(makeProjection(args, amountPerUnit, qty, nextTs));
+  while (nextTs < monthStart) nextTs += cadenceDays * MS_PER_DAY;
+
+  while (include(nextTs)) {
+    projections.push(makeProjection(args, amountPerUnit, qty, nextTs, true));
     nextTs += cadenceDays * MS_PER_DAY;
   }
   return projections;
@@ -181,7 +206,8 @@ function makeProjection(
   args: { ticker: string; instrumentName: string | null; currency: DividendCurrency },
   amountPerUnit: Decimal,
   qty: Decimal,
-  ts: number
+  ts: number,
+  isEstimate: boolean
 ): UpcomingDividend {
   return {
     ticker: args.ticker,
@@ -220,6 +246,7 @@ export async function forecastUpcomingDividends(
   });
 
   const results = await Promise.all(tasks);
+
   const upcoming = results.flat().sort((a, b) => a.estimatedDate.localeCompare(b.estimatedDate));
 
   return { upcoming, errors };
