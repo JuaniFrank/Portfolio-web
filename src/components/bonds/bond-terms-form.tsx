@@ -8,6 +8,7 @@ import {
   type BondTermsDTO,
   type AmortizationEntry,
 } from "@/app/actions/bond-terms";
+import type { ScrapedBondProposal } from "@/lib/bonds/argen-bond-scraper";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,6 +29,8 @@ type Props = {
   ticker: string;
   /** Pre-populated when editing existing terms. */
   initialTerms?: BondTermsDTO | null;
+  /** Scraped prefill suggestion shown as a dismissible banner, never auto-applied. */
+  proposal?: ScrapedBondProposal | null;
   onSaved?: (terms: BondTermsDTO) => void;
   onCancel?: () => void;
 };
@@ -109,11 +112,13 @@ export function BondTermsForm({
   instrumentId,
   ticker,
   initialTerms,
+  proposal,
   onSaved,
   onCancel,
 }: Props) {
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [bannerVisible, setBannerVisible] = useState(true);
 
   const defaultForm: FormState = initialTerms
     ? toFormState(initialTerms)
@@ -159,6 +164,43 @@ export function BondTermsForm({
 
   function removeAmortRow(index: number) {
     setAmortRows((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  const hasUsableProposal =
+    !initialTerms &&
+    !!proposal &&
+    Object.values(proposal).some((v) => v !== null && !(Array.isArray(v) && v.length === 0));
+
+  function applyProposal() {
+    if (!proposal) return;
+    setForm((prev) => ({
+      faceValue: proposal.faceValue != null ? String(proposal.faceValue) : prev.faceValue,
+      currencyCode: proposal.currencyCode ?? prev.currencyCode,
+      rateType: proposal.rateType ?? prev.rateType,
+      couponRate: proposal.couponRate != null ? String(proposal.couponRate) : prev.couponRate,
+      couponFrequencyMonths:
+        proposal.couponFrequencyMonths != null
+          ? String(proposal.couponFrequencyMonths)
+          : prev.couponFrequencyMonths,
+      issueDate: proposal.issueDate ? proposal.issueDate.slice(0, 10) : prev.issueDate,
+      maturityDate: proposal.maturityDate
+        ? proposal.maturityDate.slice(0, 10)
+        : prev.maturityDate,
+      dayCountConvention: proposal.dayCountConvention ?? prev.dayCountConvention,
+    }));
+    if (proposal.amortizationSchedule.length > 0) {
+      setAmortRows(
+        proposal.amortizationSchedule.map((e) => ({
+          date: e.date.slice(0, 10),
+          principalPct: String(e.principalPct),
+        }))
+      );
+    }
+    setBannerVisible(false);
+  }
+
+  function dismissProposal() {
+    setBannerVisible(false);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -221,6 +263,23 @@ export function BondTermsForm({
           Ingresá los términos contractuales de esta ON para habilitar la proyección de flujos y la analítica de TIR/duration.
         </p>
       </div>
+
+      {hasUsableProposal && bannerVisible && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-teal-900/50 bg-teal-950/20 p-3 text-xs text-teal-200">
+          <span>
+            Encontramos datos para {ticker} en argen.bond. Son una propuesta a revisar, no se
+            guardan solos.
+          </span>
+          <div className="flex gap-2">
+            <Button type="button" size="sm" onClick={applyProposal}>
+              Usar estos datos
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={dismissProposal}>
+              Completar manualmente
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* ---------------------------------------------------------------- */}
       {/* Basic terms */}

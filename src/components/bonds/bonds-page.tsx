@@ -10,7 +10,12 @@ import { BondCashflowTable } from "./bond-cashflow-table";
 import { BondAnalyticsCard } from "./bond-analytics";
 import { BondProjectionTable } from "./bond-projection-table";
 import { BondTermsForm } from "./bond-terms-form";
-import { getBondTermsAction, type BondTermsDTO } from "@/app/actions/bond-terms";
+import {
+  getBondTermsAction,
+  getBondTermsProposalAction,
+  type BondTermsDTO,
+} from "@/app/actions/bond-terms";
+import type { ScrapedBondProposal } from "@/lib/bonds/argen-bond-scraper";
 
 type Props = {
   data: BondsPageDataV2;
@@ -118,6 +123,8 @@ function HoldingAnalyticsSection({ holding }: { holding: BondHoldingV2 }) {
   // Loaded on-demand when the user clicks "Edit terms" for a holding that already has terms.
   const [loadedTerms, setLoadedTerms] = useState<BondTermsDTO | null>(null);
   const [loadingTerms, setLoadingTerms] = useState(false);
+  const [proposal, setProposal] = useState<ScrapedBondProposal | null>(null);
+  const [proposalChecked, setProposalChecked] = useState(false);
 
   const effectiveHasTerms = holding.hasTerms || !!localTerms;
 
@@ -136,6 +143,20 @@ function HoldingAnalyticsSection({ holding }: { holding: BondHoldingV2 }) {
           setLoadedTerms(result.data);
         }
       } finally {
+        setLoadingTerms(false);
+      }
+    }
+    // No terms yet: propose a prefill scraped from argen.bond for review — never
+    // auto-applied, the user still has to click "Usar estos datos" and save.
+    if (!effectiveHasTerms && !proposalChecked) {
+      setLoadingTerms(true);
+      try {
+        const result = await getBondTermsProposalAction(holding.instrumentId);
+        if (result.success) {
+          setProposal(result.data);
+        }
+      } finally {
+        setProposalChecked(true);
         setLoadingTerms(false);
       }
     }
@@ -169,6 +190,7 @@ function HoldingAnalyticsSection({ holding }: { holding: BondHoldingV2 }) {
           instrumentId={holding.instrumentId}
           ticker={holding.ticker}
           initialTerms={initialTermsForForm}
+          proposal={effectiveHasTerms ? null : proposal}
           onSaved={handleTermsSaved}
           onCancel={() => setShowForm(false)}
         />
