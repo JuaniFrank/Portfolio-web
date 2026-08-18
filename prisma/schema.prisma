@@ -516,6 +516,14 @@ model BondTerms {
   @@index([instrumentId])
 }
 
+model ScrapedBondData {
+  id        String   @id @default(cuid())
+  ticker    String   @unique
+  sourceUrl String
+  payload   Json
+  fetchedAt DateTime @default(now())
+}
+
 // ============================================================
 // AUDITORÍA
 // ============================================================
