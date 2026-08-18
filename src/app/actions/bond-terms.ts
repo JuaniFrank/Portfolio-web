@@ -3,6 +3,7 @@
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { RateType, type BondTerms } from "@/lib/generated/prisma";
+import { fetchArgenBondProposal, type ScrapedBondProposal } from "@/lib/bonds/argen-bond-scraper";
 
 // ---------------------------------------------------------------------------
 // Input validation types
@@ -227,4 +228,59 @@ export async function getBondTermsAction(
   });
 
   return { success: true, data: terms ? toBondTermsDTO(terms) : null };
+}
+
+/**
+ * Propose a prefill for BondTerms sourced from a scraped public bond page.
+ *
+ * This never writes BondTerms itself — it only returns a suggestion for the
+ * form to display. Results are cached in ScrapedBondData so repeated opens
+ * of the same instrument's form don't re-scrape the source site.
+ */
+export async function getBondTermsProposalAction(
+  instrumentId: string
+): Promise<
+  { success: true; data: ScrapedBondProposal | null } | { success: false; error: string }
+> {
+  const user = await getCurrentUser();
+  if (!user) return { success: false, error: "unauthorized" };
+
+  const instrument = await prisma.instrument.findFirst({
+    where: {
+      id: instrumentId,
+      transactions: {
+        some: { portfolio: { userId: user.id } },
+      },
+    },
+    select: { id: true, ticker: true },
+  });
+
+  if (!instrument) {
+    return {
+      success: false,
+      error: "Instrument not found or does not belong to your portfolio",
+    };
+  }
+
+  const cached = await prisma.scrapedBondData.findUnique({
+    where: { ticker: instrument.ticker },
+  });
+  if (cached) {
+    return { success: true, data: cached.payload as unknown as ScrapedBondProposal };
+  }
+
+  const proposal = await fetchArgenBondProposal(instrument.ticker);
+  if (!proposal) {
+    return { success: true, data: null };
+  }
+
+  await prisma.scrapedBondData.create({
+    data: {
+      ticker: instrument.ticker,
+      sourceUrl: `https://argen.bond/bonos/${instrument.ticker}`,
+      payload: proposal,
+    },
+  });
+
+  return { success: true, data: proposal };
 }
