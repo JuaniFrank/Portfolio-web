@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <title>Cotización CS50C - TIR y Flujo de Fondos | argen_bonds</title>
+  </head>
+  <body>
+    <main>
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div class="lg:col-span-2 space-y-6">
+          <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col">
+            <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex items-center justify-between">
+              <h3 class="text-sm font-semibold text-gray-800 dark:text-white">Flujo de Fondos</h3>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm text-left" id="cashflow-table">
+                <thead class="text-xs text-gray-500 uppercase bg-gray-50 dark:bg-gray-700 sticky top-0">
+                  <tr>
+                    <th class="px-4 py-3">Fecha</th>
+                    <th class="px-4 py-3 text-right">Interés</th>
+                    <th class="px-4 py-3 text-right">Amort.</th>
+                    <th class="px-4 py-3 text-right">Total</th>
+                    <th class="px-4 py-3 text-right">Residual</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                  <tr class="past-payment hidden bg-gray-50/50 dark:bg-gray-800/50 text-gray-400 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td class="px-4 py-3 font-medium whitespace-nowrap">
+                      10/12/2025
+                      <span class="ml-2 text-[10px] uppercase border border-gray-200 rounded px-1">Pago</span>
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums">0%</td>
+                    <td class="px-4 py-3 text-right tabular-nums">0%</td>
+                    <td class="px-4 py-3 text-right font-bold tabular-nums ">
+                      0,00
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums text-gray-500">100%</td>
+                  </tr>
+                  <tr class="bg-white dark:bg-gray-800 text-gray-800 dark:text-white transition-colors hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td class="px-4 py-3 font-medium whitespace-nowrap">
+                      10/09/2026
+
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums">5.44%</td>
+                    <td class="px-4 py-3 text-right tabular-nums">0%</td>
+                    <td class="px-4 py-3 text-right font-bold tabular-nums text-lime-600 dark:text-lime-400">
+                      5,44
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums text-gray-500">100%</td>
+                  </tr>
+                  <tr class="bg-white dark:bg-gray-800 text-gray-800 dark:text-white transition-colors hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td class="px-4 py-3 font-medium whitespace-nowrap">
+                      10/03/2027
+
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums">3.6%</td>
+                    <td class="px-4 py-3 text-right tabular-nums">0%</td>
+                    <td class="px-4 py-3 text-right font-bold tabular-nums text-lime-600 dark:text-lime-400">
+                      3,60
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums text-gray-500">100%</td>
+                  </tr>
+                  <tr class="bg-white dark:bg-gray-800 text-gray-800 dark:text-white transition-colors hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td class="px-4 py-3 font-medium whitespace-nowrap">
+                      10/09/2027
+
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums">3.65%</td>
+                    <td class="px-4 py-3 text-right tabular-nums">0%</td>
+                    <td class="px-4 py-3 text-right font-bold tabular-nums text-lime-600 dark:text-lime-400">
+                      3,65
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums text-gray-500">100%</td>
+                  </tr>
+                  <tr class="bg-white dark:bg-gray-800 text-gray-800 dark:text-white transition-colors hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td class="px-4 py-3 font-medium whitespace-nowrap">
+                      10/03/2028
+
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums">3.62%</td>
+                    <td class="px-4 py-3 text-right tabular-nums">0%</td>
+                    <td class="px-4 py-3 text-right font-bold tabular-nums text-lime-600 dark:text-lime-400">
+                      3,62
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums text-gray-500">100%</td>
+                  </tr>
+                  <tr class="bg-white dark:bg-gray-800 text-gray-800 dark:text-white transition-colors hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td class="px-4 py-3 font-medium whitespace-nowrap">
+                      10/09/2028
+
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums">3.65%</td>
+                    <td class="px-4 py-3 text-right tabular-nums">0%</td>
+                    <td class="px-4 py-3 text-right font-bold tabular-nums text-lime-600 dark:text-lime-400">
+                      3,65
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums text-gray-500">100%</td>
+                  </tr>
+                  <tr class="bg-white dark:bg-gray-800 text-gray-800 dark:text-white transition-colors hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td class="px-4 py-3 font-medium whitespace-nowrap">
+                      10/03/2029
+
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums">3.6%</td>
+                    <td class="px-4 py-3 text-right tabular-nums">100%</td>
+                    <td class="px-4 py-3 text-right font-bold tabular-nums text-lime-600 dark:text-lime-400">
+                      103,60
+                    </td>
+                    <td class="px-4 py-3 text-right tabular-nums text-gray-500">100%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-6">
+          <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+            <div class="px-5 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+              <h3 class="font-semibold text-gray-800 dark:text-white text-sm">Perfil del Bono</h3>
+            </div>
+            <dl class="divide-y divide-gray-100 dark:divide-gray-700">
+              <div class="px-5 py-3 grid grid-cols-2 gap-2 text-sm">
+                <dt class="text-gray-500 dark:text-gray-400">Emisora</dt>
+                <dd class="text-right font-medium text-gray-800 dark:text-white">Cresud S.A.C.I.F. y A.</dd>
+              </div>
+              <div class="px-5 py-3 grid grid-cols-2 gap-2 text-sm">
+                <dt class="text-gray-500 dark:text-gray-400">Vencimiento</dt>
+                <dd class="text-right font-medium text-gray-800 dark:text-white">10/03/2029</dd>
+              </div>
+              <div class="px-5 py-3 grid grid-cols-2 gap-2 text-sm">
+                <dt class="text-gray-500 dark:text-gray-400">Moneda Pago</dt>
+                <dd class="text-right font-medium text-gray-800 dark:text-white">Dolar MEP</dd>
+              </div>
+              <div class="px-5 py-3 grid grid-cols-2 gap-2 text-sm">
+                <dt class="text-gray-500 dark:text-gray-400">Ley</dt>
+                <dd class="text-right font-medium text-gray-800 dark:text-white">ARG</dd>
+              </div>
+              <div class="px-5 py-3 grid grid-cols-2 gap-2 text-sm">
+                <dt class="text-gray-500 dark:text-gray-400">Calificación</dt>
+                <dd class="text-right font-medium text-gray-800 dark:text-white"><span class="bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded text-xs">AAA(arg)</span></dd>
+              </div>
+              <div class="px-5 py-3 grid grid-cols-2 gap-2 text-sm">
+                <dt class="text-gray-500 dark:text-gray-400">Frecuencia</dt>
+                <dd class="text-right font-medium text-gray-800 dark:text-white">Semestral</dd>
+              </div>
+              <div class="px-5 py-3 grid grid-cols-2 gap-2 text-sm">
+                <dt class="text-gray-500 dark:text-gray-400">Tipo Cupón</dt>
+                <dd class="text-right font-medium text-gray-800 dark:text-white truncate" title="Tasa Fija">Tasa Fija</dd>
+              </div>
+              <div class="px-5 py-3 grid grid-cols-2 gap-2 text-sm">
+                <dt class="text-gray-500 dark:text-gray-400">Amortización</dt>
+                <dd class="text-right font-medium text-gray-800 dark:text-white truncate" title="Bullet">Bullet</dd>
+              </div>
+              <div class="px-5 py-3 grid grid-cols-2 gap-2 text-sm">
+                <dt class="text-gray-500 dark:text-gray-400">Lámina Mínima</dt>
+                <dd class="text-right font-medium text-gray-800 dark:text-white truncate" title="1.0">1</dd>
+              </div>
+            </dl>
+          </div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
