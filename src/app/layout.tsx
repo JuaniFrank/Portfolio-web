@@ -31,9 +31,9 @@ export default async function RootLayout({
   const session = await auth();
 
   return (
-    <html lang="es" className="dark" suppressHydrationWarning>
+    <html lang="es" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} min-h-dvh bg-zinc-950 font-sans text-zinc-100 antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} min-h-dvh bg-background font-sans text-foreground antialiased`}
       >
         <AppProviders session={session}>{children}</AppProviders>
       </body>

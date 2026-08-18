@@ -1,9 +1,23 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useTheme } from "next-themes";
 import { AppSessionProvider } from "@/components/providers/session-provider";
+import { ThemeProvider } from "@/components/providers/theme-provider";
 import { Toaster } from "sonner";
 import type { Session } from "next-auth";
+
+function ThemedToaster() {
+  const { resolvedTheme } = useTheme();
+
+  return (
+    <Toaster
+      richColors
+      theme={resolvedTheme === "dark" ? "dark" : "light"}
+      position="top-center"
+    />
+  );
+}
 
 export function AppProviders({
   children,
@@ -12,13 +26,12 @@ export function AppProviders({
   children: ReactNode;
   session: Session | null;
 }) {
-  // El tema oscuro está fijado con `className="dark"` en <html> (layout.tsx),
-  // así que no se usa next-themes: solo inyectaba un <script> que React 19
-  // no ejecuta y que disparaba un error de consola.
   return (
-    <AppSessionProvider session={session}>
-      {children}
-      <Toaster richColors theme="dark" position="top-center" />
-    </AppSessionProvider>
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
+      <AppSessionProvider session={session}>
+        {children}
+        <ThemedToaster />
+      </AppSessionProvider>
+    </ThemeProvider>
   );
 }
