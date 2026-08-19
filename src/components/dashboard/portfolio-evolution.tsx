@@ -26,7 +26,14 @@ import type {
   EvolutionPoint,
   PortfolioEvolution,
 } from "@/lib/dashboard/evolution";
+import {
+  DEFAULT_TIME_RANGE,
+  clampToSeries,
+  sliceByRange,
+  type TimeRange,
+} from "@/lib/dashboard/time-range";
 import { GRANULARITIES, type Granularity } from "@/lib/rendimientos/timeline";
+import { TimeRangeSelector } from "./time-range-selector";
 import { cn } from "@/lib/utils";
 import { formatMoney, type ViewCurrency } from "./format";
 
@@ -48,17 +55,24 @@ type Hovered = { row: ChartRow; x: number; y: number };
 
 export function PortfolioEvolutionChart({ evolution, currency }: Props) {
   const [granularity, setGranularity] = React.useState<Granularity>("daily");
+  const [range, setRange] = React.useState<TimeRange>(DEFAULT_TIME_RANGE);
 
-  const rows = React.useMemo<ChartRow[]>(
-    () =>
-      evolution.series[granularity].map((point) => ({
-        ...point,
-        value: currency === "ARS" ? point.valueArs : point.valueUsd,
-      })),
-    [evolution, granularity, currency]
-  );
+  const series = evolution.series[granularity];
 
-  const hasChart = evolution.hasData && rows.length >= 2;
+  // La referencia de los presets es el último cierre, no hoy: ver `time-range.ts`.
+  const referenceDay = evolution.lastDate ?? series.at(-1)?.date ?? null;
+
+  const rows = React.useMemo<ChartRow[]>(() => {
+    const visible = referenceDay ? sliceByRange(series, range, referenceDay) : series;
+    return visible.map((point) => ({
+      ...point,
+      value: currency === "ARS" ? point.valueArs : point.valueUsd,
+    }));
+  }, [series, range, referenceDay, currency]);
+
+  // Los extremos del calendario salen de la granularidad más fina: es el rango de fechas
+  // con dato, independientemente de cómo esté agrupada la vista.
+  const bounds = React.useMemo(() => clampToSeries(evolution.series.daily), [evolution]);
 
   if (!evolution.hasData) {
     return (
@@ -71,16 +85,40 @@ export function PortfolioEvolutionChart({ evolution, currency }: Props) {
 
   return (
     <div className="space-y-3">
-      <GranularityToggle value={granularity} onChange={setGranularity} />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <GranularityToggle value={granularity} onChange={setGranularity} />
+        <TimeRangeSelector
+          value={range}
+          onChange={setRange}
+          min={bounds.min}
+          max={bounds.max}
+        />
+      </div>
 
-      {hasChart ? (
-        <ZoomableAreaChart rows={rows} currency={currency} granularity={granularity} />
+      {rows.length >= 2 ? (
+        <ZoomableAreaChart
+          rows={rows}
+          currency={currency}
+          // Cambiar de granularidad o de rango cambia lo que estás mirando, así que el
+          // gráfico se reencuadra. Cambiar de moneda no: ahí conservar el zoom es lo
+          // que uno espera.
+          resetKey={`${granularity}|${range.preset}|${range.from ?? ""}|${range.to ?? ""}`}
+        />
       ) : (
         <ChartPlaceholder
-          text="Hace falta más de un cierre para dibujar una evolución."
+          text={
+            range.preset === "ALL"
+              ? "Hace falta más de un cierre para dibujar una evolución."
+              : "El rango elegido no tiene suficientes cierres. Probá uno más amplio."
+          }
           height={HEIGHT}
         />
       )}
+
+      <p className="text-[11px] text-zinc-500">
+        Rueda para hacer zoom · arrastrá para desplazarte · doble clic en el eje para
+        reencuadrar
+      </p>
 
       <Footnote evolution={evolution} />
     </div>
@@ -99,11 +137,12 @@ export function PortfolioEvolutionChart({ evolution, currency }: Props) {
 function ZoomableAreaChart({
   rows,
   currency,
-  granularity,
+  resetKey,
 }: {
   rows: ChartRow[];
   currency: ViewCurrency;
-  granularity: Granularity;
+  /** Cambia cuando la vista pasa a significar otra cosa y hay que reencuadrar. */
+  resetKey: string;
 }) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const chartRef = React.useRef<IChartApi | null>(null);
@@ -234,7 +273,7 @@ function ZoomableAreaChart({
   }, []);
 
   // --- Datos: se reemplazan sin recrear el chart, para no perder el zoom ---
-  const previousGranularity = React.useRef(granularity);
+  const previousResetKey = React.useRef(resetKey);
   React.useEffect(() => {
     const series = seriesRef.current;
     const chart = chartRef.current;
@@ -242,15 +281,12 @@ function ZoomableAreaChart({
 
     series.setData(rows.map((row) => ({ time: row.date as Time, value: row.value })));
 
-    // Cambiar de granularidad cambia el eje entero: el tramo que estabas mirando ya no
-    // significa lo mismo, así que se vuelve a encuadrar. Cambiar de moneda solo reescala
-    // el eje Y, y ahí conservar el zoom es lo que uno espera.
-    if (previousGranularity.current !== granularity) {
-      previousGranularity.current = granularity;
+    if (previousResetKey.current !== resetKey) {
+      previousResetKey.current = resetKey;
       chart.timeScale().fitContent();
       setIsZoomed(false);
     }
-  }, [rows, granularity]);
+  }, [rows, resetKey]);
 
   // Encuadre inicial, una vez que la primera tanda de datos ya entró.
   React.useEffect(() => {
@@ -348,29 +384,27 @@ function GranularityToggle({
   onChange: (granularity: Granularity) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div className="inline-flex shrink-0 rounded-md border border-zinc-800 bg-zinc-950/60 p-1">
-        {GRANULARITIES.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            aria-pressed={value === option.id}
-            onClick={() => onChange(option.id)}
-            className={cn(
-              "rounded px-3 py-1 text-xs transition-colors",
-              value === option.id
-                ? "bg-teal-500/20 font-medium text-teal-300"
-                : "text-zinc-400 hover:text-zinc-100"
-            )}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-      <p className="text-[11px] text-zinc-500">
-        Rueda para hacer zoom · arrastrá para desplazarte · doble clic en el eje para
-        reencuadrar
-      </p>
+    <div
+      role="group"
+      aria-label="Granularidad"
+      className="inline-flex shrink-0 items-center rounded-lg border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs"
+    >
+      {GRANULARITIES.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          aria-pressed={value === option.id}
+          onClick={() => onChange(option.id)}
+          className={cn(
+            "rounded-md px-2 py-1 font-medium transition-colors",
+            value === option.id
+              ? "border border-teal-800/60 bg-teal-950 text-teal-300 shadow-sm"
+              : "border border-transparent text-zinc-400 hover:text-zinc-200"
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   );
 }
