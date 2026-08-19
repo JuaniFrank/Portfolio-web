@@ -9,6 +9,8 @@ export type ScrapedBondProposal = {
   issueDate: string | null;
   maturityDate: string | null;
   amortizationSchedule: { date: string; principalPct: number }[];
+  /** Full flow of funds: every payment date, with both interest and principal %. */
+  cashflowSchedule: { date: string; interestPct: number; principalPct: number }[];
   dayCountConvention: string | null;
 };
 
@@ -21,6 +23,7 @@ const EMPTY_PROPOSAL: ScrapedBondProposal = {
   issueDate: null,
   maturityDate: null,
   amortizationSchedule: [],
+  cashflowSchedule: [],
   dayCountConvention: null,
 };
 
@@ -95,6 +98,7 @@ export function parseArgenBondHtml(html: string): ScrapedBondProposal {
     const maturityDate = parseArgDate(summary.get("Vencimiento") ?? "");
 
     const amortizationSchedule: { date: string; principalPct: number }[] = [];
+    const cashflowSchedule: { date: string; interestPct: number; principalPct: number }[] = [];
     let residualBeforeRow = 100;
     let couponRate: number | null = null;
     let couponRateEstimated = false;
@@ -123,12 +127,17 @@ export function parseArgenBondHtml(html: string): ScrapedBondProposal {
         amortizationSchedule.push({ date, principalPct: amortPct });
       }
 
+      if (date != null && interesPct != null && amortPct != null) {
+        cashflowSchedule.push({ date, interestPct: interesPct, principalPct: amortPct });
+      }
+
       if (amortPct != null) {
         residualBeforeRow -= amortPct;
       }
     });
 
     amortizationSchedule.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    cashflowSchedule.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
     return {
       faceValue: null,
@@ -139,6 +148,7 @@ export function parseArgenBondHtml(html: string): ScrapedBondProposal {
       issueDate: null,
       maturityDate,
       amortizationSchedule,
+      cashflowSchedule,
       dayCountConvention: null,
     };
   } catch {

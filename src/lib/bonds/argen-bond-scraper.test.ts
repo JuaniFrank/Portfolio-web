@@ -63,7 +63,22 @@ describe("parseArgenBondHtml", () => {
       issueDate: null,
       maturityDate: null,
       amortizationSchedule: [],
+      cashflowSchedule: [],
       dayCountConvention: null,
     });
+  });
+
+  it("arma el flujo de fondos completo con todas las filas (interés y amortización)", () => {
+    const result = parseArgenBondHtml(cs50cHtml);
+
+    expect(result.cashflowSchedule).toEqual([
+      { date: "2025-12-10", interestPct: 0, principalPct: 0 },
+      { date: "2026-09-10", interestPct: 5.44, principalPct: 0 },
+      { date: "2027-03-10", interestPct: 3.6, principalPct: 0 },
+      { date: "2027-09-10", interestPct: 3.65, principalPct: 0 },
+      { date: "2028-03-10", interestPct: 3.62, principalPct: 0 },
+      { date: "2028-09-10", interestPct: 3.65, principalPct: 0 },
+      { date: "2029-03-10", interestPct: 3.6, principalPct: 100 },
+    ]);
   });
 });

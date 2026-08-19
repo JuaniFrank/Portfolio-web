@@ -265,19 +265,52 @@ export function BondTermsForm({
       </div>
 
       {hasUsableProposal && bannerVisible && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-teal-900/50 bg-teal-950/20 p-3 text-xs text-teal-200">
-          <span>
-            Encontramos datos para {ticker} en argen.bond. Son una propuesta a revisar, no se
-            guardan solos.
-          </span>
-          <div className="flex gap-2">
-            <Button type="button" size="sm" onClick={applyProposal}>
-              Usar estos datos
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={dismissProposal}>
-              Completar manualmente
-            </Button>
+        <div className="space-y-3 rounded-md border border-teal-900/50 bg-teal-950/20 p-3 text-xs text-teal-200">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>
+              Encontramos datos para {ticker} en argen.bond. Son una propuesta a revisar, no se
+              guardan solos.
+            </span>
+            <div className="flex gap-2">
+              <Button type="button" size="sm" onClick={applyProposal}>
+                Usar estos datos
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={dismissProposal}>
+                Completar manualmente
+              </Button>
+            </div>
           </div>
+
+          {proposal && proposal.cashflowSchedule.length > 0 && (
+            <div className="rounded border border-teal-900/40 bg-black/20">
+              <div className="max-h-56 overflow-y-auto">
+                <table className="w-full text-left text-[11px]">
+                  <thead className="sticky top-0 bg-teal-950/80 text-teal-300">
+                    <tr>
+                      <th className="px-2 py-1 font-medium">Fecha</th>
+                      <th className="px-2 py-1 font-medium">Interés</th>
+                      <th className="px-2 py-1 font-medium">Amortización</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {proposal.cashflowSchedule.map((row) => (
+                      <tr key={row.date} className="border-t border-teal-900/30">
+                        <td className="px-2 py-1">{row.date}</td>
+                        <td className="px-2 py-1">{row.interestPct}%</td>
+                        <td className="px-2 py-1">
+                          {row.principalPct > 0 ? `${row.principalPct}%` : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="border-t border-teal-900/40 px-2 py-1 text-[10px] text-teal-400">
+                Flujo de fondos completo según argen.bond — &ldquo;Usar estos datos&rdquo; solo
+                carga el cronograma de amortización (capital) en el formulario.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
