@@ -1,5 +1,4 @@
 import type { InstrumentType } from "@/lib/generated/prisma";
-import type { BondCashflowOutlook } from "@/lib/bonds/cashflows";
 
 export type DashboardCurrency = "ARS" | "USD";
 
@@ -93,6 +92,4 @@ export type DashboardData = {
   topGainers: TopMover[];
   topLosers: TopMover[];
   concentration: ConcentrationStats;
-  /** Next bond payment and current/next-year projections across all ON holdings. */
-  bondCashflowOutlook: BondCashflowOutlook;
 };

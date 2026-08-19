@@ -1,6 +1,5 @@
 import Decimal from "decimal.js";
 import type { InstrumentType } from "@/lib/generated/prisma";
-import { buildBondCashflowOutlook, type BondCashflowOutlook } from "@/lib/bonds/cashflows";
 import type {
   AllocationSlice,
   ConcentrationStats,
@@ -94,11 +93,8 @@ export function buildDashboardData(args: {
   cclRate: number | null;
   cashArs?: string;
   cashUsd?: string;
-  /** Defaults to an empty outlook (no ON holdings with BondTerms). */
-  bondCashflowOutlook?: BondCashflowOutlook;
 }): DashboardData {
   const { portfolioName, rawHoldings, cclRate } = args;
-  const bondCashflowOutlook = args.bondCashflowOutlook ?? buildBondCashflowOutlook([], cclRate);
   const cashArs = new Decimal(args.cashArs ?? "0");
   const cashUsd = new Decimal(args.cashUsd ?? "0");
 
@@ -266,6 +262,5 @@ export function buildDashboardData(args: {
     topGainers,
     topLosers,
     concentration,
-    bondCashflowOutlook,
   };
 }

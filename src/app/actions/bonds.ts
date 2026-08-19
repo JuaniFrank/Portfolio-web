@@ -13,8 +13,10 @@ import { fetchCclQuote } from "@/lib/market/dolarapi";
 import { prisma } from "@/lib/prisma";
 import { TransactionType } from "@/lib/generated/prisma";
 import {
+  buildBondCashflowOutlook,
   projectCashFlows,
   scaleFlowsToHolding,
+  type BondCashflowEntry,
   type BondTermsForProjection,
 } from "@/lib/bonds/cashflows";
 import { computeBondAnalytics, type CashFlow } from "@/lib/bonds/analytics";
@@ -108,6 +110,7 @@ export async function getBondsPageDataAction(): Promise<
   const v1Data = buildBondsPageData(trades, priceResult, cclMid);
 
   // Augment each holding with analytics and projected flows (v2)
+  const cashflowEntries: BondCashflowEntry[] = [];
   const holdingsV2: BondHoldingV2[] = v1Data.holdings.map((holding) => {
     const terms = bondTermsMap.get(holding.instrumentId);
     const hasTerms = !!terms;
@@ -171,6 +174,11 @@ export async function getBondsPageDataAction(): Promise<
     // Display flows must reflect the actual position size, not the one-lámina
     // basis projectCashFlows() uses for YTM/duration — scale by nominalHeld.
     const scaledFlows = scaleFlowsToHolding(projected, holding.nominalHeld, terms.faceValue);
+    cashflowEntries.push({
+      ticker: holding.ticker,
+      currencyCode: terms.currencyCode,
+      flows: scaledFlows,
+    });
 
     const upcomingFlows: UpcomingFlow[] = scaledFlows.map((f) => ({
       date: f.date,
@@ -192,5 +200,6 @@ export async function getBondsPageDataAction(): Promise<
   return {
     ...v1Data,
     holdings: holdingsV2,
+    bondCashflowOutlook: buildBondCashflowOutlook(cashflowEntries, cclMid),
   };
 }

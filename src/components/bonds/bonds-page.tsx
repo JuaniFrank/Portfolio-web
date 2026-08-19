@@ -65,6 +65,7 @@ export function BondsPage({ data }: Props) {
         cclMid={data.cclMid}
         holdingsCount={data.holdings.length}
         flowsCount={data.flows.length}
+        outlook={data.bondCashflowOutlook}
       />
 
       <Tabs value={tab} onValueChange={setTab}>

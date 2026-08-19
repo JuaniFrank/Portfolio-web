@@ -5,6 +5,8 @@
  * Slice v2: UpcomingFlow, BondAnalytics, BondTermsSummary (analytics + projection)
  */
 
+import type { BondCashflowOutlook } from "./cashflows";
+
 // ---------------------------------------------------------------------------
 // v1 types
 // ---------------------------------------------------------------------------
@@ -128,4 +130,6 @@ export type BondHoldingV2 = BondHolding & {
 
 export type BondsPageDataV2 = Omit<BondsPageData, "holdings"> & {
   holdings: BondHoldingV2[];
+  /** Next payment and current/next-year projections across all holdings with terms. */
+  bondCashflowOutlook: BondCashflowOutlook;
 };

@@ -1,15 +1,17 @@
 "use client";
 
-import { BarChart3, Coins, TrendingUp, Wallet } from "lucide-react";
+import { BarChart3, CalendarClock, Coins, TrendingUp, Wallet } from "lucide-react";
+import type { BondCashflowOutlook } from "@/lib/bonds/cashflows";
 import type { BondKpis } from "@/lib/bonds/types";
 import { cn } from "@/lib/utils";
-import { formatMoney } from "./format";
+import { formatFullDate, formatMoney } from "./format";
 
 type Props = {
   kpis: BondKpis;
   cclMid: string | null;
   holdingsCount: number;
   flowsCount: number;
+  outlook: BondCashflowOutlook;
 };
 
 type Accent = "emerald" | "rose" | "amber" | "violet" | "sky";
@@ -77,8 +79,13 @@ function DualKpi({
   );
 }
 
-export function BondKpiCards({ kpis, cclMid, holdingsCount, flowsCount }: Props) {
+export function BondKpiCards({ kpis, cclMid, holdingsCount, flowsCount, outlook }: Props) {
   const cclSub = cclMid ? `CCL ${formatMoney(cclMid, "ARS")}` : "Sin CCL";
+  const { nextPayment } = outlook;
+  const hasOutlook =
+    nextPayment !== null ||
+    Number(outlook.projectedCurrentYearUsd) > 0 ||
+    Number(outlook.projectedNextYearUsd) > 0;
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -111,6 +118,39 @@ export function BondKpiCards({ kpis, cclMid, holdingsCount, flowsCount }: Props)
         sub="cupones + amortizaciones"
         accent="violet"
       />
+
+      {hasOutlook && (
+        <>
+          <DualKpi
+            icon={CalendarClock}
+            label="Próximo pago"
+            primary={nextPayment ? formatMoney(nextPayment.amountUsd, "USD") : "—"}
+            secondary={nextPayment ? formatMoney(nextPayment.amountArs, "ARS") : "Sin pagos futuros"}
+            sub={
+              nextPayment
+                ? `En ${nextPayment.daysUntil}d · ${formatFullDate(nextPayment.date)} · ${nextPayment.tickers.join(", ")}`
+                : undefined
+            }
+            accent="sky"
+          />
+          <DualKpi
+            icon={CalendarClock}
+            label={`Proyectado ${outlook.currentYear}`}
+            primary={formatMoney(outlook.projectedCurrentYearUsd, "USD")}
+            secondary={formatMoney(outlook.projectedCurrentYearArs, "ARS")}
+            sub="Cupones + amortizaciones restantes del año"
+            accent="emerald"
+          />
+          <DualKpi
+            icon={CalendarClock}
+            label={`Proyectado ${outlook.nextYear}`}
+            primary={formatMoney(outlook.projectedNextYearUsd, "USD")}
+            secondary={formatMoney(outlook.projectedNextYearArs, "ARS")}
+            sub="Cupones + amortizaciones del año siguiente"
+            accent="violet"
+          />
+        </>
+      )}
     </div>
   );
 }
