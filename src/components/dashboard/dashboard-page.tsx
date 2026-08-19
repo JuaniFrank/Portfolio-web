@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   BarChart3,
   Building2,
+  CalendarClock,
   Factory,
   Globe2,
   PieChart as PieChartIcon,
@@ -13,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import type { DashboardData } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
 import { AllocationDonut } from "./allocation-donut";
+import { BondCashflowOutlookCard } from "./bond-cashflow-outlook-card";
 import { ChartCard } from "./chart-card";
 import { ConcentrationCard } from "./concentration-card";
 import { DashboardKpiCards } from "./dashboard-kpis";
@@ -28,6 +30,13 @@ type Props = {
 export function DashboardPage({ data }: Props) {
   const [currency, setCurrency] = useState<ViewCurrency>("ARS");
   const cclMissing = !data.cclRate;
+  const { bondCashflowOutlook } = data;
+  const hasBondOutlook =
+    bondCashflowOutlook.nextPayment !== null ||
+    Number(bondCashflowOutlook.projectedCurrentYearArs) > 0 ||
+    Number(bondCashflowOutlook.projectedCurrentYearUsd) > 0 ||
+    Number(bondCashflowOutlook.projectedNextYearArs) > 0 ||
+    Number(bondCashflowOutlook.projectedNextYearUsd) > 0;
 
   if (!data.hasData) {
     return (
@@ -60,6 +69,17 @@ export function DashboardPage({ data }: Props) {
         />
         <DashboardKpiCards kpis={data.kpis} />
       </section>
+
+      {hasBondOutlook && (
+        <section className="space-y-3">
+          <SectionTitle
+            title="Renta Fija — Próximos Pagos"
+            description="Cupones y amortizaciones que vas a cobrar por tus ONs, según los términos cargados."
+            icon={<CalendarClock className="h-4 w-4" />}
+          />
+          <BondCashflowOutlookCard outlook={bondCashflowOutlook} currency={currency} />
+        </section>
+      )}
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <SectionTitle

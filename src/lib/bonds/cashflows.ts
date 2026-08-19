@@ -280,6 +280,143 @@ export function scaleFlowsToHolding(
 }
 
 // ---------------------------------------------------------------------------
+// v2 — Portfolio-wide cash-flow outlook (dashboard)
+// ---------------------------------------------------------------------------
+
+export type BondCashflowEntry = {
+  ticker: string;
+  /** BondTerms.currencyCode — "USD" or "ARS". */
+  currencyCode: string;
+  /** Future flows already scaled to the actual nominal held (scaleFlowsToHolding). */
+  flows: ProjectedFlow[];
+};
+
+export type NextBondPayment = {
+  /** ISO date (YYYY-MM-DD) of the nearest future payment across all holdings. */
+  date: string;
+  daysUntil: number;
+  amountArs: string;
+  amountUsd: string;
+  /** Tickers paying on this date, alphabetically sorted. */
+  tickers: string[];
+};
+
+export type BondCashflowOutlook = {
+  nextPayment: NextBondPayment | null;
+  currentYear: number;
+  nextYear: number;
+  projectedCurrentYearArs: string;
+  projectedCurrentYearUsd: string;
+  projectedNextYearArs: string;
+  projectedNextYearUsd: string;
+};
+
+/**
+ * Convert a native-currency flow amount to its ARS and USD equivalents.
+ * When cclRate is unavailable, the foreign-currency side is left null rather
+ * than guessed — matches the safe-skip convention used by computeCouponsYtd.
+ */
+function toArsAndUsd(
+  amount: number,
+  currencyCode: string,
+  cclRate: number | null
+): { arsAmount: Decimal | null; usdAmount: Decimal | null } {
+  if (currencyCode === "USD") {
+    const usdAmount = new Decimal(amount);
+    const arsAmount = cclRate && cclRate > 0 ? usdAmount.mul(cclRate) : null;
+    return { arsAmount, usdAmount };
+  }
+  if (currencyCode === "ARS") {
+    const arsAmount = new Decimal(amount);
+    const usdAmount = cclRate && cclRate > 0 ? arsAmount.div(cclRate) : null;
+    return { arsAmount, usdAmount };
+  }
+  return { arsAmount: null, usdAmount: null };
+}
+
+/**
+ * Aggregate every holding's projected flows into a single portfolio-wide
+ * outlook: the nearest upcoming payment (date, amount, which tickers) and the
+ * total projected for the current and next calendar year.
+ *
+ * Flows must already be future-only (projectCashFlows guarantees this) and
+ * scaled to the actual nominal held (scaleFlowsToHolding) — this function
+ * only aggregates and converts currency, it does not filter or scale.
+ */
+export function buildBondCashflowOutlook(
+  entries: BondCashflowEntry[],
+  cclRate: number | null,
+  today: Date = new Date()
+): BondCashflowOutlook {
+  const currentYear = today.getUTCFullYear();
+  const nextYear = currentYear + 1;
+
+  let currentYearArs = new Decimal(0);
+  let currentYearUsd = new Decimal(0);
+  let nextYearArs = new Decimal(0);
+  let nextYearUsd = new Decimal(0);
+
+  const byDate = new Map<
+    string,
+    { arsAmount: Decimal; usdAmount: Decimal; tickers: Set<string> }
+  >();
+
+  for (const entry of entries) {
+    for (const flow of entry.flows) {
+      const { arsAmount, usdAmount } = toArsAndUsd(flow.amount, entry.currencyCode, cclRate);
+      const flowYear = new Date(flow.date).getUTCFullYear();
+
+      if (flowYear === currentYear) {
+        if (arsAmount) currentYearArs = currentYearArs.plus(arsAmount);
+        if (usdAmount) currentYearUsd = currentYearUsd.plus(usdAmount);
+      } else if (flowYear === nextYear) {
+        if (arsAmount) nextYearArs = nextYearArs.plus(arsAmount);
+        if (usdAmount) nextYearUsd = nextYearUsd.plus(usdAmount);
+      }
+
+      const dateKey = flow.date.slice(0, 10);
+      const bucket = byDate.get(dateKey) ?? {
+        arsAmount: new Decimal(0),
+        usdAmount: new Decimal(0),
+        tickers: new Set<string>(),
+      };
+      if (arsAmount) bucket.arsAmount = bucket.arsAmount.plus(arsAmount);
+      if (usdAmount) bucket.usdAmount = bucket.usdAmount.plus(usdAmount);
+      bucket.tickers.add(entry.ticker);
+      byDate.set(dateKey, bucket);
+    }
+  }
+
+  const nextDateKey = Array.from(byDate.keys()).sort()[0];
+  let nextPayment: NextBondPayment | null = null;
+
+  if (nextDateKey) {
+    const bucket = byDate.get(nextDateKey)!;
+    const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+    const daysUntil = Math.round(
+      (new Date(`${nextDateKey}T00:00:00.000Z`).getTime() - todayUtc) / (24 * 60 * 60 * 1000)
+    );
+    nextPayment = {
+      date: nextDateKey,
+      daysUntil,
+      amountArs: bucket.arsAmount.toFixed(2),
+      amountUsd: bucket.usdAmount.toFixed(2),
+      tickers: Array.from(bucket.tickers).sort(),
+    };
+  }
+
+  return {
+    nextPayment,
+    currentYear,
+    nextYear,
+    projectedCurrentYearArs: currentYearArs.toFixed(2),
+    projectedCurrentYearUsd: currentYearUsd.toFixed(2),
+    projectedNextYearArs: nextYearArs.toFixed(2),
+    projectedNextYearUsd: nextYearUsd.toFixed(2),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

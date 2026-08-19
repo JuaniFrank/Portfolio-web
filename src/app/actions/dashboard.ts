@@ -7,6 +7,13 @@ import {
   valuateOnPositions,
 } from "@/lib/bonds/portfolio-bridge";
 import {
+  buildBondCashflowOutlook,
+  projectCashFlows,
+  scaleFlowsToHolding,
+  type BondCashflowEntry,
+  type BondTermsForProjection,
+} from "@/lib/bonds/cashflows";
+import {
   buildDashboardData,
   type HoldingForDashboard,
 } from "@/lib/dashboard/build";
@@ -145,6 +152,37 @@ export async function getDashboardPageDataAction(): Promise<
   const equityHoldings = buildHoldings(trades, prices, eventsMap);
   const onPositions = valuateOnPositions(onBondTrades, onPriceResult, cclRate, onNamesById);
 
+  const bondTermsRows =
+    onPositions.length > 0
+      ? await prisma.bondTerms.findMany({
+          where: { instrumentId: { in: onPositions.map((p) => p.instrumentId) } },
+        })
+      : [];
+  const bondTermsByInstrument = new Map(bondTermsRows.map((t) => [t.instrumentId, t]));
+
+  const cashflowEntries: BondCashflowEntry[] = onPositions.flatMap((p) => {
+    const bt = bondTermsByInstrument.get(p.instrumentId);
+    if (!bt) return [];
+
+    const terms: BondTermsForProjection = {
+      faceValue: bt.faceValue.toString(),
+      currencyCode: bt.currencyCode,
+      rateType: bt.rateType as "FIXED" | "FLOATING",
+      couponRate: bt.couponRate.toString(),
+      couponFrequencyMonths: bt.couponFrequencyMonths,
+      issueDate: bt.issueDate,
+      maturityDate: bt.maturityDate,
+      amortizationSchedule: bt.amortizationSchedule,
+      dayCountConvention: bt.dayCountConvention,
+    };
+    const projected = projectCashFlows(terms);
+    const scaled = scaleFlowsToHolding(projected, p.nominalHeld, terms.faceValue);
+
+    return [{ ticker: p.ticker, currencyCode: terms.currencyCode, flows: scaled }];
+  });
+
+  const bondCashflowOutlook = buildBondCashflowOutlook(cashflowEntries, cclRate);
+
   const rawHoldings: HoldingForDashboard[] = [
     ...equityHoldings.map((h) => ({
       instrumentId: h.instrumentId,
@@ -165,5 +203,6 @@ export async function getDashboardPageDataAction(): Promise<
     portfolioName: portfolio.name,
     rawHoldings,
     cclRate,
+    bondCashflowOutlook,
   });
 }
