@@ -22,7 +22,7 @@ import Decimal from "decimal.js";
 import { prisma } from "@/lib/prisma";
 import type { InstrumentType } from "@/lib/generated/prisma";
 import { EOD_PRICE_SOURCE } from "@/lib/market/history-sync";
-import { buildHoldings, type TradeForHoldings } from "@/lib/transactions/holdings";
+import type { TradeForHoldings } from "@/lib/transactions/holdings";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { buildIndexBenchmark, buildInflationBenchmark } from "./benchmarks";
 import {
@@ -33,7 +33,6 @@ import {
 } from "./cashflows";
 import {
   enumerateMonths,
-  isOnOrBeforeUtcDay,
   monthEnd,
   monthStart,
   toUtcDay,
@@ -41,23 +40,26 @@ import {
 } from "./months";
 import { PriceIndex, TimeSeries } from "./price-series";
 import {
+  accumulateInArs,
+  type PortfolioValuation,
+  type ReplayInputs,
+  valuatePortfolioAt,
+} from "./valuation";
+import {
   annualizeReturn,
   chainReturns,
   combineSubPeriods,
   drawdownFromCumulative,
   findExtremeMonths,
   subPeriodReturn,
-  unrealizedReturn,
 } from "./returns";
 import {
   EXCLUSION_REASONS,
   PERFORMANCE_INSTRUMENT_TYPES,
   type ExcludedHolding,
-  type MonthCoverage,
   type MonthlyPerformanceRow,
   type PerformanceReport,
   type PerformanceSummary,
-  type PositionDetail,
 } from "./types";
 
 const ELIGIBLE_TYPES = new Set<InstrumentType>(PERFORMANCE_INSTRUMENT_TYPES);
@@ -220,116 +222,22 @@ export async function buildPerformanceReport(
 
   // ---- Valuación ----------------------------------------------------------
 
-  type Valuation = {
-    month: MonthKey;
-    valuationDate: Date;
-    cclMonthEnd: number | null;
-    valueArs: number;
-    valueUsd: number;
-    positions: PositionDetail[];
-    coverage: MonthCoverage;
-    staleTickers: string[];
-    unrealizedReturnPct: number | null;
-  };
-
   // Renta acumulada hasta cada cierre. Vive dentro del perímetro en vez de tratarse
   // como salida de capital: un dividendo es retorno generado, no plata que se fue.
-  const incomeArsByDate = accumulateInArs(incomeEvents, ccl);
+  const replayInputs: ReplayInputs = {
+    trades,
+    prices,
+    ccl,
+    eventsByInstrument,
+    incomeArsByDate: accumulateInArs(incomeEvents, ccl),
+  };
 
-  /**
-   * Valúa la cartera al cierre de una fecha cualquiera.
-   *
-   * `windowStart` define desde cuándo un precio se considera "del período": si el
-   * último precio disponible es anterior, viene por arrastre y se marca.
-   */
+  /** La valuación del núcleo, etiquetada con el mes de la fila que va a alimentar. */
+  type Valuation = PortfolioValuation & { month: MonthKey; cclMonthEnd: number | null };
+
   const valuateAt = (valuationDate: Date, month: MonthKey, windowStart: Date): Valuation => {
-    const cutoff = valuationDate.getTime();
-
-    // Comparación por DÍA, no por instante: `tradeDate` se guarda con hora (mediodía
-    // UTC en los imports) y el cierre de mes es medianoche UTC, así que comparar
-    // instantes dejaba las compras del último día del mes fuera de la valuación
-    // mientras su capital sí contaba como flujo — una pérdida inventada del tamaño
-    // exacto de esas compras.
-    const tradesToDate = trades.filter((trade) =>
-      isOnOrBeforeUtcDay(new Date(trade.tradeDate), valuationDate)
-    );
-
-    const priceMap = new Map<string, string>();
-    const staleTickers: string[] = [];
-    let anyPriced = false;
-
-    for (const trade of tradesToDate) {
-      if (priceMap.has(trade.instrumentId)) continue;
-      const hit = prices.asOf(trade.instrumentId, valuationDate);
-      if (!hit) {
-        // Sin precio: `buildHoldings` cae al PPP, o sea que la posición queda
-        // valuada a costo. Es una valuación, pero no una medición.
-        staleTickers.push(trade.ticker);
-        continue;
-      }
-      priceMap.set(trade.instrumentId, String(hit.value));
-      anyPriced = true;
-      // Arrastre: el precio no es de este mes, es el último conocido de antes.
-      if (hit.date.getTime() < windowStart.getTime()) staleTickers.push(trade.ticker);
-    }
-
-    const holdings = buildHoldings(tradesToDate, priceMap, eventsByInstrument);
-    const cclHit = ccl.asOf(valuationDate);
-    const cclMid = cclHit?.value ?? null;
-
-    let holdingsValueArs = new Decimal(0);
-    let costBasisArs = new Decimal(0);
-    for (const holding of holdings) {
-      holdingsValueArs = holdingsValueArs.plus(new Decimal(holding.marketValueArs));
-      costBasisArs = costBasisArs.plus(new Decimal(holding.costBasisArs));
-    }
-
-    // Valor invertido = posiciones a mercado + renta acumulada. Sin efectivo: el saldo
-    // de la cuenta no forma parte del perímetro que se mide.
-    const accumulatedIncomeArs = sumUpTo(incomeArsByDate, cutoff);
-    const valueArs = holdingsValueArs.plus(accumulatedIncomeArs);
-    const valueUsd = cclMid && cclMid > 0 ? valueArs.div(cclMid) : new Decimal(0);
-
-    const positions: PositionDetail[] = holdings.map((holding) => {
-      const valueArsNumber = Number(holding.marketValueArs);
-      const holdingCost = Number(holding.costBasisArs);
-      return {
-        instrumentId: holding.instrumentId,
-        ticker: holding.ticker,
-        instrumentName: holding.instrumentName,
-        instrumentType: holding.instrumentType,
-        quantity: Number(holding.quantity),
-        priceArs: Number(holding.currentPriceArs),
-        valueArs: valueArsNumber,
-        valueUsd: cclMid && cclMid > 0 ? valueArsNumber / cclMid : 0,
-        costBasisArs: holdingCost,
-        unrealizedPnlArs: Number(holding.pnlArs),
-        unrealizedReturnPct: unrealizedReturn(valueArsNumber, holdingCost),
-        priceIsStale: staleTickers.includes(holding.ticker),
-      };
-    });
-
-    const coverage: MonthCoverage =
-      holdings.length === 0
-        ? "empty"
-        : staleTickers.length > 0 || !anyPriced
-          ? "partial"
-          : "full";
-
-    return {
-      month,
-      valuationDate,
-      cclMonthEnd: cclMid,
-      valueArs: valueArs.toNumber(),
-      valueUsd: valueUsd.toNumber(),
-      positions,
-      coverage,
-      staleTickers: [...new Set(staleTickers)],
-      unrealizedReturnPct: unrealizedReturn(
-        holdingsValueArs.toNumber(),
-        costBasisArs.toNumber()
-      ),
-    };
+    const valuation = valuatePortfolioAt(replayInputs, valuationDate, windowStart);
+    return { ...valuation, month, cclMonthEnd: valuation.cclMid };
   };
 
   // ---- Capital y renta por mes, en cada moneda ----------------------------
@@ -500,45 +408,6 @@ export async function buildPerformanceReport(
 // ============================================================
 // RENTA ACUMULADA
 // ============================================================
-
-type DatedAmount = { time: number; amount: Decimal };
-
-/**
- * Expresa cada evento de renta en ARS al CCL **de su propia fecha** y los ordena.
- *
- * Se convierte al momento del cobro y no al cierre del mes porque es un importe
- * histórico: se recibió esa cantidad de pesos ese día. Un evento en dólares sin CCL
- * disponible se descarta en lugar de convertirse a un valor inventado.
- */
-function accumulateInArs(events: MonetaryEvent[], ccl: TimeSeries): DatedAmount[] {
-  const amounts: DatedAmount[] = [];
-
-  for (const event of events) {
-    // Normalizado a día UTC por el mismo motivo que los trades: un dividendo cobrado
-    // el último día del mes se compara contra un cierre a medianoche UTC.
-    const time = toUtcDay(event.date).getTime();
-
-    if (event.currency === "ARS") {
-      amounts.push({ time, amount: new Decimal(event.amount) });
-      continue;
-    }
-    const rate = ccl.asOf(event.date)?.value ?? null;
-    if (!rate || rate <= 0) continue;
-    amounts.push({ time, amount: new Decimal(event.amount * rate) });
-  }
-
-  return amounts.sort((a, b) => a.time - b.time);
-}
-
-/** Suma acumulada hasta `cutoff` inclusive. Asume `amounts` ordenado ascendente. */
-function sumUpTo(amounts: DatedAmount[], cutoff: number): Decimal {
-  let total = new Decimal(0);
-  for (const entry of amounts) {
-    if (entry.time > cutoff) break;
-    total = total.plus(entry.amount);
-  }
-  return total;
-}
 
 // ============================================================
 // FECHAS

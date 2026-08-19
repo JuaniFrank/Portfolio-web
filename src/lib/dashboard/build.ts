@@ -1,5 +1,6 @@
 import Decimal from "decimal.js";
 import type { InstrumentType } from "@/lib/generated/prisma";
+import { EMPTY_EVOLUTION, type PortfolioEvolution } from "./evolution";
 import type {
   AllocationSlice,
   ConcentrationStats,
@@ -93,6 +94,8 @@ export function buildDashboardData(args: {
   cclRate: number | null;
   cashArs?: string;
   cashUsd?: string;
+  /** Serie histórica ya reconstruida. Se pasa entera: acá no se calcula nada. */
+  evolution?: PortfolioEvolution;
 }): DashboardData {
   const { portfolioName, rawHoldings, cclRate } = args;
   const cashArs = new Decimal(args.cashArs ?? "0");
@@ -262,5 +265,6 @@ export function buildDashboardData(args: {
     topGainers,
     topLosers,
     concentration,
+    evolution: args.evolution ?? EMPTY_EVOLUTION,
   };
 }

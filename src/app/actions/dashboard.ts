@@ -10,6 +10,7 @@ import {
   buildDashboardData,
   type HoldingForDashboard,
 } from "@/lib/dashboard/build";
+import { loadPortfolioEvolution } from "@/lib/dashboard/evolution-data";
 import type { DashboardData } from "@/lib/dashboard/types";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { fetchOnPrices } from "@/lib/market/data912";
@@ -137,9 +138,12 @@ export async function getDashboardPageDataAction(): Promise<
 
   const onTickers = Array.from(new Set(onBondTrades.map((t) => t.ticker.toUpperCase())));
 
-  const [{ prices }, onPriceResult] = await Promise.all([
+  // La serie histórica se reconstruye en paralelo con el refresco de cotizaciones:
+  // una es I/O de base y el otro de red, así que el costo se solapa en vez de sumarse.
+  const [{ prices }, onPriceResult, evolution] = await Promise.all([
     refreshLatestQuotes([...uniqueInstruments.values()]),
     onTickers.length > 0 ? fetchOnPrices(onTickers) : Promise.resolve({ quotes: new Map(), stale: false }),
+    loadPortfolioEvolution([portfolio.id]),
   ]);
 
   const equityHoldings = buildHoldings(trades, prices, eventsMap);
@@ -165,5 +169,6 @@ export async function getDashboardPageDataAction(): Promise<
     portfolioName: portfolio.name,
     rawHoldings,
     cclRate,
+    evolution,
   });
 }

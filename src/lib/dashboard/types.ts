@@ -1,4 +1,5 @@
 import type { InstrumentType } from "@/lib/generated/prisma";
+import type { PortfolioEvolution } from "./evolution";
 
 export type DashboardCurrency = "ARS" | "USD";
 
@@ -92,4 +93,6 @@ export type DashboardData = {
   topGainers: TopMover[];
   topLosers: TopMover[];
   concentration: ConcentrationStats;
+  /** Serie histórica reconstruida. Ver `@/lib/dashboard/evolution`. */
+  evolution: PortfolioEvolution;
 };

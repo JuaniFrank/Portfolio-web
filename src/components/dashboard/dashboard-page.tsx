@@ -8,6 +8,7 @@ import {
   Factory,
   Globe2,
   PieChart as PieChartIcon,
+  TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { DashboardData } from "@/lib/dashboard/types";
@@ -17,6 +18,7 @@ import { ChartCard } from "./chart-card";
 import { ConcentrationCard } from "./concentration-card";
 import { DashboardKpiCards } from "./dashboard-kpis";
 import { MARKET_COLORS, type ViewCurrency } from "./format";
+import { PortfolioEvolutionChart } from "./portfolio-evolution";
 import { SectorBars } from "./sector-bars";
 import { TopMovers } from "./top-movers";
 import { ValueByTickerBars } from "./value-bars";
@@ -68,6 +70,14 @@ export function DashboardPage({ data }: Props) {
         />
         <CurrencyToggle value={currency} onChange={setCurrency} disabledUsd={cclMissing} />
       </div>
+
+      <ChartCard
+        title="Evolución del Portfolio"
+        description="Valor reconstruido cierre a cierre. Pasá el mouse por un punto para ver qué posiciones lo movieron."
+        icon={<TrendingUp className="h-4 w-4" />}
+      >
+        <PortfolioEvolutionChart evolution={data.evolution} currency={currency} />
+      </ChartCard>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <ChartCard
