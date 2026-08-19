@@ -255,6 +255,30 @@ export function projectCashFlows(
   return flows;
 }
 
+/**
+ * Scale projected flows (denominated in one lámina of `faceValue`) up to the
+ * actual nominal quantity held.
+ *
+ * projectCashFlows() always computes amounts per one unit of terms.faceValue
+ * — that per-unit basis is what YTM/duration need. Display of expected cash
+ * flows, however, must reflect what the holder actually receives, which
+ * scales linearly with how many nominal units they hold relative to that
+ * single-lámina basis. Price paid (cost basis) is irrelevant here: coupon and
+ * amortization amounts depend only on nominal units held, not on the price
+ * paid for them.
+ */
+export function scaleFlowsToHolding(
+  flows: ProjectedFlow[],
+  nominalHeld: string | number,
+  faceValue: string | number
+): ProjectedFlow[] {
+  const ratio = new Decimal(String(nominalHeld)).div(new Decimal(String(faceValue)));
+  return flows.map((flow) => ({
+    ...flow,
+    amount: new Decimal(flow.amount).mul(ratio).toNumber(),
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
