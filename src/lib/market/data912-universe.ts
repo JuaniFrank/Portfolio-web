@@ -10,6 +10,7 @@
  *   /live/arg_stocks  → STOCK_AR   (~97)
  *   /live/arg_cedears → CEDEAR     (~925, incl. IBIT, SPY, QQQ…)
  *   /live/arg_corp    → ON         (~590)
+ *   /live/usa_stocks  → STOCK_US   (~100)
  *
  * We ingest only the three types the transactions page can display
  * (TRADE_INSTRUMENT_TYPES). Bonds/letras are intentionally skipped.
@@ -18,23 +19,24 @@
 import { InstrumentType } from "@/lib/generated/prisma";
 
 const BASE = "https://data912.com/live";
-// Catalog changes slowly; a 6h fetch cache keeps the self-heal path cheap
+// Catalog changes slowly; a 1h fetch cache keeps the self-heal path cheap
 // without pinning stale data for long.
-const REVALIDATE_SECONDS = 60 * 60 * 6;
+const REVALIDATE_SECONDS = 60 * 60 * 1;
 
 type Data912UniverseItem = { symbol?: unknown; [key: string]: unknown };
 
 export type CatalogInstrument = {
   ticker: string;
   type: InstrumentType;
-  currencyCode: string;
-  venueCode: string;
+  // currencyCode: string;
+  // venueCode: string;
 };
 
 const ENDPOINTS: { path: string; type: InstrumentType }[] = [
-  { path: "arg_stocks", type: InstrumentType.STOCK_AR },
+  { path: "arg_stocks", type: InstrumentType.STOCK_AR,  },
   { path: "arg_cedears", type: InstrumentType.CEDEAR },
   { path: "arg_corp", type: InstrumentType.ON },
+  { path: "usa_stocks", type: InstrumentType.STOCK_US },
 ];
 
 /**
@@ -63,7 +65,8 @@ async function fetchEndpointSymbols(path: string): Promise<string[]> {
     .map((i) => (typeof i.symbol === "string" ? i.symbol.trim().toUpperCase() : ""))
     .filter(Boolean);
 
-  return stripCurrencyVariants([...new Set(symbols)]);
+  // return stripCurrencyVariants([...new Set(symbols)]);
+  return [...new Set(symbols)];
 }
 
 /**
@@ -77,9 +80,7 @@ export async function fetchInstrumentUniverse(): Promise<CatalogInstrument[]> {
       const symbols = await fetchEndpointSymbols(path);
       return symbols.map<CatalogInstrument>((ticker) => ({
         ticker,
-        type,
-        currencyCode: "ARS",
-        venueCode: "BYMA",
+        type
       }));
     })
   );
