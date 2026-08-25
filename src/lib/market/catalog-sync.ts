@@ -21,15 +21,19 @@ const CATALOG_TYPES: InstrumentType[] = [
   InstrumentType.STOCK_AR,
   InstrumentType.CEDEAR,
   InstrumentType.ON,
+  InstrumentType.STOCK_US
 ];
+
+const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 
 function identityKey(i: {
   ticker: string;
   type: InstrumentType;
-  currencyCode: string;
-  venueCode: string | null;
+  // currencyCode: string;
+  // venueCode: string | null;
 }): string {
-  return `${i.ticker}|${i.type}|${i.currencyCode}|${i.venueCode ?? ""}`;
+  // return `${i.ticker}|${i.type}|${i.currencyCode}|${i.venueCode ?? ""}`;
+  return `${i.ticker}|${i.type} ?? ""}`;
 }
 
 export type CatalogSyncResult = {
@@ -41,6 +45,44 @@ export type CatalogSyncResult = {
   renamed: number;
   error?: string;
 };
+
+export type TickerInfo = {
+  ticker?: string;
+  name?: string;
+  country?: string;
+  currency?: string;
+  estimateCurrency?: string;
+  exchange?: string;
+  ipo?: string;
+  marketCapitalization?: number;
+  logo?: string;
+  shareOutstanding?: number;
+  finnhubIndustry?: string;
+  phone?: string;
+  weburl?: string;
+  floatingShare?: number;
+};
+
+/**
+ * Best-effort lookup of the display name from Finnhub. Never throws: if the
+ * key is missing, the request fails, or Finnhub rate-limits us, we just fall
+ * back to the curated/ticker name so a flaky third party can't block creates.
+ */
+async function lookupFinnhubData(ticker: string): Promise<TickerInfo | undefined> {
+  if (!FINNHUB_API_KEY) return undefined;
+
+  try {
+    const res = await fetch(
+      `https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(ticker)}&token=${FINNHUB_API_KEY}`
+    );
+    if (!res.ok) return undefined;
+
+    const tickerInfo: TickerInfo = await res.json();
+    return tickerInfo;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function syncInstrumentCatalog(): Promise<CatalogSyncResult> {
   const universe = await fetchInstrumentUniverse();
@@ -63,25 +105,42 @@ export async function syncInstrumentCatalog(): Promise<CatalogSyncResult> {
   for (const i of universe) wanted.set(identityKey(i), i);
 
   const existing = await prisma.instrument.findMany({
-    where: { venueCode: "BYMA", type: { in: CATALOG_TYPES } },
+    where: { type: { in: CATALOG_TYPES } },
     select: { id: true, ticker: true, type: true, currencyCode: true, venueCode: true, active: true },
   });
   const existingByKey = new Map(existing.map((e) => [identityKey(e), e]));
 
   // --- Creates ---
   const toCreate = [...wanted.values()].filter((i) => !existingByKey.has(identityKey(i)));
+
+  const getVenueCode = (i: CatalogInstrument,finnhubData: TickerInfo | undefined) => {
+    if (finnhubData?.exchange?.includes("NASDAQ")) return "NASDAQ";
+    if (finnhubData?.exchange?.includes("NEW YORK STOCK EXCHANGE")) return "NYSE";
+    if (i.type === "STOCK_AR" || i.type === "ON" || i.type === "CEDEAR") return "BYMA";
+    return null;
+  };
+
   let created = 0;
   if (toCreate.length > 0) {
+    // Resolve every Finnhub lookup FIRST, outside of the db call, so we hand
+    // Prisma a plain array of ready values instead of unresolved Promises.
+    const toCreateData = await Promise.all(
+      toCreate.map(async (i) => {
+        const finnhubData = await lookupFinnhubData(i.ticker);
+        return {
+          ticker: i.ticker,
+          name: finnhubData?.name ?? displayNameFor(i.ticker),
+          type: i.type,
+          venueCode: getVenueCode(i, finnhubData),
+          currencyCode: finnhubData?.currency ?? i.type === "STOCK_US" ? "USD" : "ARS",
+          taxJurisdiction: i.type === "STOCK_US" || i.type === "CEDEAR"  ? "USD" : "ARS",
+          active: true,
+        };
+      })
+    );
+
     const res = await prisma.instrument.createMany({
-      data: toCreate.map((i) => ({
-        ticker: i.ticker,
-        name: displayNameFor(i.ticker),
-        type: i.type,
-        venueCode: i.venueCode,
-        currencyCode: i.currencyCode,
-        taxJurisdiction: i.currencyCode === "ARS" ? "AR" : "US",
-        active: true,
-      })),
+      data: toCreateData,
       skipDuplicates: true,
     });
     created = res.count;
