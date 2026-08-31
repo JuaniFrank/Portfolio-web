@@ -70,6 +70,25 @@ export type PositionDetail = {
   priceIsStale: boolean;
 };
 
+/**
+ * `PositionDetail` más cuánto ganó/perdió ESE ticker puntualmente durante el mes
+ * (ver `attributeMonthlyPositionGains` en `valuation.ts`).
+ *
+ * No confundir con `unrealizedPnlArs`: ese es contra el costo de toda la vida de la
+ * posición, este es contra el cierre del mes anterior. Sumar `monthGainArs` de todas
+ * las filas de un mes sí coincide con `gainArs` de ese mes (menos la renta cobrada,
+ * que no se atribuye por ticker); sumar `unrealizedPnlArs` nunca coincide.
+ */
+export type MonthlyPositionDetail = PositionDetail & {
+  /** Ganancia/pérdida en ARS de este ticker durante el mes. */
+  monthGainArs: number;
+  /**
+   * `monthGainArs` sobre una base comparable: el valor al inicio del mes, o el capital
+   * invertido en el mes si la posición es nueva. `null` si no hay base (mes vacío).
+   */
+  monthReturnPct: number | null;
+};
+
 /** Calidad del dato de un mes. */
 export type MonthCoverage =
   /** Todos los instrumentos con tenencia tenían precio del mes. */
@@ -126,7 +145,7 @@ export type MonthlyPerformanceRow = {
   drawdownArs: number;
   drawdownUsd: number;
 
-  positions: PositionDetail[];
+  positions: MonthlyPositionDetail[];
   coverage: MonthCoverage;
   /** Tickers cuyo precio vino por arrastre en este mes. */
   staleTickers: string[];

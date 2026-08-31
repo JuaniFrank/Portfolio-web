@@ -20,7 +20,7 @@ import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { isOnOrBeforeUtcDay, toUtcDay } from "./months";
 import type { PriceIndex, TimeSeries } from "./price-series";
 import { unrealizedReturn } from "./returns";
-import type { MonthCoverage, PositionDetail } from "./types";
+import type { MonthCoverage, MonthlyPositionDetail, PositionDetail } from "./types";
 import type { MonetaryEvent } from "./cashflows";
 
 /** Importe ya expresado en ARS, fechado al día UTC en que ocurrió. */
@@ -186,6 +186,39 @@ export function accumulateInArs(events: MonetaryEvent[], ccl: TimeSeries): Dated
   }
 
   return amounts.sort((a, b) => a.time - b.time);
+}
+
+/**
+ * Atribuye a cada posición cuánto ganó/perdió puntualmente en el período: valor al
+ * cierre menos valor al cierre anterior menos el capital neto invertido en ese
+ * instrumento durante el período.
+ *
+ * Es la misma identidad que usa `gainArs` a nivel de cartera en `series.ts`
+ * (`valor(fin) − valor(inicio) − capital neto`), aplicada ticker por ticker en vez de
+ * al total. Por eso, y solo por eso, sumar `monthGainArs` de todas las filas de un mes
+ * coincide con la `gainArs` de ese mes (salvo la renta cobrada, que no se atribuye por
+ * ticker acá). `unrealizedPnlArs` — contra el costo de toda la vida — nunca coincide,
+ * y confundir una cosa con la otra fue el origen de este helper.
+ */
+export function attributeMonthlyPositionGains(
+  endPositions: PositionDetail[],
+  startPositions: PositionDetail[],
+  netInvestedByInstrumentArs: Map<string, number>
+): MonthlyPositionDetail[] {
+  const startValueByInstrument = new Map(startPositions.map((p) => [p.instrumentId, p.valueArs]));
+
+  return endPositions.map((position) => {
+    const startValue = startValueByInstrument.get(position.instrumentId) ?? 0;
+    const netInvested = netInvestedByInstrumentArs.get(position.instrumentId) ?? 0;
+    const monthGainArs = position.valueArs - startValue - netInvested;
+
+    // Base para el %: lo que ya había al empezar el mes: si la posición es nueva
+    // (startValue = 0), se mide contra lo que se puso en el mes.
+    const basis = startValue > 0 ? startValue : netInvested;
+    const monthReturnPct = basis > 0 ? (monthGainArs / basis) * 100 : null;
+
+    return { ...position, monthGainArs, monthReturnPct };
+  });
 }
 
 /** Suma acumulada hasta `cutoff` inclusive. Asume `amounts` ordenado ascendente. */

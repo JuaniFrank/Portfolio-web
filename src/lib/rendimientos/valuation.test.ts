@@ -1,8 +1,14 @@
 import Decimal from "decimal.js";
 import { describe, expect, it } from "vitest";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
+import type { PositionDetail } from "./types";
 import { PriceIndex, TimeSeries } from "./price-series";
-import { type ReplayInputs, sumUpTo, valuatePortfolioAt } from "./valuation";
+import {
+  attributeMonthlyPositionGains,
+  type ReplayInputs,
+  sumUpTo,
+  valuatePortfolioAt,
+} from "./valuation";
 
 const utc = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
 
@@ -260,5 +266,77 @@ describe("sumUpTo", () => {
 
   it("acumula todo lo anterior al corte", () => {
     expect(sumUpTo(amounts, utc("2026-03-01").getTime()).toNumber()).toBe(150);
+  });
+});
+
+describe("attributeMonthlyPositionGains", () => {
+  function position(overrides: Partial<PositionDetail> = {}): PositionDetail {
+    return {
+      instrumentId: AAPL,
+      ticker: "AAPL",
+      instrumentName: "Apple",
+      instrumentType: "CEDEAR",
+      quantity: 10,
+      priceArs: 100,
+      valueArs: 1000,
+      valueUsd: 0,
+      costBasisArs: 900,
+      unrealizedPnlArs: 100,
+      unrealizedReturnPct: 11.11,
+      priceIsStale: false,
+      ...overrides,
+    };
+  }
+
+  it("sin compras/ventas en el mes: la ganancia es todo el movimiento de precio", () => {
+    // Caso real que reportó el bug: un ticker que veía ganancia acumulada grande en
+    // enero y termina con pérdida chica en febrero — `unrealizedPnlArs` (contra costo
+    // de toda la vida) no refleja eso, pero `monthGainArs` sí tiene que hacerlo.
+    const start = [position({ valueArs: 5000, unrealizedPnlArs: 4000 })]; // ganancia grande a fin de enero
+    const end = [position({ valueArs: 3000, unrealizedPnlArs: -1000 })]; // pérdida chica a fin de febrero
+
+    const [result] = attributeMonthlyPositionGains(end, start, new Map());
+
+    expect(result!.monthGainArs).toBe(-2000); // 3000 - 5000 - 0
+    expect(result!.monthReturnPct).toBeCloseTo(-40, 5); // -2000 / 5000
+  });
+
+  it("posición nueva (comprada este mes): la base es lo invertido, no el valor inicial", () => {
+    const end = [position({ valueArs: 1100 })];
+
+    const [result] = attributeMonthlyPositionGains(end, [], new Map([[AAPL, 1000]]));
+
+    expect(result!.monthGainArs).toBe(100); // 1100 - 0 - 1000
+    expect(result!.monthReturnPct).toBeCloseTo(10, 5); // 100 / 1000
+  });
+
+  it("resta el capital neto invertido en el ticker durante el mes", () => {
+    // Compró $500 más de AAPL en el mes: ese aumento de valor no es ganancia.
+    const start = [position({ valueArs: 1000 })];
+    const end = [position({ valueArs: 1600 })];
+
+    const [result] = attributeMonthlyPositionGains(end, start, new Map([[AAPL, 500]]));
+
+    expect(result!.monthGainArs).toBe(100); // 1600 - 1000 - 500
+  });
+
+  it("sin base comparable (mes vacío en ambos lados), el % es null", () => {
+    const end = [position({ valueArs: 0 })];
+
+    const [result] = attributeMonthlyPositionGains(end, [], new Map());
+
+    expect(result!.monthGainArs).toBe(0);
+    expect(result!.monthReturnPct).toBeNull();
+  });
+
+  it("no incluye en el resultado un ticker que ya no está al cierre del mes", () => {
+    // Vendido por completo durante el mes: la atribución por ticker no lo puede
+    // mostrar (no hay fila de posición), a diferencia de "Ganancia mes" a nivel
+    // cartera, que sí lo captura. Limitación conocida, no un bug de este helper.
+    const start = [position({ instrumentId: GGAL, valueArs: 1000 })];
+
+    const result = attributeMonthlyPositionGains([], start, new Map());
+
+    expect(result).toEqual([]);
   });
 });
