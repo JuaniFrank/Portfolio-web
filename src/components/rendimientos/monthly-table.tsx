@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, ChevronDown, TableProperties } from "lucide-react";
+import { AlertTriangle, ChevronDown, Info, TableProperties } from "lucide-react";
 import { Fragment, useState } from "react";
 import { ChartCard } from "@/components/dashboard/chart-card";
 import { formatMoney } from "@/components/dashboard/format";
@@ -53,12 +53,42 @@ export function MonthlyTable({
               <tr className="border-b border-zinc-800 text-left text-[11px] uppercase tracking-wide text-zinc-500">
                 <Th>Mes</Th>
                 <Th align="right">CCL cierre</Th>
-                <Th align="right">Valor invertido</Th>
-                <Th align="right">Ganancia mes</Th>
-                <Th align="right">Ganancia acum.</Th>
-                <Th align="right">Rend. mensual</Th>
-                <Th align="right">No realizado</Th>
-                <Th align="right">Rend. acumulado</Th>
+                <Th
+                  align="right"
+                  hint="Posiciones a precio de mercado más la renta acumulada a esa fecha. No incluye el efectivo de la cuenta."
+                >
+                  Valor invertido
+                </Th>
+                <Th
+                  align="right"
+                  hint="Cuánto cambió el valor invertido este mes, neto del capital que pusiste o sacaste (compras − ventas). Incluye la renta cobrada en el mes."
+                >
+                  Ganancia mes
+                </Th>
+                <Th
+                  align="right"
+                  hint="Suma de “Ganancia mes” dentro del período que estás mirando (no desde tu primera operación)."
+                >
+                  Ganancia acum.
+                </Th>
+                <Th
+                  align="right"
+                  hint="Rendimiento porcentual del mes (Modified Dietz), valuando la cartera en cada operación en vez de con un promedio del capital."
+                >
+                  Rend. mensual
+                </Th>
+                <Th
+                  align="right"
+                  hint="Cuánto están arriba o abajo TUS POSICIONES ABIERTAS respecto a su costo promedio, al cierre de este mes. Es una foto, no el rendimiento del mes."
+                >
+                  No realizado
+                </Th>
+                <Th
+                  align="right"
+                  hint="Rendimiento encadenado desde el inicio del período visible — no es la suma de los rendimientos mensuales."
+                >
+                  Rend. acumulado
+                </Th>
                 <Th align="right">Detalle</Th>
               </tr>
             </thead>
@@ -211,10 +241,33 @@ function PositionsDetail({
             <Th>Ticker</Th>
             <Th align="right">Cantidad</Th>
             <Th align="right">Precio</Th>
-            <Th align="right">Valor</Th>
-            <Th align="right">Costo</Th>
-            <Th align="right">Resultado</Th>
-            <Th align="right">%</Th>
+            <Th align="right" hint="Cantidad × precio, al cierre de este mes.">
+              Valor
+            </Th>
+            <Th
+              align="right"
+              hint="Costo promedio de compra (PPC) de toda la posición. Solo cambia si comprás o vendés."
+            >
+              Costo
+            </Th>
+            <Th
+              align="right"
+              hint="Ganancia/pérdida ACUMULADA de esta posición contra su costo promedio, al cierre de este mes. No es lo que ganó este mes — para eso mirá “Result. mes”."
+            >
+              No realizado
+            </Th>
+            <Th align="right" hint="“No realizado” sobre el costo.">
+              %
+            </Th>
+            <Th
+              align="right"
+              hint="Ganancia/pérdida de ESTE ticker durante ESTE mes: precio de cierre vs. precio de cierre del mes anterior (o precio de compra si es nueva), neto de compras/ventas del ticker en el mes. Sumando esta columna en todas las filas da “Ganancia mes”, menos la renta cobrada."
+            >
+              Result. mes
+            </Th>
+            <Th align="right" hint="“Result. mes” sobre la base comparable de ese ticker.">
+              % mes
+            </Th>
           </tr>
         </thead>
         <tbody>
@@ -256,6 +309,12 @@ function PositionsDetail({
                 <Td align="right" className={returnToneClass(position.unrealizedReturnPct)}>
                   {formatSignedPercentOrEmpty(position.unrealizedReturnPct)}
                 </Td>
+                <Td align="right" className={returnToneClass(position.monthGainArs)}>
+                  {formatMoney(position.monthGainArs, "ARS")}
+                </Td>
+                <Td align="right" className={returnToneClass(position.monthReturnPct)}>
+                  {formatSignedPercentOrEmpty(position.monthReturnPct)}
+                </Td>
               </tr>
             ))}
         </tbody>
@@ -271,15 +330,30 @@ function PositionsDetail({
 function Th({
   children,
   align = "left",
+  hint,
 }: {
   children: React.ReactNode;
   align?: "left" | "right";
+  /** Aclaración que aparece al pasar el mouse sobre el ícono de info. */
+  hint?: string;
 }) {
   return (
     <th
       className={cn("px-3 py-2 font-medium", align === "right" ? "text-right" : "text-left")}
     >
-      {children}
+      <span
+        className={cn(
+          "inline-flex items-center gap-1",
+          align === "right" && "flex-row-reverse"
+        )}
+      >
+        {children}
+        {hint ? (
+          <span title={hint}>
+            <Info className="h-3 w-3 shrink-0 cursor-help text-zinc-600" aria-label={hint} />
+          </span>
+        ) : null}
+      </span>
     </th>
   );
 }
