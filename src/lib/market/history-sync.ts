@@ -18,7 +18,7 @@
  *    que falta. Ningún paso depende de que el anterior haya terminado.
  */
 
-import { Prisma, type InstrumentType, type MacroCode } from "@/lib/generated/prisma";
+import { Prisma, type CorporateEventType, type InstrumentType, type MacroCode } from "@/lib/generated/prisma";
 import { prisma } from "@/lib/prisma";
 import { fetchCclHistory, fetchInflationHistory } from "./argentinadatos";
 import { ARGENTINIAN_TYPES } from "./quotes";
@@ -319,9 +319,10 @@ export type PriceSyncResult = SyncResult & {
  * abortar el resto: un ticker sin cobertura no puede impedir que se backfilleen
  * los otros veinte.
  *
- * También compara los splits que reporta Yahoo contra `CorporateEvent` y devuelve
- * los que faltan. **No los inserta**: un split mal cargado corrompe todo el
- * histórico de ese ticker, así que la decisión queda en manos de una persona.
+ * También compara los splits que reporta Yahoo contra `CorporateEvent` y guarda
+ * los que faltan como `SuggestedCorporateEvent` (ver `persistUnregisteredSplits`).
+ * **Nunca crea el `CorporateEvent` real**: un split mal cargado corrompe todo el
+ * histórico de ese ticker, así que aplicarlo queda en manos de una persona.
  */
 export async function syncPriceHistory(
   instruments: InstrumentForHistory[],
@@ -371,8 +372,8 @@ export async function syncPriceHistory(
         const written = await writePriceBars(instrument.id, bars, splits.length > 0);
         return {
           ...written,
-          unregisteredSplits: findUnregisteredSplits(
-            instrument.ticker,
+          unregisteredSplits: await persistUnregisteredSplits(
+            instrument,
             splits,
             registeredByInstrument.get(instrument.id)
           ),
@@ -487,18 +488,73 @@ async function writePriceBars(
   return { fetched: bars.length, inserted, revised: toRevise.length - errors.length, errors };
 }
 
-function findUnregisteredSplits(
-  ticker: string,
+/** `source` persistido en `SuggestedCorporateEvent` para los splits que reporta Yahoo. */
+const YAHOO_SPLIT_SOURCE = "YAHOO_SPLIT";
+
+/**
+ * El tipo de evento no viene en el split de Yahoo — se infiere del tipo de
+ * instrumento igual que lo haría una persona cargándolo a mano: un CEDEAR
+ * reporta cambio de ratio, una acción reporta split o split inverso según el
+ * sentido del ratio.
+ */
+function inferSuggestedEventType(
+  instrumentType: InstrumentType,
+  numerator: number,
+  denominator: number
+): CorporateEventType {
+  if (instrumentType === "CEDEAR") return "CEDEAR_RATIO_CHANGE";
+  return numerator < denominator ? "REVERSE_SPLIT" : "STOCK_SPLIT";
+}
+
+/**
+ * Compara los splits de Yahoo contra los `CorporateEvent` ya registrados y
+ * guarda los que faltan como `SuggestedCorporateEvent` — quedan disponibles en
+ * `/eventos` para que el usuario los revise y decida si aplicarlos. Nunca crea
+ * un `CorporateEvent` directamente: eso sigue siendo una decisión humana.
+ */
+async function persistUnregisteredSplits(
+  instrument: InstrumentForHistory,
   splits: YahooSplitEvent[],
   registeredDays: Set<number> | undefined
-): Array<{ ticker: string; date: string; ratio: string }> {
-  return splits
-    .filter((split) => !registeredDays?.has(split.date.getTime()))
-    .map((split) => ({
-      ticker,
+): Promise<Array<{ ticker: string; date: string; ratio: string }>> {
+  const unregistered = splits.filter((split) => !registeredDays?.has(split.date.getTime()));
+  if (unregistered.length === 0) return [];
+
+  const results: Array<{ ticker: string; date: string; ratio: string }> = [];
+
+  for (const split of unregistered) {
+    const eventType = inferSuggestedEventType(instrument.type, split.numerator, split.denominator);
+    const numerator = new Prisma.Decimal(split.numerator);
+    const denominator = new Prisma.Decimal(split.denominator);
+
+    await prisma.suggestedCorporateEvent.upsert({
+      where: {
+        instrumentId_effectiveDate_eventType: {
+          instrumentId: instrument.id,
+          effectiveDate: split.date,
+          eventType,
+        },
+      },
+      // El ratio puede revisarse en corridas posteriores si Yahoo lo corrige.
+      create: {
+        instrumentId: instrument.id,
+        eventType,
+        effectiveDate: split.date,
+        numerator,
+        denominator,
+        source: YAHOO_SPLIT_SOURCE,
+      },
+      update: { numerator, denominator },
+    });
+
+    results.push({
+      ticker: instrument.ticker,
       date: split.date.toISOString().slice(0, 10),
       ratio: `${split.numerator}:${split.denominator}`,
-    }));
+    });
+  }
+
+  return results;
 }
 
 function describeError(err: unknown): string {

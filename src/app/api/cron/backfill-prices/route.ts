@@ -80,8 +80,9 @@ async function run(): Promise<Response> {
     }
 
     if (unregisteredSplits.length > 0) {
-      // No los insertamos: un split mal cargado corrompe todo el histórico de ese
-      // ticker. Queda visible en el log y en la respuesta para revisarlo a mano.
+      // syncPriceHistory ya los guardó como SuggestedCorporateEvent (ver
+      // persistUnregisteredSplits en history-sync.ts) — quedan visibles en /eventos
+      // para que el usuario decida si aplicarlos. Acá solo quedan en el log.
       console.warn("Splits reportados por Yahoo sin registrar en CorporateEvent", unregisteredSplits);
     }
 
