@@ -184,12 +184,13 @@ model User {
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 
-  portfolios              Portfolio[]
-  brokerAccounts          BrokerAccount[]
-  imports                 ImportBatch[]
-  auditLogs               AuditLog[]
-  tags                    Tag[]
-  corporateEventsCreated  CorporateEvent[] @relation("CorporateEventCreator")
+  portfolios                     Portfolio[]
+  brokerAccounts                 BrokerAccount[]
+  imports                        ImportBatch[]
+  auditLogs                      AuditLog[]
+  tags                           Tag[]
+  corporateEventsCreated         CorporateEvent[]                   @relation("CorporateEventCreator")
+  suggestedEventDismissals       SuggestedCorporateEventDismissal[]
 }
 
 model Portfolio {
@@ -271,10 +272,11 @@ model Instrument {
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
-  transactions     Transaction[]
-  prices           PriceCache[]
-  corporateEvents  CorporateEvent[]
-  bondTerms        BondTerms?
+  transactions              Transaction[]
+  prices                    PriceCache[]
+  corporateEvents           CorporateEvent[]
+  suggestedCorporateEvents  SuggestedCorporateEvent[]
+  bondTerms                 BondTerms?
 
   @@unique([ticker, type, venueCode, currencyCode])
   @@index([type])
@@ -482,6 +484,51 @@ model CorporateEvent {
   @@unique([instrumentId, effectiveDate, eventType])
   @@index([instrumentId])
   @@index([createdByUserId])
+}
+
+/**
+ * Split/ratio-change candidate detected automatically (hoy: comparando los splits
+ * que reporta Yahoo Finance contra `CorporateEvent` durante el backfill de precios).
+ * Es global — la genera el cron y la ven todos los usuarios que tengan el instrumento
+ * en cartera — a diferencia de `CorporateEvent`, que es lo que cada usuario aplicó.
+ *
+ * "Aplicada" no es un campo acá: se considera aplicada cuando existe un
+ * `CorporateEvent` con el mismo instrumentId + effectiveDate + eventType, así que
+ * el estado se deriva en la query y no puede desincronizarse (ver `apply.ts`).
+ */
+model SuggestedCorporateEvent {
+  id            String             @id @default(cuid())
+  instrumentId  String
+  instrument    Instrument         @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  eventType     CorporateEventType
+  effectiveDate DateTime
+  numerator     Decimal            @db.Decimal(20, 8)
+  denominator   Decimal            @db.Decimal(20, 8)
+  /** De dónde salió la detección, ej. "YAHOO_SPLIT". */
+  source        String
+  detectedAt    DateTime           @default(now())
+
+  dismissals SuggestedCorporateEventDismissal[]
+
+  @@unique([instrumentId, effectiveDate, eventType])
+  @@index([instrumentId])
+}
+
+/**
+ * Que un usuario descarte una sugerencia es una preferencia suya, no un hecho
+ * global: los demás usuarios que tengan el mismo instrumento la siguen viendo
+ * como pendiente. Por eso es una tabla aparte y no un campo en la sugerencia.
+ */
+model SuggestedCorporateEventDismissal {
+  id               String                  @id @default(cuid())
+  suggestedEventId String
+  suggestedEvent   SuggestedCorporateEvent @relation(fields: [suggestedEventId], references: [id], onDelete: Cascade)
+  userId           String
+  user             User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dismissedAt      DateTime                @default(now())
+
+  @@unique([suggestedEventId, userId])
+  @@index([userId])
 }
 
 // ============================================================
