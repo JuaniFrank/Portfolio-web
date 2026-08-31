@@ -41,6 +41,7 @@ import {
 import { PriceIndex, TimeSeries } from "./price-series";
 import {
   accumulateInArs,
+  attributeMonthlyPositionGains,
   type PortfolioValuation,
   type ReplayInputs,
   valuatePortfolioAt,
@@ -60,6 +61,7 @@ import {
   type MonthlyPerformanceRow,
   type PerformanceReport,
   type PerformanceSummary,
+  type PositionDetail,
 } from "./types";
 
 const ELIGIBLE_TYPES = new Set<InstrumentType>(PERFORMANCE_INSTRUMENT_TYPES);
@@ -215,10 +217,14 @@ export async function buildPerformanceReport(
     netAmount: Number(tx.netAmount),
     currencyCode: tx.currencyCode,
     instrumentEligible: tx.instrument ? ELIGIBLE_TYPES.has(tx.instrument.type) : false,
+    instrumentId: tx.instrument?.id ?? null,
   }));
 
   const capitalFlows = classifyCapitalFlows(forFlows);
   const incomeEvents = classifyIncome(forFlows);
+  // Capital neto por ticker y por mes: es lo que necesita `attributeMonthlyPositionGains`
+  // para no confundir "compré más" con "ganó valor" dentro de un mismo ticker.
+  const instrumentFlowsByMonth = groupByInstrumentMonth(capitalFlows, ccl);
 
   // ---- Valuación ----------------------------------------------------------
 
@@ -322,11 +328,20 @@ export async function buildPerformanceReport(
   // quiebre intermedios, que solo existen para medir bien los tramos.
   let previousMonthEndArs = 0;
   let previousMonthEndUsd = 0;
+  /** Posiciones al cierre del mes anterior: la base para atribuir la ganancia del mes. */
+  let previousPositions: PositionDetail[] = [];
 
   const rows: MonthlyPerformanceRow[] = months.map((month, index) => {
     const valuation = valuations[monthEndIndex.get(month)!]!;
     const monthFlows = flowsByMonth.get(month);
     const monthIncome = incomeByMonth.get(month);
+
+    const positions = attributeMonthlyPositionGains(
+      valuation.positions,
+      previousPositions,
+      instrumentFlowsByMonth.get(month) ?? new Map()
+    );
+    previousPositions = valuation.positions;
 
     const netInvestedArs = monthFlows?.ars ?? 0;
     const netInvestedUsd = monthFlows?.usd ?? 0;
@@ -367,7 +382,7 @@ export async function buildPerformanceReport(
       unrealizedReturnPct: valuation.unrealizedReturnPct,
       drawdownArs: drawdownArs[index] ?? 0,
       drawdownUsd: drawdownUsd[index] ?? 0,
-      positions: valuation.positions,
+      positions,
       coverage: valuation.coverage,
       staleTickers: valuation.staleTickers,
     };
@@ -479,6 +494,34 @@ function groupByMonth(events: MonetaryEvent[], ccl: TimeSeries): Map<MonthKey, M
     }
 
     byMonth.set(key, entry);
+  }
+
+  return byMonth;
+}
+
+/**
+ * Capital neto en ARS, por instrumento y por mes.
+ *
+ * Sirve para atribuir la ganancia del mes ticker por ticker (`attributeMonthlyPositionGains`):
+ * sin esto, comprar más de un ticker en el mes se vería como "ganó valor" en vez de
+ * "se invirtió más plata en él".
+ */
+function groupByInstrumentMonth(
+  events: MonetaryEvent[],
+  ccl: TimeSeries
+): Map<MonthKey, Map<string, number>> {
+  const byMonth = new Map<MonthKey, Map<string, number>>();
+
+  for (const event of events) {
+    if (!event.instrumentId) continue;
+    const month = monthKeyOf(event.date);
+    const rate = ccl.asOf(event.date)?.value ?? null;
+    const arsAmount =
+      event.currency === "ARS" ? event.amount : rate && rate > 0 ? event.amount * rate : 0;
+
+    const byInstrument = byMonth.get(month) ?? new Map<string, number>();
+    byInstrument.set(event.instrumentId, (byInstrument.get(event.instrumentId) ?? 0) + arsAmount);
+    byMonth.set(month, byInstrument);
   }
 
   return byMonth;
