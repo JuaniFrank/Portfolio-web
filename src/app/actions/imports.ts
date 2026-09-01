@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import {
   commitImportBatch,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/importers/duplicates";
 import { buildImportIdempotencyHash } from "@/lib/importers/idempotency";
 import type { ImportedTransactionRow } from "@/lib/imports/filters";
+import { runMacroBackfill, runPriceBackfill } from "@/lib/market/backfill";
 import { prisma } from "@/lib/prisma";
 import { ImportStatus, TransactionSource } from "@/lib/generated/prisma";
 import type { CommitImportRow, DuplicateStrategy } from "@/lib/importers/types";
@@ -257,9 +259,22 @@ export async function commitImportAction(
 
   if (result.ok) {
     revalidateImportConsumers();
+    // Sin esto, las métricas de /rendimientos quedan vacías hasta la corrida
+    // nocturna de los crons: `after` corre en background, no bloquea la
+    // respuesta del import.
+    after(() => runImportBackfill());
   }
 
   return result;
+}
+
+async function runImportBackfill(): Promise<void> {
+  try {
+    await runMacroBackfill();
+    await runPriceBackfill();
+  } catch (error) {
+    console.error("Backfill post-import error", error);
+  }
 }
 
 // ---------------------------------------------------------------------------
