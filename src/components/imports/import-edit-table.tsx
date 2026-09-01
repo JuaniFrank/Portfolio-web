@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, Filter, Pencil, RotateCcw, Search, X } from "lucide-react";
+import { AlertTriangle, Filter, Pencil, RotateCcw, Search, Sparkles, X } from "lucide-react";
+import { toast } from "sonner";
+import { getAmortizedTickersAction } from "@/app/actions/imports";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +23,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { InstrumentType, TransactionType } from "@/lib/generated/prisma";
+import {
+  AUTO_CLEAR_REASON_LABELS,
+  collectTickers,
+  computeAutoClearMatches,
+  type AutoClearReason,
+} from "@/lib/importers/auto-clear";
 import {
   EDITABLE_CURRENCIES,
   EDITABLE_INSTRUMENT_TYPES,
@@ -83,6 +91,7 @@ export function ImportEditTable({
 }: Props) {
   const [onlyProblems, setOnlyProblems] = useState(false);
   const [filters, setFilters] = useState<RowFilters>(DEFAULT_FILTERS);
+  const [autoClearing, setAutoClearing] = useState(false);
 
   const stats = useMemo(() => computeRowStats(rows, excluded), [rows, excluded]);
 
@@ -170,6 +179,42 @@ export function ImportEditTable({
     onSetExcluded([...new Set([...excluded, ...invalidNumbers])]);
   }
 
+  /**
+   * Pre-excluye filas de bajo valor: depósitos/retiros, ajustes, bonos/letras
+   * (sin histórico de precios) y tickers que ya tienen una amortización
+   * registrada. No borra nada de la base — solo tilda "omitir" en este import,
+   * el usuario puede revertirlo fila por fila antes de confirmar.
+   */
+  async function handleAutoClear() {
+    setAutoClearing(true);
+    try {
+      const tickers = collectTickers(rows);
+      const amortizedResult = await getAmortizedTickersAction(tickers);
+      if ("error" in amortizedResult) {
+        toast.error(amortizedResult.error);
+        return;
+      }
+
+      const matches = computeAutoClearMatches(rows, new Set(amortizedResult));
+      if (matches.length === 0) {
+        toast.info("No hay movimientos para limpiar automáticamente");
+        return;
+      }
+
+      const newlyExcluded = matches.map((m) => m.rowNumber);
+      onSetExcluded([...new Set([...excluded, ...newlyExcluded])]);
+
+      const counts = new Map<AutoClearReason, number>();
+      for (const m of matches) counts.set(m.reason, (counts.get(m.reason) ?? 0) + 1);
+      const summary = [...counts.entries()]
+        .map(([reason, count]) => `${count} ${AUTO_CLEAR_REASON_LABELS[reason]}`)
+        .join(", ");
+      toast.success(`Auto-clear: ${matches.length} movimientos omitidos (${summary})`);
+    } finally {
+      setAutoClearing(false);
+    }
+  }
+
   return (
     <div className="space-y-3">
       {/* Barra de estado + acciones masivas */}
@@ -216,6 +261,18 @@ export function ImportEditTable({
             disabled={stats.invalid === 0}
           >
             Omitir las {stats.invalid} con error
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8"
+            onClick={() => void handleAutoClear()}
+            disabled={autoClearing || rows.length === 0}
+            title="Omite depósitos/retiros, ajustes, bonos/letras y tickers ya amortizados"
+          >
+            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+            {autoClearing ? "Limpiando…" : "Auto-clear"}
           </Button>
           <Button
             type="button"
