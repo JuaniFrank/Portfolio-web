@@ -20,6 +20,7 @@ type Props = {
   byMonth: DividendByMonth[];
   byTicker: DividendByTicker[];
   currency: ViewCurrency;
+  cclToday?: string | null;
 };
 
 const PIE_COLORS = [
@@ -35,33 +36,51 @@ const PIE_COLORS = [
   "#6366f1",
 ];
 
-export function DividendCharts({ byMonth, byTicker, currency }: Props) {
+export function DividendCharts({ byMonth, byTicker, currency, cclToday }: Props) {
   const isArs = currency === "ARS";
+  const ccl = cclToday ? Number(cclToday) : 0;
 
   const monthData = useMemo(
     () =>
-      byMonth.map((m) => ({
-        label: m.label,
-        bruto: Number(isArs ? m.grossArs : m.grossUsd),
-        retencion: Number(isArs ? m.taxArs : m.taxUsd),
-        neto: Number(isArs ? m.netArs : m.netUsd),
-      })),
-    [byMonth, isArs]
+      byMonth.map((m) => {
+        if (isArs) {
+          const bruto = Number(m.grossArs) + (ccl > 0 ? Number(m.grossUsd) * ccl : 0);
+          const retencion = Number(m.taxArs) + (ccl > 0 ? Number(m.taxUsd) * ccl : 0);
+          const neto = Number(m.netArs) + (ccl > 0 ? Number(m.netUsd) * ccl : 0);
+          return { label: m.label, bruto, retencion, neto };
+        } else {
+          const bruto = Number(m.grossUsd) + (ccl > 0 ? Number(m.grossArs) / ccl : 0);
+          const retencion = Number(m.taxUsd) + (ccl > 0 ? Number(m.taxArs) / ccl : 0);
+          const neto = Number(m.netUsd) + (ccl > 0 ? Number(m.netArs) / ccl : 0);
+          return { label: m.label, bruto, retencion, neto };
+        }
+      }),
+    [byMonth, isArs, ccl]
   );
 
   const tickerData = useMemo(() => {
     const rows = byTicker
-      .map((t) => ({
-        ticker: t.ticker,
-        net: Number(isArs ? t.netArs : t.netUsd),
-      }))
+      .map((t) => {
+        let net = 0;
+        if (isArs) {
+          const usdInArs = ccl > 0 ? Number(t.netUsd) * ccl : 0;
+          net = Number(t.netArs) + usdInArs;
+        } else {
+          const arsInUsd = ccl > 0 ? Number(t.netArs) / ccl : 0;
+          net = Number(t.netUsd) + arsInUsd;
+        }
+        return {
+          ticker: t.ticker,
+          net,
+        };
+      })
       .filter((t) => t.net > 0);
     rows.sort((a, b) => b.net - a.net);
     const top = rows.slice(0, 8);
     const restSum = rows.slice(8).reduce((s, r) => s + r.net, 0);
     if (restSum > 0) top.push({ ticker: "Otros", net: restSum });
     return top;
-  }, [byTicker, isArs]);
+  }, [byTicker, isArs, ccl]);
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
