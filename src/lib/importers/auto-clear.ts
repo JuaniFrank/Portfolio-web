@@ -25,6 +25,45 @@ export const AUTO_CLEAR_REASON_LABELS: Record<AutoClearReason, string> = {
   amortized_ticker: "tickers ya amortizados",
 };
 
+export interface AutoClearCategoryMeta {
+  reason: AutoClearReason;
+  title: string;
+  description: string;
+  badge: string;
+  recommended: boolean;
+}
+
+export const AUTO_CLEAR_CATEGORIES: Record<AutoClearReason, AutoClearCategoryMeta> = {
+  cash_movement: {
+    reason: "cash_movement",
+    title: "Movimientos de liquidez",
+    description: "Depósitos y transferencias de dinero. No representan compra/venta de activos ni afectan la rentabilidad de las inversiones.",
+    badge: "Efectivo",
+    recommended: true,
+  },
+  unsupported_instrument: {
+    reason: "unsupported_instrument",
+    title: "Instrumentos sin cotización de mercado",
+    description: "Bonos soberanos y letras en pesos que no cotizan en Yahoo Finance. Omitirlos evita distorsiones o valuaciones en cero.",
+    badge: "Sin cotización",
+    recommended: true,
+  },
+  amortized_ticker: {
+    reason: "amortized_ticker",
+    title: "Tickers amortizados",
+    description: "Títulos que ya fueron amortizados en su totalidad en tu cuenta anteriormente.",
+    badge: "Amortizado",
+    recommended: true,
+  },
+  adjustment: {
+    reason: "adjustment",
+    title: "Ajustes contables del broker",
+    description: "Ajustes de saldo interno, comisiones aisladas o movimientos manuales informados por el broker.",
+    badge: "Ajuste",
+    recommended: true,
+  },
+};
+
 const CASH_TYPES = new Set<TransactionType>([
   TransactionType.DEPOSIT,
   TransactionType.WITHDRAWAL,
@@ -70,6 +109,58 @@ export function computeAutoClearMatches(
   }
 
   return matches;
+}
+
+export interface AutoClearSummary {
+  matches: AutoClearMatch[];
+  byCategory: Record<AutoClearReason, number[]>;
+  counts: Record<AutoClearReason, number>;
+  totalExcluded: number;
+}
+
+export function computeAutoClearSummary(
+  rows: NormalizedImportRow[],
+  amortizedTickers: ReadonlySet<string>
+): AutoClearSummary {
+  const matches = computeAutoClearMatches(rows, amortizedTickers);
+  const byCategory: Record<AutoClearReason, number[]> = {
+    cash_movement: [],
+    unsupported_instrument: [],
+    amortized_ticker: [],
+    adjustment: [],
+  };
+  const counts: Record<AutoClearReason, number> = {
+    cash_movement: 0,
+    unsupported_instrument: 0,
+    amortized_ticker: 0,
+    adjustment: 0,
+  };
+
+  for (const match of matches) {
+    byCategory[match.reason].push(match.rowNumber);
+    counts[match.reason]++;
+  }
+
+  return {
+    matches,
+    byCategory,
+    counts,
+    totalExcluded: matches.length,
+  };
+}
+
+export function getExcludedRowNumbersForCategories(
+  summary: AutoClearSummary,
+  activeCategories: ReadonlySet<AutoClearReason>
+): number[] {
+  const excluded: number[] = [];
+  for (const reason of activeCategories) {
+    const rowNumbers = summary.byCategory[reason];
+    if (rowNumbers) {
+      excluded.push(...rowNumbers);
+    }
+  }
+  return [...new Set(excluded)];
 }
 
 /** Tickers presentes en el archivo, para resolver `amortizedTickers` contra la DB. */
