@@ -16,6 +16,7 @@ componentes y deuda técnica de ese sistema. No necesitás abrir los demás.
 | Dividendos recibidos, retenciones, proyección de pagos | [`sistema-dividendos.md`](./sistema-dividendos.md) |
 | ONs, valuación, TIR/duration, proyección de flujos, BondTerms | [`sistema-bonos.md`](./sistema-bonos.md) |
 | KPIs, gráficos de asignación, concentración, top movers | [`sistema-dashboard.md`](./sistema-dashboard.md) |
+| Serie mensual, TWR, drawdown, benchmarks, switch ARS/USD | [`sistema-rendimientos.md`](./sistema-rendimientos.md) |
 | Sidebar, header, componentes shadcn, paleta, patrones visuales | [`sistema-ui-layout.md`](./sistema-ui-layout.md) |
 | Schema de Prisma, enums, relaciones, migraciones | [`referencia-modelo-de-datos.md`](./referencia-modelo-de-datos.md) |
 | Levantar el proyecto, env vars, comandos, agregar una feature | [`referencia-proyecto.md`](./referencia-proyecto.md) |
@@ -57,6 +58,7 @@ auth ──► gate de TODAS las server actions
 | Dividendos | ✅ Funcional | `/dividends` |
 | Bonos (ONs) | ✅ Funcional (v1 + v2) | `/bonds` |
 | Dashboard | ✅ Funcional | `/dashboard` |
+| Rendimientos | ✅ Funcional | `/rendimientos` |
 | Portfolios | 🚧 Placeholder | `/portfolios` |
 | Brokers | 🚧 Placeholder | `/brokers` |
 | Instrumentos | 🚧 Placeholder | `/instruments` |
