@@ -208,7 +208,7 @@ export async function getTransactionsPageDataAction(): Promise<
 
   const equityHoldings = buildHoldings(tradesForHoldings, latestPrices, eventsMap);
   const onPositions = valuateOnPositions(onBondTrades, onPriceResult, cclRate, onNamesById);
-  const onHoldings = onPositions.map((p) => toHoldingRow(p, cclRate));
+  const onHoldings = onPositions.map((p) => toHoldingRow(p));
   const holdings = [...equityHoldings, ...onHoldings].sort((a, b) =>
     a.ticker.localeCompare(b.ticker)
   );
