@@ -36,6 +36,18 @@ export type HoldingRow = {
   pnlArs: string;
   pnlPercent: string;
   marketValueArs: string;
+  /**
+   * Costo en dólares: cada compra convertida al CCL **de su propia fecha**.
+   *
+   * `null` cuando no hay histórico de CCL para alguna compra. No es lo mismo que el
+   * costo en pesos dividido por el CCL de hoy: esa cuenta borra el movimiento del tipo
+   * de cambio y deja el rendimiento en dólares idéntico al de pesos.
+   */
+  costBasisUsd: string | null;
+  /** Valor a mercado en dólares, al CCL de hoy. `null` sin CCL. */
+  marketValueUsd: string | null;
+  pnlUsd: string | null;
+  pnlPercentUsd: string | null;
 };
 
 export type TransactionsPageData = {
