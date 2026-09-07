@@ -59,6 +59,17 @@ export type InstrumentFlow = {
   /** Día UTC de la operación, en ms. */
   time: number;
   amountArs: number;
+  /**
+   * El mismo capital en dólares, al CCL **del día de la operación**.
+   *
+   * Es lo que permite que la ganancia en dólares del tramo sea una medición y no la
+   * ganancia en pesos dividida por el CCL del cierre: esa cuenta cancela el tipo de
+   * cambio y devuelve el mismo porcentaje en las dos monedas.
+   *
+   * `null` cuando no hay CCL para esa fecha; ahí se cae al CCL del cierre, que es
+   * aproximado pero no deja el tramo sin número.
+   */
+  amountUsd: number | null;
 };
 
 export type EvolutionInputs = ReplayInputs & {
@@ -109,8 +120,16 @@ export type EvolutionPoint = {
   /** Ganancia del período, neta de aportes y retiros. */
   changeArs: number;
   changeUsd: number;
-  /** Rendimiento del tramo. `null` en el primer punto: no hay base. */
+  /** Rendimiento del tramo en pesos. `null` en el primer punto: no hay base. */
   returnPercent: number | null;
+  /**
+   * Rendimiento del tramo medido en dólares. `null` sin base o sin CCL.
+   *
+   * No es `returnPercent` convertido: es el mismo TWR calculado sobre la serie en
+   * dólares. Cuando el CCL se mueve, los dos números difieren — y esa diferencia es
+   * exactamente lo que se quiere ver.
+   */
+  returnPercentUsd: number | null;
   netFlowArs: number;
   netFlowUsd: number;
   coverage: MonthCoverage;
@@ -154,25 +173,39 @@ function round4(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
 
+/** Capital neto de un instrumento en el período, en las dos monedas. */
+type WindowFlow = { ars: number; usd: number };
+
 /**
  * Capital neto por instrumento en `(previousClose, close]`.
  *
  * Se abre en el extremo izquierdo para no contar dos veces una operación que ya entró
  * en el cierre anterior. En el primer punto `previousClose` es `null`, así que entra
  * todo el capital histórico: `V_{t−1}` vale 0 y la ganancia queda contra el costo.
+ *
+ * Cada operación aporta su importe en dólares al CCL de su propia fecha. `cclAtClose`
+ * solo entra como respaldo para las que no lo traen.
  */
 function flowsInWindow(
   flows: InstrumentFlow[],
   previousClose: Date | null,
-  close: Date
-): Map<string, number> {
+  close: Date,
+  cclAtClose: number | null
+): Map<string, WindowFlow> {
   const lowerBound = previousClose?.getTime() ?? Number.NEGATIVE_INFINITY;
   const upperBound = close.getTime();
-  const byInstrument = new Map<string, number>();
+  const byInstrument = new Map<string, WindowFlow>();
 
   for (const flow of flows) {
     if (flow.time <= lowerBound || flow.time > upperBound) continue;
-    byInstrument.set(flow.instrumentId, (byInstrument.get(flow.instrumentId) ?? 0) + flow.amountArs);
+    const usd =
+      flow.amountUsd ??
+      (cclAtClose && cclAtClose > 0 ? flow.amountArs / cclAtClose : 0);
+    const previous = byInstrument.get(flow.instrumentId) ?? { ars: 0, usd: 0 };
+    byInstrument.set(flow.instrumentId, {
+      ars: previous.ars + flow.amountArs,
+      usd: previous.usd + usd,
+    });
   }
 
   return byInstrument;
@@ -193,8 +226,7 @@ function indexPositions(positions: PositionDetail[]): Map<string, PositionDetail
 function computeMovers(
   previous: PositionDetail[],
   current: PositionDetail[],
-  flowsByInstrument: Map<string, number>,
-  cclMid: number | null
+  flowsByInstrument: Map<string, WindowFlow>
 ): { gainers: EvolutionMover[]; losers: EvolutionMover[] } {
   const previousById = indexPositions(previous);
   const currentById = indexPositions(current);
@@ -209,8 +241,13 @@ function computeMovers(
 
     const valueBefore = before?.valueArs ?? 0;
     const valueAfter = after?.valueArs ?? 0;
-    const netFlow = flowsByInstrument.get(instrumentId) ?? 0;
-    const pnlArs = valueAfter - valueBefore - netFlow;
+    const netFlow = flowsByInstrument.get(instrumentId) ?? { ars: 0, usd: 0 };
+    const pnlArs = valueAfter - valueBefore - netFlow.ars;
+
+    // La misma identidad, pero armada con valores en dólares de cada cierre y con el
+    // aporte convertido al CCL del día en que se hizo. Dividir `pnlArs` por el CCL del
+    // cierre daría la ganancia en pesos re-etiquetada, no la ganancia en dólares.
+    const pnlUsd = (after?.valueUsd ?? 0) - (before?.valueUsd ?? 0) - netFlow.usd;
 
     // Sin precio anterior no hay variación: `null`, nunca 0. Un 0 diría "no se movió",
     // y lo que pasa es que no hay con qué comparar.
@@ -222,10 +259,10 @@ function computeMovers(
     movers.push({
       ticker: reference.ticker,
       pnlArs: round2(pnlArs),
-      pnlUsd: cclMid && cclMid > 0 ? round2(pnlArs / cclMid) : 0,
+      pnlUsd: round2(pnlUsd),
       pricePercent: pricePercent === null ? null : round4(pricePercent),
       priceIsStale: after?.priceIsStale ?? true,
-      hadFlow: netFlow !== 0,
+      hadFlow: netFlow.ars !== 0,
     });
   }
 
@@ -276,29 +313,38 @@ function buildSeries(inputs: EvolutionInputs, granularity: Granularity): Evoluti
       : closes[0]!;
 
     const valuation = valuatePortfolioAt(inputs, close, windowStart);
-    const flowsByInstrument = flowsInWindow(inputs.flows, previousClose, close);
+    const flowsByInstrument = flowsInWindow(
+      inputs.flows,
+      previousClose,
+      close,
+      valuation.cclMid
+    );
 
     let netFlowArs = 0;
-    for (const amount of flowsByInstrument.values()) netFlowArs += amount;
-    const netFlowUsd =
-      valuation.cclMid && valuation.cclMid > 0 ? netFlowArs / valuation.cclMid : 0;
+    let netFlowUsd = 0;
+    for (const amount of flowsByInstrument.values()) {
+      netFlowArs += amount.ars;
+      netFlowUsd += amount.usd;
+    }
 
     const previousValueArs = previousValuation?.valueArs ?? 0;
     const previousValueUsd = previousValuation?.valueUsd ?? 0;
 
     const { gainers, losers } = previousValuation
-      ? computeMovers(
-          previousValuation.positions,
-          valuation.positions,
-          flowsByInstrument,
-          valuation.cclMid
-        )
+      ? computeMovers(previousValuation.positions, valuation.positions, flowsByInstrument)
       : { gainers: [], losers: [] };
 
     const returnPercent = previousValuation
       // Mismo TWR de un tramo que usa el motor mensual, ya testeado en `returns.ts`.
       ? subPeriodReturn(previousValueArs, valuation.valueArs, netFlowArs)
       : null;
+
+    // El mismo TWR sobre la serie en dólares. Sin CCL en alguno de los dos extremos no
+    // hay tramo que medir: `null`, no 0.
+    const returnPercentUsd =
+      previousValuation && valuation.cclMid && previousValuation.cclMid
+        ? subPeriodReturn(previousValueUsd, valuation.valueUsd, netFlowUsd)
+        : null;
 
     points.push({
       date: isoDay(close),
@@ -311,6 +357,7 @@ function buildSeries(inputs: EvolutionInputs, granularity: Granularity): Evoluti
         ? round2(valuation.valueUsd - previousValueUsd - netFlowUsd)
         : 0,
       returnPercent: returnPercent === null ? null : round4(returnPercent),
+      returnPercentUsd: returnPercentUsd === null ? null : round4(returnPercentUsd),
       netFlowArs: round2(netFlowArs),
       netFlowUsd: round2(netFlowUsd),
       coverage: valuation.coverage,
