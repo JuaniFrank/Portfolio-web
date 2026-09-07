@@ -11,17 +11,23 @@ import { PerformanceKpis } from "@/components/rendimientos/performance-kpis";
 import { PortfolioVsBenchmark } from "@/components/rendimientos/portfolio-vs-benchmark";
 import { ValueEvolution } from "@/components/rendimientos/value-evolution";
 import { formatDateLong } from "@/components/rendimientos/chart-utils";
-import type { PerformanceReport, ViewCurrency } from "@/lib/rendimientos/types";
+import { useCurrency } from "@/components/providers/currency-provider";
+import type { PerformanceReport } from "@/lib/rendimientos/types";
 import { PERIODS, resolveView, summaryForCurrency, type Period } from "@/lib/rendimientos/view";
 import { cn } from "@/lib/utils";
 
 export function RendimientosPage({ report }: { report: PerformanceReport }) {
   const [period, setPeriod] = useState<Period>("ALL");
-  const [currency, setCurrency] = useState<ViewCurrency>("ARS");
+  const { currency: globalCurrency, setCurrency } = useCurrency();
 
   // La vista en USD depende de tener CCL para todos los meses; si no hay ninguno, el
   // toggle se deshabilita en vez de mostrar una serie de ceros.
   const usdAvailable = report.months.some((row) => row.cclMonthEnd !== null);
+
+  // La preferencia de moneda es global (header), pero si este portfolio no tiene CCL
+  // no hay con qué convertir: se muestra en ARS acá sin tocar la preferencia global,
+  // que vuelve a aplicarse apenas el usuario navegue a un portfolio que sí tenga USD.
+  const currency = usdAvailable ? globalCurrency : "ARS";
 
   const view = useMemo(() => resolveView(report, currency, period), [report, currency, period]);
   const summary = useMemo(
