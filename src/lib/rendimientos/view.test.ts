@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type {
   BenchmarkSeries,
   MonthlyPerformanceRow,
+  MonthlyPositionDetail,
   PerformanceReport,
 } from "./types";
 import {
   benchmarkCumulativeKey,
   benchmarkMonthlyKey,
+  positionFigures,
   resolveView,
   sliceMonths,
   visibleBenchmarks,
@@ -37,6 +39,7 @@ function month(
     cumulativeReturnArs: 0,
     cumulativeReturnUsd: 0,
     unrealizedReturnPct: 0,
+    unrealizedReturnPctUsd: 0,
     drawdownArs: 0,
     drawdownUsd: 0,
     positions: [],
@@ -64,8 +67,8 @@ function report(months: MonthlyPerformanceRow[], benchmarks: BenchmarkSeries[] =
       annualizedReturnUsd: null,
       maxDrawdownArs: 0,
       maxDrawdownUsd: 0,
-      bestMonthArs: null,
-      worstMonthArs: null,
+      bestMonth: null,
+      worstMonth: null,
       monthsTracked: 0,
     },
     excludedHoldings: [],
@@ -242,5 +245,102 @@ describe("visibleBenchmarks", () => {
 
   it("descarta los de otra moneda", () => {
     expect(visibleBenchmarks([base], "USD")).toEqual([]);
+  });
+});
+
+describe("resolveView — el no realizado sigue a la moneda", () => {
+  /**
+   * Es la columna que quedaba clavada: mostraba el no realizado en pesos incluso con la
+   * vista en dólares, así que el toggle de moneda no cambiaba el número.
+   */
+  const report = {
+    portfolioName: "Test",
+    months: [
+      month("2026-01", { unrealizedReturnPct: 50, unrealizedReturnPctUsd: 0 }),
+      month("2026-02", { unrealizedReturnPct: 60, unrealizedReturnPctUsd: 5 }),
+    ],
+    benchmarks: [],
+    summary: {} as PerformanceReport["summary"],
+    excludedHoldings: [],
+    dataQuality: {
+      partialMonths: [],
+      missingCclMonths: [],
+      lastPriceSyncDate: null,
+      seriesFloor: null,
+    },
+  } as unknown as PerformanceReport;
+
+  it("usa el no realizado en pesos en la vista en pesos", () => {
+    const view = resolveView(report, "ARS", "ALL");
+    expect(view.rows.map((row) => row.unrealizedReturn)).toEqual([50, 60]);
+  });
+
+  it("usa el no realizado en dólares en la vista en dólares", () => {
+    const view = resolveView(report, "USD", "ALL");
+    expect(view.rows.map((row) => row.unrealizedReturn)).toEqual([0, 5]);
+  });
+});
+
+describe("positionFigures", () => {
+  function position(
+    overrides: Partial<MonthlyPositionDetail> = {}
+  ): MonthlyPositionDetail {
+    return {
+      instrumentId: "inst-1",
+      ticker: "AAPL",
+      instrumentName: "Apple",
+      instrumentType: "CEDEAR",
+      quantity: 10,
+      priceArs: 150,
+      valueArs: 1500,
+      valueUsd: 1,
+      costBasisArs: 1000,
+      unrealizedPnlArs: 500,
+      unrealizedReturnPct: 50,
+      costBasisUsd: 1,
+      unrealizedPnlUsd: 0,
+      unrealizedReturnPctUsd: 0,
+      priceIsStale: false,
+      monthGainArs: 500,
+      monthReturnPct: 50,
+      monthGainUsd: 0,
+      monthReturnPctUsd: 0,
+      ...overrides,
+    };
+  }
+
+  it("devuelve las cifras en pesos tal cual", () => {
+    const figures = positionFigures(position(), "ARS");
+
+    expect(figures.price).toBe(150);
+    expect(figures.value).toBe(1500);
+    expect(figures.costBasis).toBe(1000);
+    expect(figures.unrealizedReturnPct).toBe(50);
+  });
+
+  it("en dólares no repite el porcentaje de pesos", () => {
+    // El papel subió 50 % en pesos y el CCL acompañó: en dólares la posición no rindió.
+    const figures = positionFigures(position(), "USD");
+
+    expect(figures.value).toBe(1);
+    expect(figures.costBasis).toBe(1);
+    expect(figures.unrealizedReturnPct).toBe(0);
+    expect(figures.monthReturnPct).toBe(0);
+  });
+
+  it("deriva el precio en dólares del valor de la posición", () => {
+    const figures = positionFigures(position(), "USD");
+    expect(figures.price).toBeCloseTo(0.1, 10);
+  });
+
+  it("no muestra números en dólares que no se pudieron medir", () => {
+    const figures = positionFigures(
+      position({ costBasisUsd: null, unrealizedPnlUsd: null, unrealizedReturnPctUsd: null }),
+      "USD"
+    );
+
+    expect(figures.costBasis).toBeNull();
+    expect(figures.unrealizedPnl).toBeNull();
+    expect(figures.unrealizedReturnPct).toBeNull();
   });
 });
