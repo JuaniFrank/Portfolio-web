@@ -22,6 +22,18 @@ export type HoldingForDashboard = {
   marketValueArs: string;
   pnlArs: string;
   pnlPercent: string;
+  /**
+   * Costo en dólares al CCL del día de cada compra. `null` cuando no se pudo medir.
+   *
+   * Es el insumo que hace que el rendimiento en dólares diga algo: dividir el costo en
+   * pesos por el CCL de hoy cancela el tipo de cambio y devuelve el mismo porcentaje
+   * que en pesos.
+   */
+  costBasisUsd: string | null;
+  /** Valor a mercado en dólares, al CCL de hoy. */
+  marketValueUsd: string | null;
+  pnlUsd: string | null;
+  pnlPercentUsd: string | null;
   sector: string | null;
 };
 
@@ -88,6 +100,48 @@ function toUsd(amountArs: Decimal, cclRate: number | null): Decimal {
   return amountArs.div(cclRate);
 }
 
+type UsdFigures = {
+  costBasis: Decimal;
+  marketValue: Decimal;
+  pnl: Decimal;
+  pnlPercent: Decimal;
+  /** El costo se estimó al CCL de hoy: el porcentaje no midió el tipo de cambio. */
+  isApproximate: boolean;
+};
+
+/**
+ * Las cifras en dólares de una posición.
+ *
+ * El valor a mercado va al CCL de hoy — es lo que vale hoy — y el costo al CCL del día
+ * de cada compra. Esa asimetría es justamente lo que hace que el rendimiento en dólares
+ * y el de pesos difieran: si el CCL subió más que el papel, ganaste en pesos y perdiste
+ * en dólares, y esa es la información que se estaba perdiendo.
+ *
+ * Sin histórico de CCL para alguna compra se cae al CCL de hoy y se marca como
+ * aproximado, en lugar de descartar la posición y desbalancear los totales.
+ */
+function usdFiguresFor(h: HoldingForDashboard, cclRate: number | null): UsdFigures {
+  const marketValue =
+    h.marketValueUsd !== null
+      ? new Decimal(h.marketValueUsd)
+      : toUsd(new Decimal(h.marketValueArs), cclRate);
+
+  const isApproximate = h.costBasisUsd === null;
+  const costBasis = isApproximate
+    ? toUsd(new Decimal(h.costBasisArs), cclRate)
+    : new Decimal(h.costBasisUsd!);
+
+  const pnl = h.pnlUsd !== null ? new Decimal(h.pnlUsd) : marketValue.minus(costBasis);
+  const pnlPercent =
+    h.pnlPercentUsd !== null
+      ? new Decimal(h.pnlPercentUsd)
+      : costBasis.isZero()
+        ? new Decimal(0)
+        : pnl.div(costBasis).mul(100);
+
+  return { costBasis, marketValue, pnl, pnlPercent, isApproximate };
+}
+
 export function buildDashboardData(args: {
   portfolioName: string;
   rawHoldings: HoldingForDashboard[];
@@ -101,17 +155,32 @@ export function buildDashboardData(args: {
   const cashArs = new Decimal(args.cashArs ?? "0");
   const cashUsd = new Decimal(args.cashUsd ?? "0");
 
+  const usdByInstrument = new Map<string, UsdFigures>();
   let totalValue = new Decimal(0);
   let totalCost = new Decimal(0);
+  let totalValueUsd = new Decimal(0);
+  let totalCostUsd = new Decimal(0);
+  let usdBasisIsApproximate = false;
+
   for (const h of rawHoldings) {
     totalValue = totalValue.plus(new Decimal(h.marketValueArs));
     totalCost = totalCost.plus(new Decimal(h.costBasisArs));
+
+    const usd = usdFiguresFor(h, cclRate);
+    usdByInstrument.set(h.instrumentId, usd);
+    totalValueUsd = totalValueUsd.plus(usd.marketValue);
+    totalCostUsd = totalCostUsd.plus(usd.costBasis);
+    if (usd.isApproximate) usdBasisIsApproximate = true;
   }
+
   const pnl = totalValue.minus(totalCost);
   const pnlPct = totalCost.isZero() ? new Decimal(0) : pnl.div(totalCost).mul(100);
+  const pnlUsd = totalValueUsd.minus(totalCostUsd);
+  const pnlPctUsd = totalCostUsd.isZero() ? new Decimal(0) : pnlUsd.div(totalCostUsd).mul(100);
 
   const holdings: DashboardHolding[] = rawHoldings.map((h) => {
     const mv = new Decimal(h.marketValueArs);
+    const usd = usdByInstrument.get(h.instrumentId)!;
     return {
       instrumentId: h.instrumentId,
       ticker: h.ticker,
@@ -121,9 +190,11 @@ export function buildDashboardData(args: {
       sector: translateSector(h.sector, h.instrumentType),
       quantity: h.quantity,
       marketValueArs: mv.toFixed(2),
-      marketValueUsd: toUsd(mv, cclRate).toFixed(2),
+      marketValueUsd: usd.marketValue.toFixed(2),
       pnlArs: h.pnlArs,
       pnlPercent: h.pnlPercent,
+      pnlUsd: usd.pnl.toFixed(2),
+      pnlPercentUsd: usd.pnlPercent.toFixed(2),
       weightPercent: pctOf(mv, totalValue),
     };
   });
@@ -198,19 +269,31 @@ export function buildDashboardData(args: {
       ticker: h.ticker,
       instrumentName: h.instrumentName,
       pnlArs: h.pnlArs,
-      pnlUsd: toUsd(new Decimal(h.pnlArs), cclRate).toFixed(2),
+      pnlUsd: h.pnlUsd,
       pnlPercent: h.pnlPercent,
+      pnlPercentUsd: h.pnlPercentUsd,
     }));
 
-  const topGainers = [...moversBase]
-    .filter((m) => Number(m.pnlPercent) > 0)
-    .sort((a, b) => Number(b.pnlPercent) - Number(a.pnlPercent))
-    .slice(0, 5);
+  /**
+   * El ranking se arma por separado en cada moneda a propósito.
+   *
+   * No es el mismo orden reordenado: dos posiciones compradas a distinto CCL pueden
+   * cambiar de puesto —y hasta de signo— al pasar a dólares. Rankear por el porcentaje
+   * en pesos y mostrar el importe en dólares daría una lista que no es de nadie.
+   */
+  const rank = (pick: (m: TopMover) => number, direction: "gainers" | "losers") =>
+    [...moversBase]
+      .filter((m) => (direction === "gainers" ? pick(m) > 0 : pick(m) < 0))
+      .sort((a, b) => (direction === "gainers" ? pick(b) - pick(a) : pick(a) - pick(b)))
+      .slice(0, 5);
 
-  const topLosers = [...moversBase]
-    .filter((m) => Number(m.pnlPercent) < 0)
-    .sort((a, b) => Number(a.pnlPercent) - Number(b.pnlPercent))
-    .slice(0, 5);
+  const byArs = (m: TopMover) => Number(m.pnlPercent);
+  const byUsd = (m: TopMover) => Number(m.pnlPercentUsd);
+
+  const topGainers = rank(byArs, "gainers");
+  const topLosers = rank(byArs, "losers");
+  const topGainersUsd = rank(byUsd, "gainers");
+  const topLosersUsd = rank(byUsd, "losers");
 
   const top5 = holdings.slice(0, 5);
   const top5Pct = top5.reduce((acc, h) => acc.plus(h.weightPercent), new Decimal(0));
@@ -242,12 +325,14 @@ export function buildDashboardData(args: {
 
   const kpis: DashboardKpis = {
     totalInvestedArs: toFixed2(totalCost),
-    totalInvestedUsd: toUsd(totalCost, cclRate).toFixed(2),
+    totalInvestedUsd: toFixed2(totalCostUsd),
     currentValueArs: toFixed2(totalValue),
-    currentValueUsd: toUsd(totalValue, cclRate).toFixed(2),
+    currentValueUsd: toFixed2(totalValueUsd),
     unrealizedPnlArs: toFixed2(pnl),
-    unrealizedPnlUsd: toUsd(pnl, cclRate).toFixed(2),
+    unrealizedPnlUsd: toFixed2(pnlUsd),
     unrealizedPnlPercent: pnlPct.toFixed(2),
+    unrealizedPnlPercentUsd: pnlPctUsd.toFixed(2),
+    usdBasisIsApproximate,
     cashArs: cashArs.toFixed(2),
     cashUsd: cashUsd.toFixed(2),
     totalInstruments: holdings.length,
@@ -264,6 +349,8 @@ export function buildDashboardData(args: {
     allocationBySector,
     topGainers,
     topLosers,
+    topGainersUsd,
+    topLosersUsd,
     concentration,
     evolution: args.evolution ?? EMPTY_EVOLUTION,
   };
