@@ -18,6 +18,7 @@ import {
   type TransactionForFlows,
 } from "@/lib/rendimientos/cashflows";
 import { toUtcDay } from "@/lib/rendimientos/months";
+import { loadCclSeries } from "@/lib/market/ccl-history";
 import { PriceIndex, TimeSeries } from "@/lib/rendimientos/price-series";
 import { PERFORMANCE_INSTRUMENT_TYPES } from "@/lib/rendimientos/types";
 import { accumulateInArs } from "@/lib/rendimientos/valuation";
@@ -40,7 +41,14 @@ function todayUtc(): Date {
   return toUtcDay(new Date());
 }
 
-export async function loadPortfolioEvolution(portfolioIds: string[]): Promise<PortfolioEvolution> {
+/**
+ * @param ccl - Serie de CCL ya cargada. El dashboard la comparte con la valuación de
+ *   posiciones para no leer dos veces la misma tabla; sin ella se lee acá.
+ */
+export async function loadPortfolioEvolution(
+  portfolioIds: string[],
+  ccl?: TimeSeries
+): Promise<PortfolioEvolution> {
   if (portfolioIds.length === 0) return EMPTY;
 
   const transactions = await prisma.transaction.findMany({
@@ -69,17 +77,13 @@ export async function loadPortfolioEvolution(portfolioIds: string[]): Promise<Po
 
   if (eligibleInstrumentIds.length === 0) return EMPTY;
 
-  const [priceRows, cclRows, eventRows] = await Promise.all([
+  const [priceRows, cclLoaded, eventRows] = await Promise.all([
     prisma.priceCache.findMany({
       where: { instrumentId: { in: eligibleInstrumentIds }, source: EOD_PRICE_SOURCE },
       orderBy: { datetime: "asc" },
       select: { instrumentId: true, datetime: true, close: true },
     }),
-    prisma.fxRate.findMany({
-      where: { baseCurrencyCode: "USD", quoteCurrencyCode: "ARS", source: "CCL" },
-      orderBy: { date: "asc" },
-      select: { date: true, mid: true },
-    }),
+    ccl ?? loadCclSeries(),
     prisma.corporateEvent.findMany({
       where: { instrumentId: { in: eligibleInstrumentIds } },
       orderBy: { effectiveDate: "asc" },
@@ -92,6 +96,9 @@ export async function loadPortfolioEvolution(portfolioIds: string[]): Promise<Po
       },
     }),
   ]);
+
+  // Sea la compartida por el dashboard o la que se leyó acá, de acá en más es una sola.
+  const cclSeries = cclLoaded;
 
   const prices = new PriceIndex(
     priceRows.map((row) => ({
@@ -106,10 +113,6 @@ export async function loadPortfolioEvolution(portfolioIds: string[]): Promise<Po
   const tradingDays = [
     ...new Set(priceRows.map((row) => toUtcDay(row.datetime).getTime())),
   ].map((time) => new Date(time));
-
-  const ccl = new TimeSeries(
-    cclRows.map((row) => ({ date: row.date, value: Number(row.mid) }))
-  );
 
   const eventsByInstrument = new Map<string, CorporateEventForBuilder[]>();
   for (const event of eventRows) {
@@ -148,10 +151,16 @@ export async function loadPortfolioEvolution(portfolioIds: string[]): Promise<Po
     // saca. Se toma como ARS igual que `buildHoldings` al armar el costo, para que la
     // resta contra la variación de valor cancele (ver `evolution.ts`).
     const amount = Math.abs(Number(tx.netAmount));
+    const amountArs = tx.type === "BUY" ? amount : -amount;
+    // El CCL del día de la operación, no el del cierre del período: es lo que hace que
+    // la ganancia en dólares del tramo mida el tipo de cambio en vez de cancelarlo.
+    const rate = cclSeries.asOf(tx.tradeDate)?.value ?? null;
+
     flows.push({
       instrumentId: tx.instrument.id,
       time: toUtcDay(tx.tradeDate).getTime(),
-      amountArs: tx.type === "BUY" ? amount : -amount,
+      amountArs,
+      amountUsd: rate && rate > 0 ? amountArs / rate : null,
     });
   }
 
@@ -171,11 +180,11 @@ export async function loadPortfolioEvolution(portfolioIds: string[]): Promise<Po
   return buildEvolutionSeries({
     trades,
     prices,
-    ccl,
+    ccl: cclSeries,
     eventsByInstrument,
     // La renta cobrada vive dentro del perímetro: un dividendo es retorno generado, no
     // plata que se fue.
-    incomeArsByDate: accumulateInArs(classifyIncome(forFlows), ccl),
+    incomeArsByDate: accumulateInArs(classifyIncome(forFlows), cclSeries),
     flows,
     from,
     to,
