@@ -196,6 +196,51 @@ describe("valuatePortfolioAt — USD", () => {
     expect(result.positions[0]!.valueUsd).toBe(0.5);
   });
 
+  it("mide el costo al CCL de la compra y el valor al CCL del cierre", () => {
+    // El papel sube 50 % en pesos y el CCL sube 50 % en el mismo tramo: en dólares la
+    // posición no rindió nada. Con el costo convertido al CCL del cierre los dos
+    // porcentajes darían 50 % y el tipo de cambio no se vería por ningún lado.
+    const result = valuatePortfolioAt(
+      inputs({
+        trades: [buy(AAPL, "AAPL", "2026-01-05", 10, 100)],
+        prices: new PriceIndex([{ instrumentId: AAPL, date: utc("2026-01-31"), close: 150 }]),
+        ccl: new TimeSeries([
+          { date: utc("2026-01-05"), value: 1000 },
+          { date: utc("2026-01-31"), value: 1500 },
+        ]),
+      }),
+      utc("2026-01-31"),
+      utc("2026-01-01")
+    );
+
+    expect(result.costBasisArs).toBe(1000);
+    expect(result.costBasisUsd).toBe(1);
+    expect(result.unrealizedReturnPct).toBeCloseTo(50, 6);
+    expect(result.unrealizedReturnPctUsd).toBeCloseTo(0, 6);
+
+    const position = result.positions[0]!;
+    expect(position.costBasisUsd).toBe(1);
+    expect(position.unrealizedPnlUsd).toBeCloseTo(0, 6);
+    expect(position.unrealizedReturnPctUsd).toBeCloseTo(0, 6);
+  });
+
+  it("no inventa un costo en dólares para compras anteriores al histórico de CCL", () => {
+    const result = valuatePortfolioAt(
+      inputs({
+        trades: [buy(AAPL, "AAPL", "2026-01-05", 10, 100)],
+        prices: new PriceIndex([{ instrumentId: AAPL, date: utc("2026-01-31"), close: 150 }]),
+        // La serie arranca después de la compra.
+        ccl: new TimeSeries([{ date: utc("2026-01-31"), value: 1500 }]),
+      }),
+      utc("2026-01-31"),
+      utc("2026-01-01")
+    );
+
+    expect(result.costBasisUsd).toBeNull();
+    expect(result.unrealizedReturnPctUsd).toBeNull();
+    expect(result.positions[0]!.costBasisUsd).toBeNull();
+  });
+
   it("deja el valor USD en cero cuando no hay CCL", () => {
     const result = valuatePortfolioAt(
       inputs({
@@ -283,6 +328,9 @@ describe("attributeMonthlyPositionGains", () => {
       costBasisArs: 900,
       unrealizedPnlArs: 100,
       unrealizedReturnPct: 11.11,
+      costBasisUsd: null,
+      unrealizedPnlUsd: null,
+      unrealizedReturnPctUsd: null,
       priceIsStale: false,
       ...overrides,
     };
@@ -327,6 +375,34 @@ describe("attributeMonthlyPositionGains", () => {
 
     expect(result!.monthGainArs).toBe(0);
     expect(result!.monthReturnPct).toBeNull();
+  });
+
+  it("atribuye la ganancia del mes también en dólares, con su propio aporte", () => {
+    // Mismo mes, dos monedas: en pesos el ticker ganó, en dólares perdió, porque el
+    // aporte del mes se hizo con el CCL más bajo que el del cierre.
+    const start = [position({ valueArs: 1000, valueUsd: 1 })];
+    const end = [position({ valueArs: 1600, valueUsd: 1.2 })];
+
+    const [result] = attributeMonthlyPositionGains(
+      end,
+      start,
+      new Map([[AAPL, 500]]),
+      new Map([[AAPL, 0.5]])
+    );
+
+    expect(result!.monthGainArs).toBe(100);
+    expect(result!.monthGainUsd).toBeCloseTo(-0.3, 6); // 1,2 − 1 − 0,5
+    expect(result!.monthReturnPctUsd).toBeCloseTo(-30, 6);
+  });
+
+  it("deja el resultado en dólares en null cuando no hay aportes convertidos", () => {
+    const start = [position({ valueArs: 1000, valueUsd: 1 })];
+    const end = [position({ valueArs: 1600, valueUsd: 1.2 })];
+
+    const [result] = attributeMonthlyPositionGains(end, start, new Map([[AAPL, 500]]));
+
+    expect(result!.monthGainUsd).toBeNull();
+    expect(result!.monthReturnPctUsd).toBeNull();
   });
 
   it("no incluye en el resultado un ticker que ya no está al cierre del mes", () => {
