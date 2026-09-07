@@ -336,10 +336,12 @@ export async function buildPerformanceReport(
     const monthFlows = flowsByMonth.get(month);
     const monthIncome = incomeByMonth.get(month);
 
+    const monthInstrumentFlows = instrumentFlowsByMonth.get(month) ?? new Map<string, MonthAmounts>();
     const positions = attributeMonthlyPositionGains(
       valuation.positions,
       previousPositions,
-      instrumentFlowsByMonth.get(month) ?? new Map()
+      new Map([...monthInstrumentFlows].map(([id, amounts]) => [id, amounts.ars])),
+      new Map([...monthInstrumentFlows].map(([id, amounts]) => [id, amounts.usd]))
     );
     previousPositions = valuation.positions;
 
@@ -380,6 +382,7 @@ export async function buildPerformanceReport(
       cumulativeReturnArs: cumulativeArs[index] ?? null,
       cumulativeReturnUsd: cumulativeUsd[index] ?? null,
       unrealizedReturnPct: valuation.unrealizedReturnPct,
+      unrealizedReturnPctUsd: valuation.unrealizedReturnPctUsd,
       drawdownArs: drawdownArs[index] ?? 0,
       drawdownUsd: drawdownUsd[index] ?? 0,
       positions,
@@ -500,17 +503,21 @@ function groupByMonth(events: MonetaryEvent[], ccl: TimeSeries): Map<MonthKey, M
 }
 
 /**
- * Capital neto en ARS, por instrumento y por mes.
+ * Capital neto por instrumento y por mes, en las dos monedas.
  *
  * Sirve para atribuir la ganancia del mes ticker por ticker (`attributeMonthlyPositionGains`):
  * sin esto, comprar más de un ticker en el mes se vería como "ganó valor" en vez de
  * "se invirtió más plata en él".
+ *
+ * Cada operación se convierte al CCL de su propia fecha, igual que el resto del motor.
+ * Convertir el total del mes al CCL del cierre diría que se aportaron los dólares que
+ * ese capital vale hoy, no los que costó.
  */
 function groupByInstrumentMonth(
   events: MonetaryEvent[],
   ccl: TimeSeries
-): Map<MonthKey, Map<string, number>> {
-  const byMonth = new Map<MonthKey, Map<string, number>>();
+): Map<MonthKey, Map<string, MonthAmounts>> {
+  const byMonth = new Map<MonthKey, Map<string, MonthAmounts>>();
 
   for (const event of events) {
     if (!event.instrumentId) continue;
@@ -518,9 +525,15 @@ function groupByInstrumentMonth(
     const rate = ccl.asOf(event.date)?.value ?? null;
     const arsAmount =
       event.currency === "ARS" ? event.amount : rate && rate > 0 ? event.amount * rate : 0;
+    const usdAmount =
+      event.currency === "ARS" ? (rate && rate > 0 ? event.amount / rate : 0) : event.amount;
 
-    const byInstrument = byMonth.get(month) ?? new Map<string, number>();
-    byInstrument.set(event.instrumentId, (byInstrument.get(event.instrumentId) ?? 0) + arsAmount);
+    const byInstrument = byMonth.get(month) ?? new Map<string, MonthAmounts>();
+    const entry = byInstrument.get(event.instrumentId) ?? { ars: 0, usd: 0 };
+    byInstrument.set(event.instrumentId, {
+      ars: entry.ars + arsAmount,
+      usd: entry.usd + usdAmount,
+    });
     byMonth.set(month, byInstrument);
   }
 
@@ -535,6 +548,9 @@ function buildSummary(rows: MonthlyPerformanceRow[]): PerformanceSummary {
   const last = rows.at(-1);
   if (!last) return emptySummary();
 
+  // Los extremos de este resumen son los de la serie en pesos: es el resumen del
+  // reporte completo, antes de que se elija moneda. La UI no lo muestra tal cual —
+  // `resolveView` recalcula el resumen sobre la moneda y el período visibles.
   const extremes = findExtremeMonths(
     rows.map((row) => ({ month: row.month, returnPercent: row.monthlyReturnArs }))
   );
@@ -553,8 +569,8 @@ function buildSummary(rows: MonthlyPerformanceRow[]): PerformanceSummary {
     annualizedReturnUsd: annualizeReturn(last.cumulativeReturnUsd, measuredMonths),
     maxDrawdownArs: Math.min(0, ...rows.map((row) => row.drawdownArs)),
     maxDrawdownUsd: Math.min(0, ...rows.map((row) => row.drawdownUsd)),
-    bestMonthArs: extremes.best,
-    worstMonthArs: extremes.worst,
+    bestMonth: extremes.best,
+    worstMonth: extremes.worst,
     monthsTracked: measuredMonths,
   };
 }
@@ -619,8 +635,8 @@ function emptySummary(): PerformanceSummary {
     annualizedReturnUsd: null,
     maxDrawdownArs: 0,
     maxDrawdownUsd: 0,
-    bestMonthArs: null,
-    worstMonthArs: null,
+    bestMonth: null,
+    worstMonth: null,
     monthsTracked: 0,
   };
 }
