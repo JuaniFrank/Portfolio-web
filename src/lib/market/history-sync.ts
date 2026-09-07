@@ -20,9 +20,17 @@
 
 import { Prisma, type CorporateEventType, type InstrumentType, type MacroCode } from "@/lib/generated/prisma";
 import { prisma } from "@/lib/prisma";
+import { adjustBarsForEvents, type HistoricalBar } from "@/lib/events/apply";
+import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { fetchCclHistory, fetchInflationHistory } from "./argentinadatos";
+import { fetchData912Eod } from "./data912-eod";
 import { ARGENTINIAN_TYPES } from "./quotes";
-import { buildYahooSymbol, fetchYahooHistory, type YahooSplitEvent } from "./yahoo";
+import {
+  buildYahooSymbol,
+  fetchYahooHistory,
+  type YahooHistoryBar,
+  type YahooSplitEvent,
+} from "./yahoo";
 
 /**
  * `source` de las filas EOD en `PriceCache`.
@@ -338,9 +346,18 @@ export async function syncPriceHistory(
 
   const registeredEvents = await prisma.corporateEvent.findMany({
     where: { instrumentId: { in: instruments.map((i) => i.id) } },
-    select: { instrumentId: true, effectiveDate: true },
+    orderBy: { effectiveDate: "asc" },
+    select: {
+      instrumentId: true,
+      eventType: true,
+      effectiveDate: true,
+      numerator: true,
+      denominator: true,
+    },
   });
   const registeredByInstrument = new Map<string, Set<number>>();
+  /** Los mismos eventos en la forma que consume `adjustBarsForEvents`, ya ordenados. */
+  const eventsByInstrument = new Map<string, CorporateEventForBuilder[]>();
   for (const event of registeredEvents) {
     const day = Date.UTC(
       event.effectiveDate.getUTCFullYear(),
@@ -350,6 +367,16 @@ export async function syncPriceHistory(
     const set = registeredByInstrument.get(event.instrumentId) ?? new Set<number>();
     set.add(day);
     registeredByInstrument.set(event.instrumentId, set);
+
+    const list = eventsByInstrument.get(event.instrumentId) ?? [];
+    list.push({
+      instrumentId: event.instrumentId,
+      eventType: event.eventType,
+      effectiveDate: event.effectiveDate.toISOString().slice(0, 10),
+      numerator: event.numerator.toString(),
+      denominator: event.denominator.toString(),
+    });
+    eventsByInstrument.set(event.instrumentId, list);
   }
 
   const perInstrument = await mapWithConcurrency(
@@ -358,10 +385,33 @@ export async function syncPriceHistory(
     async (instrument) => {
       const symbol = buildYahooSymbol(instrument.ticker, ARGENTINIAN_TYPES.has(instrument.type));
       try {
-        const { bars, splits } = await fetchYahooHistory(symbol, {
+        const yahoo = await fetchYahooHistory(symbol, {
           from: opts.from,
           to: new Date(),
+        }).catch((err): { bars: YahooHistoryBar[]; splits: YahooSplitEvent[]; error: string } => ({
+          bars: [],
+          splits: [],
+          error: `${symbol}: ${describeError(err)}`,
+        }));
+
+        const yahooError = "error" in yahoo ? yahoo.error : null;
+        const { bars: yahooBars, splits } = yahoo;
+
+        // Respaldo: data912 entra si Yahoo no trajo nada, o si su serie arranca
+        // después del rango que hace falta (huecos parciales). Ver `data912-history.ts`.
+        const backfill = await backfillFromData912({
+          instrument,
+          events: eventsByInstrument.get(instrument.id) ?? [],
+          yahooBars,
+          requiredFrom: opts.from,
         });
+
+        const bars = mergeBars(yahooBars, backfill.bars);
+        const errors = [yahooError, backfill.error].filter((e): e is string => e !== null);
+
+        if (bars.length === 0) {
+          return { fetched: 0, inserted: 0, revised: 0, errors, unregisteredSplits: [] };
+        }
         // Yahoo **reescribe retroactivamente** toda la serie cuando hay un split o
         // un cambio de ratio de CEDEAR: verificado en SPY.BA, donde el 01/06/2026
         // pasó de 20:1 a 60:1 y los cierres anteriores quedaron divididos por 3, sin
@@ -372,6 +422,7 @@ export async function syncPriceHistory(
         const written = await writePriceBars(instrument.id, bars, splits.length > 0);
         return {
           ...written,
+          errors: [...errors, ...written.errors],
           unregisteredSplits: await persistUnregisteredSplits(
             instrument,
             splits,
@@ -486,6 +537,58 @@ async function writePriceBars(
   }
 
   return { fetched: bars.length, inserted, revised: toRevise.length - errors.length, errors };
+}
+
+/**
+ * Completa la serie con data912 cuando Yahoo no alcanza.
+ *
+ * Dos disparadores:
+ *   1. Yahoo no devolvió ninguna rueda (`META.BA` es el caso testigo: `firstTradeDate`
+ *      nulo y solo la cotización del día).
+ *   2. La serie de Yahoo **arranca después** del rango pedido, así que le falta el
+ *      tramo inicial — el que hace falta para valuar los primeros meses de la posición.
+ *
+ * El ajuste por eventos corporativos NO es opcional: data912 publica el nominal crudo
+ * de cada día mientras que `buildHoldings` trabaja con cantidades ya normalizadas a la
+ * escala post-evento. Sin `adjustBarsForEvents`, un SPY (ratio 3:1) quedaría valuado
+ * al triple en todo el tramo previo al 29/05/2026.
+ */
+async function backfillFromData912(args: {
+  instrument: InstrumentForHistory;
+  events: CorporateEventForBuilder[];
+  yahooBars: YahooHistoryBar[];
+  requiredFrom: Date;
+}): Promise<{ bars: HistoricalBar[]; error: string | null }> {
+  const { instrument, events, yahooBars, requiredFrom } = args;
+
+  const firstYahooBar = yahooBars[0];
+  // Un día de tolerancia: Yahoo puede arrancar el primer día hábil posterior al pedido
+  // sin que eso sea un hueco real.
+  const coversStart =
+    firstYahooBar !== undefined &&
+    firstYahooBar.date.getTime() <= requiredFrom.getTime() + 24 * 60 * 60 * 1000;
+
+  if (coversStart) return { bars: [], error: null };
+
+  const { bars, error } = await fetchData912Eod(instrument.ticker, instrument.type);
+  if (bars.length === 0) return { bars: [], error };
+
+  return { bars: adjustBarsForEvents(bars, events), error: null };
+}
+
+/**
+ * Une ambas fuentes. **Yahoo gana en las fechas solapadas**: ya viene reescrito
+ * retroactivamente por el propio proveedor, así que es el que menos depende de que
+ * nuestros `CorporateEvent` estén completos.
+ */
+function mergeBars(yahooBars: YahooHistoryBar[], fallbackBars: HistoricalBar[]): HistoricalBar[] {
+  if (fallbackBars.length === 0) return yahooBars;
+
+  const byDay = new Map<number, HistoricalBar>();
+  for (const bar of fallbackBars) byDay.set(bar.date.getTime(), bar);
+  for (const bar of yahooBars) byDay.set(bar.date.getTime(), bar);
+
+  return [...byDay.values()].sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
 /** `source` persistido en `SuggestedCorporateEvent` para los splits que reporta Yahoo. */
