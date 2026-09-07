@@ -133,8 +133,8 @@ export function DashboardPage({ data }: Props) {
         />
         <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
           <TopMovers
-            gainers={data.topGainers}
-            losers={data.topLosers}
+            gainers={currency === "ARS" ? data.topGainers : data.topGainersUsd}
+            losers={currency === "ARS" ? data.topLosers : data.topLosersUsd}
             currency={currency}
           />
           <ConcentrationCard stats={data.concentration} />

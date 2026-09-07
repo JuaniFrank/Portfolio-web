@@ -27,7 +27,7 @@ export function ValueByTickerBars({ holdings, currency }: Props) {
         ticker: h.ticker,
         value: Number(currency === "ARS" ? h.marketValueArs : h.marketValueUsd),
         percent: h.weightPercent,
-        pnlPercent: h.pnlPercent,
+        pnlPercent: currency === "ARS" ? h.pnlPercent : h.pnlPercentUsd,
         color: CHART_COLORS[i % CHART_COLORS.length]!,
       })),
     [holdings, currency]
