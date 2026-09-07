@@ -15,6 +15,7 @@ import type { DashboardData } from "@/lib/dashboard/types";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { fetchOnPrices } from "@/lib/market/data912";
 import { resolveCclRate } from "@/lib/market/ccl-rate";
+import { cclLookupFrom, loadCclSeries } from "@/lib/market/ccl-history";
 import { refreshLatestQuotes, type InstrumentForQuote } from "@/lib/market/quotes";
 import { prisma } from "@/lib/prisma";
 import {
@@ -43,7 +44,7 @@ export async function getDashboardPageDataAction(): Promise<
     });
   }
 
-  const [rows, cclRate, eventRows] = await Promise.all([
+  const [rows, cclRate, cclSeries, eventRows] = await Promise.all([
     prisma.transaction.findMany({
       where: {
         portfolioId: portfolio.id,
@@ -65,6 +66,7 @@ export async function getDashboardPageDataAction(): Promise<
       },
     }),
     resolveCclRate(),
+    loadCclSeries(),
     prisma.corporateEvent.findMany({
       where: {
         instrument: {
@@ -143,11 +145,21 @@ export async function getDashboardPageDataAction(): Promise<
   const [{ prices }, onPriceResult, evolution] = await Promise.all([
     refreshLatestQuotes([...uniqueInstruments.values()]),
     onTickers.length > 0 ? fetchOnPrices(onTickers) : Promise.resolve({ quotes: new Map(), stale: false }),
-    loadPortfolioEvolution([portfolio.id]),
+    loadPortfolioEvolution([portfolio.id], cclSeries),
   ]);
 
-  const equityHoldings = buildHoldings(trades, prices, eventsMap);
-  const onPositions = valuateOnPositions(onBondTrades, onPriceResult, cclRate, onNamesById);
+  // El costo de cada posición se replaya contra el CCL del día de cada compra; el valor
+  // a mercado va al CCL de hoy. Esa asimetría es lo que hace que el rendimiento en
+  // dólares mida algo distinto del de pesos.
+  const cclAt = cclLookupFrom(cclSeries);
+
+  const equityHoldings = buildHoldings(trades, prices, eventsMap, {
+    cclAt,
+    currentCcl: cclRate,
+  });
+  const onPositions = valuateOnPositions(onBondTrades, onPriceResult, cclRate, onNamesById, {
+    cclAt,
+  });
 
   const rawHoldings: HoldingForDashboard[] = [
     ...equityHoldings.map((h) => ({
@@ -160,9 +172,13 @@ export async function getDashboardPageDataAction(): Promise<
       marketValueArs: h.marketValueArs,
       pnlArs: h.pnlArs,
       pnlPercent: h.pnlPercent,
+      costBasisUsd: h.costBasisUsd,
+      marketValueUsd: h.marketValueUsd,
+      pnlUsd: h.pnlUsd,
+      pnlPercentUsd: h.pnlPercentUsd,
       sector: sectorByInstrument.get(h.instrumentId) ?? null,
     })),
-    ...onPositions.map((p) => toDashboardHolding(p, cclRate)),
+    ...onPositions.map((p) => toDashboardHolding(p)),
   ];
 
   return buildDashboardData({
