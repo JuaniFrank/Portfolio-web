@@ -11,8 +11,13 @@ import {
 } from "@/components/rendimientos/chart-utils";
 import { formatMonthLabel } from "@/lib/rendimientos/months";
 import type { MonthlyPerformanceRow, ViewCurrency } from "@/lib/rendimientos/types";
-import type { MonthlyChartRow } from "@/lib/rendimientos/view";
+import { positionFigures, type MonthlyChartRow } from "@/lib/rendimientos/view";
 import { cn } from "@/lib/utils";
+
+/** Un número que no se pudo medir en la moneda activa se muestra vacío, no en cero. */
+function formatMoneyOrEmpty(value: number | null, currency: ViewCurrency): string {
+  return value === null ? EMPTY_VALUE : formatMoney(value, currency);
+}
 
 /**
  * Tabla mensual con el detalle de posiciones desplegable.
@@ -246,7 +251,7 @@ function PositionsDetail({
             </Th>
             <Th
               align="right"
-              hint="Costo promedio de compra (PPC) de toda la posición. Solo cambia si comprás o vendés."
+              hint="Costo promedio de compra (PPC) de toda la posición. Solo cambia si comprás o vendés. En dólares, cada compra va al CCL del día en que se hizo."
             >
               Costo
             </Th>
@@ -273,7 +278,9 @@ function PositionsDetail({
         <tbody>
           {[...positions]
             .sort((a, b) => b.valueArs - a.valueArs)
-            .map((position) => (
+            .map((position) => {
+              const figures = positionFigures(position, currency);
+              return (
               <tr key={position.instrumentId} className="border-t border-zinc-800/50">
                 <Td>
                   <span className="flex items-center gap-1.5">
@@ -292,36 +299,35 @@ function PositionsDetail({
                   {position.quantity.toLocaleString("es-AR", { maximumFractionDigits: 4 })}
                 </Td>
                 <Td align="right" className="text-zinc-400">
-                  {formatMoney(position.priceArs, "ARS")}
+                  {formatMoneyOrEmpty(figures.price, currency)}
                 </Td>
                 <Td align="right" className="text-zinc-200">
-                  {formatMoney(
-                    currency === "ARS" ? position.valueArs : position.valueUsd,
-                    currency
-                  )}
+                  {formatMoney(figures.value, currency)}
                 </Td>
                 <Td align="right" className="text-zinc-500">
-                  {formatMoney(position.costBasisArs, "ARS")}
+                  {formatMoneyOrEmpty(figures.costBasis, currency)}
                 </Td>
-                <Td align="right" className={returnToneClass(position.unrealizedPnlArs)}>
-                  {formatMoney(position.unrealizedPnlArs, "ARS")}
+                <Td align="right" className={returnToneClass(figures.unrealizedPnl)}>
+                  {formatMoneyOrEmpty(figures.unrealizedPnl, currency)}
                 </Td>
-                <Td align="right" className={returnToneClass(position.unrealizedReturnPct)}>
-                  {formatSignedPercentOrEmpty(position.unrealizedReturnPct)}
+                <Td align="right" className={returnToneClass(figures.unrealizedReturnPct)}>
+                  {formatSignedPercentOrEmpty(figures.unrealizedReturnPct)}
                 </Td>
-                <Td align="right" className={returnToneClass(position.monthGainArs)}>
-                  {formatMoney(position.monthGainArs, "ARS")}
+                <Td align="right" className={returnToneClass(figures.monthGain)}>
+                  {formatMoneyOrEmpty(figures.monthGain, currency)}
                 </Td>
-                <Td align="right" className={returnToneClass(position.monthReturnPct)}>
-                  {formatSignedPercentOrEmpty(position.monthReturnPct)}
+                <Td align="right" className={returnToneClass(figures.monthReturnPct)}>
+                  {formatSignedPercentOrEmpty(figures.monthReturnPct)}
                 </Td>
               </tr>
-            ))}
+              );
+            })}
         </tbody>
       </table>
       <p className="text-[10px] text-zinc-600">
-        Precio, costo y resultado de las posiciones se muestran en ARS, que es la moneda en
-        la que se registran las operaciones.
+        En dólares, el valor de cada cierre va al CCL de ese cierre y el costo al CCL del
+        día de cada compra. Un guion significa que alguna compra quedó fuera del histórico
+        de CCL y ese número no se puede medir en dólares.
       </p>
     </div>
   );
