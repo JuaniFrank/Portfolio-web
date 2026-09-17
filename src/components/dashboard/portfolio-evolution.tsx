@@ -412,7 +412,10 @@ function GranularityToggle({
 function EvolutionTooltip({ row, currency }: { row: ChartRow; currency: ViewCurrency }) {
   const change = currency === "ARS" ? row.changeArs : row.changeUsd;
   const netFlow = currency === "ARS" ? row.netFlowArs : row.netFlowUsd;
-  const hasBase = row.returnPercent !== null;
+  // Cada moneda tiene su propio rendimiento: el de dólares mide contra el CCL de cada
+  // cierre, así que un tramo puede ser verde en pesos y rojo en dólares.
+  const returnPercent = currency === "ARS" ? row.returnPercent : row.returnPercentUsd;
+  const hasBase = returnPercent !== null;
   const hasFlowMarker = [...row.gainers, ...row.losers].some((mover) => mover.hadFlow);
 
   return (
@@ -431,7 +434,7 @@ function EvolutionTooltip({ row, currency }: { row: ChartRow; currency: ViewCurr
         <span className={cn("font-medium tabular-nums", returnToneClass(hasBase ? change : null))}>
           {hasBase ? formatSignedMoney(change, currency) : EMPTY_VALUE}
           <span className="ml-1.5 text-[11px] text-zinc-500">
-            {formatSignedPercentOrEmpty(row.returnPercent)}
+            {formatSignedPercentOrEmpty(returnPercent)}
           </span>
         </span>
       </div>

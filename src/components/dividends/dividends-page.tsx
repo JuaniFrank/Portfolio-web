@@ -54,7 +54,12 @@ export function DividendsPage({ data }: Props) {
 
       <DividendCalendar months={data.calendar} currency={currency} />
 
-      <DividendCharts byMonth={data.byMonth} byTicker={data.byTicker} currency={currency} />
+      <DividendCharts
+        byMonth={data.byMonth}
+        byTicker={data.byTicker}
+        currency={currency}
+        cclToday={data.cclToday}
+      />
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="h-auto w-full justify-start gap-1 bg-transparent p-0">
@@ -72,7 +77,11 @@ export function DividendsPage({ data }: Props) {
           </TabsTrigger>
         </TabsList>
         <TabsContent value="calendario" className="mt-4">
-          <DividendByTickerTable rows={data.byTicker} currency={currency} />
+          <DividendByTickerTable
+            rows={data.byTicker}
+            currency={currency}
+            cclToday={data.cclToday}
+          />
         </TabsContent>
         <TabsContent value="historial" className="mt-4">
           <DividendHistoryTable rows={data.received} />

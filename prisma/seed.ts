@@ -377,10 +377,11 @@ async function main() {
   await upsertCashInstrument({ ticker: "CASH-ARS", name: "Efectivo ARS", currencyCode: "ARS" });
   await upsertCashInstrument({ ticker: "CASH-USD", name: "Efectivo USD", currencyCode: "USD" });
 
-  // 6. Known public corporate actions (FR-15). Loaded from RECOMMENDED_EVENTS
-  // — the single source shared with resolveApplicableRecommendations, so the
-  // recommendation card and the seeded fact can never disagree. createdByUserId
-  // is null: this is a global fact about the instrument, not a user record
+  // 6. Known public corporate actions (FR-15), loaded from RECOMMENDED_EVENTS.
+  // Seeded as real CorporateEvent rows so main's SuggestedCorporateEvent
+  // auto-detection never re-suggests them (it skips instruments that already
+  // have a matching CorporateEvent). createdByUserId is null: this is a
+  // global fact about the instrument, not a user record
   // (schema comment on CorporateEvent.createdByUserId).
   for (const rec of RECOMMENDED_EVENTS) {
     const instrument = await prisma.instrument.upsert({

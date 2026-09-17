@@ -14,6 +14,7 @@ import type {
   BenchmarkKey,
   BenchmarkSeries,
   MonthlyPerformanceRow,
+  MonthlyPositionDetail,
   PerformanceReport,
   PerformanceSummary,
   ViewCurrency,
@@ -131,7 +132,9 @@ export function resolveView(
       cumulativeGain,
       monthlyReturn: monthlyReturns[index] ?? null,
       cumulativeReturn: cumulativeReturns[index] ?? null,
-      unrealizedReturn: row.unrealizedReturnPct,
+      // Cada moneda tiene su propio no realizado: el de dólares mide el costo al CCL de
+      // cada compra contra el valor al CCL del cierre.
+      unrealizedReturn: isArs ? row.unrealizedReturnPct : row.unrealizedReturnPctUsd,
       drawdown: drawdowns[index] ?? 0,
       cclMonthEnd: row.cclMonthEnd,
       coverage: row.coverage,
@@ -193,8 +196,8 @@ function summarize(
       annualizedReturnUsd: null,
       maxDrawdownArs: 0,
       maxDrawdownUsd: 0,
-      bestMonthArs: null,
-      worstMonthArs: null,
+      bestMonth: null,
+      worstMonth: null,
       monthsTracked: 0,
     };
   }
@@ -223,8 +226,8 @@ function summarize(
     annualizedReturnUsd: isArs ? null : annualizeReturn(cumulativeReturn, measuredMonths),
     maxDrawdownArs: isArs ? maxDrawdown : 0,
     maxDrawdownUsd: isArs ? 0 : maxDrawdown,
-    bestMonthArs: extremes.best,
-    worstMonthArs: extremes.worst,
+    bestMonth: extremes.best,
+    worstMonth: extremes.worst,
     monthsTracked: measuredMonths,
   };
 }
@@ -239,8 +242,57 @@ export function summaryForCurrency(summary: PerformanceSummary, currency: ViewCu
     netInvested: isArs ? summary.netInvestedArs : summary.netInvestedUsd,
     annualizedReturn: isArs ? summary.annualizedReturnArs : summary.annualizedReturnUsd,
     maxDrawdown: isArs ? summary.maxDrawdownArs : summary.maxDrawdownUsd,
-    bestMonth: summary.bestMonthArs,
-    worstMonth: summary.worstMonthArs,
+    bestMonth: summary.bestMonth,
+    worstMonth: summary.worstMonth,
     monthsTracked: summary.monthsTracked,
+  };
+}
+
+/** Las cifras de una fila de posición, ya resueltas a la moneda activa. */
+export type PositionFigures = {
+  /** `null` cuando no se puede expresar en la moneda pedida. */
+  price: number | null;
+  value: number;
+  costBasis: number | null;
+  unrealizedPnl: number | null;
+  unrealizedReturnPct: number | null;
+  monthGain: number | null;
+  monthReturnPct: number | null;
+};
+
+/**
+ * Resuelve una fila de posición a la moneda elegida.
+ *
+ * En dólares no se convierte nada acá: el motor ya trae el costo al CCL del día de cada
+ * compra y el valor al CCL del cierre. Dividir las cifras en pesos por un único tipo de
+ * cambio sería el bug que esto evita — el porcentaje saldría idéntico al de pesos.
+ *
+ * El precio en dólares se deriva del valor de la posición en vez de guardarse aparte:
+ * es el mismo cociente y evita arrastrar el CCL de cada cierre hasta la UI.
+ */
+export function positionFigures(
+  position: MonthlyPositionDetail,
+  currency: ViewCurrency
+): PositionFigures {
+  if (currency === "ARS") {
+    return {
+      price: position.priceArs,
+      value: position.valueArs,
+      costBasis: position.costBasisArs,
+      unrealizedPnl: position.unrealizedPnlArs,
+      unrealizedReturnPct: position.unrealizedReturnPct,
+      monthGain: position.monthGainArs,
+      monthReturnPct: position.monthReturnPct,
+    };
+  }
+
+  return {
+    price: position.quantity > 0 ? position.valueUsd / position.quantity : null,
+    value: position.valueUsd,
+    costBasis: position.costBasisUsd,
+    unrealizedPnl: position.unrealizedPnlUsd,
+    unrealizedReturnPct: position.unrealizedReturnPctUsd,
+    monthGain: position.monthGainUsd,
+    monthReturnPct: position.monthReturnPctUsd,
   };
 }

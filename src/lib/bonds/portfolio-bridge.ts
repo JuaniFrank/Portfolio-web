@@ -9,7 +9,7 @@ import type { HoldingForDashboard } from "@/lib/dashboard/build";
 import type { FetchOnPricesResult } from "@/lib/market/data912";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
 import type { HoldingRow } from "@/lib/transactions/types";
-import { buildBondHoldings, type TradeForBondHoldings } from "./holdings";
+import { buildBondHoldings, type FxForBondHoldings, type TradeForBondHoldings } from "./holdings";
 import { markToMarket } from "./valuation";
 
 export type ValuatedOnPosition = {
@@ -20,11 +20,39 @@ export type ValuatedOnPosition = {
   instrumentName: string;
   nominalHeld: string;
   costBasisUsd: string;
+  /** Costo en pesos al CCL del día de cada compra. Ver `costBasisArsOf`. */
+  costBasisArs: string;
+  /**
+   * El costo en pesos salió del CCL de hoy porque falta histórico. El rendimiento en
+   * pesos que se derive de él va a parecerse al de dólares: no midió el tipo de cambio.
+   */
+  arsBasisIsApproximate: boolean;
   marketValueArs: string;
   marketValueUsd: string | null;
   pnlArs: string;
   pnlPercent: string;
+  pnlUsd: string | null;
+  pnlPercentUsd: string | null;
 };
+
+/**
+ * Costo en pesos de la posición.
+ *
+ * Lo correcto es el histórico: cada compra al CCL de su fecha. Cuando falta ese dato se
+ * cae al CCL de hoy — que es lo que hacía siempre — para no dejar la posición en cero y
+ * romper los totales, pero se avisa con `arsBasisIsApproximate` en vez de disimularlo.
+ */
+function costBasisArsOf(
+  historical: string | null,
+  costBasisUsd: string,
+  cclRate: number | null
+): { value: Decimal; isApproximate: boolean } {
+  if (historical !== null) return { value: new Decimal(historical), isApproximate: false };
+  if (cclRate && cclRate > 0) {
+    return { value: new Decimal(costBasisUsd).mul(cclRate), isApproximate: true };
+  }
+  return { value: new Decimal(0), isApproximate: true };
+}
 
 export function toBondTrade(t: TradeForHoldings, currencyCode: string): TradeForBondHoldings {
   return {
@@ -43,10 +71,11 @@ export function valuateOnPositions(
   trades: TradeForBondHoldings[],
   priceResult: FetchOnPricesResult,
   cclRate: number | null,
-  namesById: Map<string, string>
+  namesById: Map<string, string>,
+  fx?: FxForBondHoldings
 ): ValuatedOnPosition[] {
   const buySell = trades.filter((t) => t.type === "BUY" || t.type === "SELL");
-  const raw = buildBondHoldings(buySell);
+  const raw = buildBondHoldings(buySell, fx);
 
   const typesById = new Map<string, InstrumentType>();
   for (const t of trades) {
@@ -58,14 +87,11 @@ export function valuateOnPositions(
     const isStale = priceResult.stale && quote !== null;
     const mtm = markToMarket(h, quote, cclRate, isStale);
     const marketValueArs = mtm.marketValueArs ?? "0";
-    const costBasisArs =
-      cclRate && cclRate > 0
-        ? new Decimal(h.costBasisUsd).mul(cclRate)
-        : new Decimal(0);
-    const pnlArs = new Decimal(marketValueArs).minus(costBasisArs);
-    const pnlPercent = costBasisArs.isZero()
+    const basis = costBasisArsOf(h.costBasisArs, h.costBasisUsd, cclRate);
+    const pnlArs = new Decimal(marketValueArs).minus(basis.value);
+    const pnlPercent = basis.value.isZero()
       ? new Decimal(0)
-      : pnlArs.div(costBasisArs).mul(100);
+      : pnlArs.div(basis.value).mul(100);
 
     return {
       instrumentId: h.instrumentId,
@@ -74,20 +100,22 @@ export function valuateOnPositions(
       instrumentName: namesById.get(h.instrumentId) ?? h.ticker,
       nominalHeld: h.nominalHeld,
       costBasisUsd: h.costBasisUsd,
+      costBasisArs: basis.value.toFixed(2),
+      arsBasisIsApproximate: basis.isApproximate,
       marketValueArs,
       marketValueUsd: mtm.marketValueUsd,
       pnlArs: pnlArs.toFixed(2),
       pnlPercent: pnlPercent.toFixed(2),
+      // La ON cotiza en dólares: su resultado en USD ya es histórico por construcción.
+      pnlUsd: mtm.unrealizedPnlUsd,
+      pnlPercentUsd: mtm.pctChange,
     };
   });
 }
 
-export function toHoldingRow(p: ValuatedOnPosition, cclRate: number | null): HoldingRow {
+export function toHoldingRow(p: ValuatedOnPosition): HoldingRow {
   const nominal = new Decimal(p.nominalHeld);
-  const costBasisArs =
-    cclRate && cclRate > 0
-      ? new Decimal(p.costBasisUsd).mul(cclRate).toFixed(2)
-      : "0";
+  const costBasisArs = p.costBasisArs;
   const marketValue = new Decimal(p.marketValueArs);
   const avgPriceArs = nominal.isZero()
     ? "0"
@@ -106,29 +134,31 @@ export function toHoldingRow(p: ValuatedOnPosition, cclRate: number | null): Hol
     marketValueArs: p.marketValueArs,
     pnlArs: p.pnlArs,
     pnlPercent: p.pnlPercent,
+    costBasisUsd: p.costBasisUsd,
+    marketValueUsd: p.marketValueUsd,
+    pnlUsd: p.pnlUsd,
+    pnlPercentUsd: p.pnlPercentUsd,
   };
 }
 
 export function toDashboardHolding(
   p: ValuatedOnPosition,
-  cclRate: number | null,
   sector: string | null = null
 ): HoldingForDashboard {
-  const costBasisArs =
-    cclRate && cclRate > 0
-      ? new Decimal(p.costBasisUsd).mul(cclRate).toFixed(2)
-      : "0";
-
   return {
     instrumentId: p.instrumentId,
     ticker: p.ticker,
     instrumentName: p.instrumentName,
     instrumentType: p.instrumentType,
     quantity: p.nominalHeld,
-    costBasisArs,
+    costBasisArs: p.costBasisArs,
     marketValueArs: p.marketValueArs,
     pnlArs: p.pnlArs,
     pnlPercent: p.pnlPercent,
+    costBasisUsd: p.costBasisUsd,
+    marketValueUsd: p.marketValueUsd,
+    pnlUsd: p.pnlUsd,
+    pnlPercentUsd: p.pnlPercentUsd,
     sector,
   };
 }

@@ -67,6 +67,7 @@ function MoverList({
         <ul className="space-y-2">
           {rows.map((r) => {
             const pnlValue = currency === "ARS" ? r.pnlArs : r.pnlUsd;
+            const pnlPercent = currency === "ARS" ? r.pnlPercent : r.pnlPercentUsd;
             return (
               <li
                 key={r.ticker}
@@ -79,7 +80,7 @@ function MoverList({
                 </div>
                 <div className="text-right">
                   <p className={cn("text-sm font-semibold tabular-nums", accentClass)}>
-                    {formatSignedPercent(r.pnlPercent)}
+                    {formatSignedPercent(pnlPercent)}
                   </p>
                   <p className="text-[11px] tabular-nums text-zinc-500">
                     {formatMoney(pnlValue, currency)}

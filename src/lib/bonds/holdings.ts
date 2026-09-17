@@ -35,6 +35,19 @@ type PositionAgg = {
   ticker: string;
   nominalHeld: Decimal;
   costBasisUsd: Decimal;
+  costBasisArs: Decimal | null;
+};
+
+/**
+ * CCL lookup for the peso side of an ON position.
+ *
+ * ONs trade in dollars, so their peso cost is a historical figure: what each purchase
+ * cost in pesos the day it was made. Re-expressing the USD cost at today's CCL would
+ * make the ARS return a copy of the USD one.
+ */
+export type FxForBondHoldings = {
+  /** CCL as of a trade date. `null` when the history does not reach that far back. */
+  cclAt: (tradeDate: Date) => number | null;
 };
 
 /**
@@ -45,8 +58,15 @@ type PositionAgg = {
  *
  * Cost basis: sum of |netAmount| of BUY transactions in native currency (USD).
  * On SELL, cost basis is reduced proportionally (same AVCO logic as holdings.ts).
+ *
+ * When `fx` is supplied, the same replay also accumulates the ARS cost basis by
+ * converting each purchase at the CCL of its own trade date. Omitting it leaves
+ * `costBasisArs` null.
  */
-export function buildBondHoldings(trades: TradeForBondHoldings[]): BondHolding[] {
+export function buildBondHoldings(
+  trades: TradeForBondHoldings[],
+  fx?: FxForBondHoldings
+): BondHolding[] {
   // Group by ticker
   const byTicker = new Map<string, TradeForBondHoldings[]>();
   for (const t of trades) {
@@ -59,7 +79,7 @@ export function buildBondHoldings(trades: TradeForBondHoldings[]): BondHolding[]
   const results: BondHolding[] = [];
 
   for (const [, tickerTrades] of byTicker) {
-    const agg = computePosition(tickerTrades);
+    const agg = computePosition(tickerTrades, fx);
     if (agg.nominalHeld.lte(0)) continue; // fully sold or zero
 
     results.push({
@@ -67,6 +87,7 @@ export function buildBondHoldings(trades: TradeForBondHoldings[]): BondHolding[]
       instrumentId: agg.instrumentId,
       nominalHeld: agg.nominalHeld.toFixed(4).replace(/\.?0+$/, "") || "0",
       costBasisUsd: agg.costBasisUsd.toFixed(2),
+      costBasisArs: agg.costBasisArs?.toFixed(2) ?? null,
       // Valuation fields are populated by markToMarket (valuation.ts)
       marketValueArs: null,
       marketValueUsd: null,
@@ -81,7 +102,10 @@ export function buildBondHoldings(trades: TradeForBondHoldings[]): BondHolding[]
   return results;
 }
 
-function computePosition(trades: TradeForBondHoldings[]): PositionAgg {
+function computePosition(
+  trades: TradeForBondHoldings[],
+  fx?: FxForBondHoldings
+): PositionAgg {
   const sorted = [...trades].sort(
     (a, b) => new Date(a.tradeDate).getTime() - new Date(b.tradeDate).getTime()
   );
@@ -92,6 +116,8 @@ function computePosition(trades: TradeForBondHoldings[]): PositionAgg {
 
   let nominalHeld = new Decimal(0);
   let costBasisUsd = new Decimal(0);
+  let costBasisArs = new Decimal(0);
+  let arsIsMeasurable = fx !== undefined;
 
   for (const t of sorted) {
     if (t.instrumentId) instrumentId = t.instrumentId;
@@ -101,17 +127,30 @@ function computePosition(trades: TradeForBondHoldings[]): PositionAgg {
     if (t.type === "BUY") {
       nominalHeld = nominalHeld.plus(qty);
       costBasisUsd = costBasisUsd.plus(net);
+      if (arsIsMeasurable) {
+        const rate = fx!.cclAt(new Date(t.tradeDate));
+        if (!rate || rate <= 0) arsIsMeasurable = false;
+        else costBasisArs = costBasisArs.plus(net.mul(rate));
+      }
     } else {
       // SELL: reduce cost basis proportionally
       if (!nominalHeld.isZero()) {
-        const costRemoved = costBasisUsd.mul(qty.div(nominalHeld));
-        costBasisUsd = costBasisUsd.minus(costRemoved);
+        const soldShare = qty.div(nominalHeld);
+        costBasisUsd = costBasisUsd.minus(costBasisUsd.mul(soldShare));
+        costBasisArs = costBasisArs.minus(costBasisArs.mul(soldShare));
       }
       nominalHeld = nominalHeld.minus(qty);
       if (nominalHeld.lt(0)) nominalHeld = new Decimal(0);
       if (costBasisUsd.lt(0)) costBasisUsd = new Decimal(0);
+      if (costBasisArs.lt(0)) costBasisArs = new Decimal(0);
     }
   }
 
-  return { instrumentId, ticker, nominalHeld, costBasisUsd };
+  return {
+    instrumentId,
+    ticker,
+    nominalHeld,
+    costBasisUsd,
+    costBasisArs: arsIsMeasurable ? costBasisArs : null,
+  };
 }

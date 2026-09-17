@@ -64,10 +64,46 @@ export type PositionDetail = {
   unrealizedPnlArs: number;
   unrealizedReturnPct: number | null;
   /**
+   * Costo en dólares al CCL **del día de cada compra**. `null` cuando alguna compra
+   * quedó fuera del histórico de CCL.
+   *
+   * Es lo que hace que el no realizado en dólares sea distinto del de pesos: dividir el
+   * costo en pesos por el CCL del cierre cancela el tipo de cambio y devuelve el mismo
+   * porcentaje en las dos monedas.
+   */
+  costBasisUsd: number | null;
+  unrealizedPnlUsd: number | null;
+  unrealizedReturnPctUsd: number | null;
+  /**
    * `true` cuando el precio no es del cierre de ese mes sino un arrastre del
    * último conocido. La UI lo marca: un número arrastrado no es un número medido.
    */
   priceIsStale: boolean;
+};
+
+/**
+ * `PositionDetail` más cuánto ganó/perdió ESE ticker puntualmente durante el mes
+ * (ver `attributeMonthlyPositionGains` en `valuation.ts`).
+ *
+ * No confundir con `unrealizedPnlArs`: ese es contra el costo de toda la vida de la
+ * posición, este es contra el cierre del mes anterior. Sumar `monthGainArs` de todas
+ * las filas de un mes sí coincide con `gainArs` de ese mes (menos la renta cobrada,
+ * que no se atribuye por ticker); sumar `unrealizedPnlArs` nunca coincide.
+ */
+export type MonthlyPositionDetail = PositionDetail & {
+  /** Ganancia/pérdida en ARS de este ticker durante el mes. */
+  monthGainArs: number;
+  /**
+   * `monthGainArs` sobre una base comparable: el valor al inicio del mes, o el capital
+   * invertido en el mes si la posición es nueva. `null` si no hay base (mes vacío).
+   */
+  monthReturnPct: number | null;
+  /**
+   * Lo mismo medido en dólares: valores de cada cierre al CCL de ese cierre y aportes
+   * al CCL del día en que se hicieron. `null` sin CCL para convertir los aportes.
+   */
+  monthGainUsd: number | null;
+  monthReturnPctUsd: number | null;
 };
 
 /** Calidad del dato de un mes. */
@@ -121,12 +157,14 @@ export type MonthlyPerformanceRow = {
 
   /** `marketValue / costBasis − 1` sobre posiciones abiertas al cierre del mes. */
   unrealizedReturnPct: number | null;
+  /** El mismo no realizado en dólares: costo al CCL de cada compra, valor al del cierre. */
+  unrealizedReturnPctUsd: number | null;
 
   /** Caída desde el pico de valor alcanzado hasta este mes, en %. Siempre ≤ 0. */
   drawdownArs: number;
   drawdownUsd: number;
 
-  positions: PositionDetail[];
+  positions: MonthlyPositionDetail[];
   coverage: MonthCoverage;
   /** Tickers cuyo precio vino por arrastre en este mes. */
   staleTickers: string[];
@@ -186,8 +224,13 @@ export type PerformanceSummary = {
   annualizedReturnUsd: number | null;
   maxDrawdownArs: number;
   maxDrawdownUsd: number;
-  bestMonthArs: ExtremeMonth | null;
-  worstMonthArs: ExtremeMonth | null;
+  /**
+   * Mejor y peor mes **de la moneda que se está mirando**: `resolveView` los recalcula
+   * sobre los rendimientos ya resueltos. Sin sufijo de moneda a propósito — llamarlos
+   * `…Ars` sugería que el toggle de USD no los tocaba, y sí los toca.
+   */
+  bestMonth: ExtremeMonth | null;
+  worstMonth: ExtremeMonth | null;
   monthsTracked: number;
 };
 

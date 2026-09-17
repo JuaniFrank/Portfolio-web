@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { Info, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -18,11 +18,13 @@ import { formatFullDate, formatMoney, type ViewCurrency } from "./format";
 export function DividendByTickerTable({
   rows,
   currency,
+  cclToday,
 }: {
   rows: DividendByTicker[];
   currency: ViewCurrency;
+  cclToday?: string | null;
 }) {
-  const isArs = currency === "ARS";
+  const ccl = cclToday ? Number(cclToday) : 0;
 
   if (rows.length === 0) {
     return (
@@ -50,9 +52,21 @@ export function DividendByTickerTable({
         </TableHeader>
         <TableBody>
           {rows.map((row) => {
-            const gross = isArs ? row.grossArs : row.grossUsd;
-            const tax = isArs ? row.taxArs : row.taxUsd;
-            const net = isArs ? row.netArs : row.netUsd;
+            const hasUsdGross = Number(row.grossUsd) > 0;
+            const hasArsGross = Number(row.grossArs) > 0;
+            const hasUsdNet = Number(row.netUsd) > 0;
+            const hasArsNet = Number(row.netArs) > 0;
+            const hasArsTax = Number(row.taxArs) > 0;
+            const hasUsdTax = Number(row.taxUsd) > 0;
+
+            const estGrossArs = hasUsdGross && ccl > 0
+              ? Number(row.grossUsd) * ccl + (hasArsGross ? Number(row.grossArs) : 0)
+              : null;
+
+            const estNetArs = hasUsdNet && ccl > 0
+              ? Number(row.netUsd) * ccl + (hasArsNet ? Number(row.netArs) : 0)
+              : null;
+
             return (
               <TableRow key={row.ticker}>
                 <TableCell>
@@ -70,13 +84,51 @@ export function DividendByTickerTable({
                   {row.payments}
                 </TableCell>
                 <TableCell className="text-right font-mono text-sm text-zinc-200">
-                  {formatMoney(gross, currency)}
+                  {hasUsdGross ? (
+                    <div className="flex flex-col items-end">
+                      <span>{formatMoney(row.grossUsd, "USD")}</span>
+                      {estGrossArs !== null ? (
+                        <span
+                          title="El precio es un estimado entre el cobro del dividendo × el CCL del día de hoy."
+                          className="inline-flex cursor-help items-center gap-1 text-xs text-zinc-400 hover:text-zinc-300"
+                        >
+                          <span>≈ {formatMoney(estGrossArs, "ARS")}</span>
+                          <Info className="h-3 w-3 shrink-0 text-zinc-500" />
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : hasArsGross ? (
+                    formatMoney(row.grossArs, "ARS")
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
                 <TableCell className="text-right font-mono text-sm text-rose-300">
-                  {formatMoney(tax, currency)}
+                  {hasArsTax
+                    ? formatMoney(row.taxArs, "ARS")
+                    : hasUsdTax
+                      ? formatMoney(row.taxUsd, "USD")
+                      : "—"}
                 </TableCell>
                 <TableCell className="text-right font-mono text-sm font-semibold text-emerald-400">
-                  {formatMoney(net, currency)}
+                  {hasUsdNet ? (
+                    <div className="flex flex-col items-end">
+                      <span>{formatMoney(row.netUsd, "USD")}</span>
+                      {estNetArs !== null ? (
+                        <span
+                          title="El precio es un estimado entre el cobro del dividendo × el CCL del día de hoy."
+                          className="inline-flex cursor-help items-center gap-1 text-xs font-normal text-zinc-400 hover:text-zinc-300"
+                        >
+                          <span>≈ {formatMoney(estNetArs, "ARS")}</span>
+                          <Info className="h-3 w-3 shrink-0 text-zinc-500" />
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : hasArsNet ? (
+                    formatMoney(row.netArs, "ARS")
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
                 <TableCell className="text-right font-mono text-sm text-zinc-300">
                   {row.currentQuantity}

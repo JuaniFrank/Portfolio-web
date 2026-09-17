@@ -35,8 +35,13 @@ function trade(
 }
 
 /** Flujo con el mismo signo que usa el motor: + compra, − venta. */
-function flow(instrumentId: string, date: string, amountArs: number): InstrumentFlow {
-  return { instrumentId, time: utc(date).getTime(), amountArs };
+function flow(
+  instrumentId: string,
+  date: string,
+  amountArs: number,
+  amountUsd: number | null = null
+): InstrumentFlow {
+  return { instrumentId, time: utc(date).getTime(), amountArs, amountUsd };
 }
 
 function inputs(overrides: Partial<EvolutionInputs> = {}): EvolutionInputs {
@@ -454,5 +459,93 @@ describe("buildEvolutionSeries — resultado y variación de precio pueden discr
       })
     );
     expect(quiet.series.daily[1]!.gainers[0]!.hadFlow).toBe(false);
+  });
+});
+
+describe("buildEvolutionSeries — el rendimiento en dólares no es el de pesos", () => {
+  /**
+   * El caso que motiva todo: el papel sube 50 % en pesos y el CCL sube 50 % en el mismo
+   * tramo. En pesos ganaste; en dólares estás igual que antes. Medir el tramo dividiendo
+   * la ganancia en pesos por el CCL del cierre borra esa distinción y devuelve el mismo
+   * porcentaje en las dos monedas.
+   */
+  const cclJumped = buildEvolutionSeries(
+    inputs({
+      trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+      flows: [flow(AAPL, "2026-01-01", 1000, 1)],
+      prices: new PriceIndex([
+        { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+        { instrumentId: AAPL, date: utc("2026-01-02"), close: 150 },
+      ]),
+      ccl: new TimeSeries([
+        { date: utc("2026-01-01"), value: 1000 },
+        { date: utc("2026-01-02"), value: 1500 },
+      ]),
+      to: utc("2026-01-02"),
+    })
+  );
+
+  const second = cclJumped.series.daily[1]!;
+
+  it("reporta ganancia en pesos y ningún resultado en dólares", () => {
+    expect(second.returnPercent).toBeCloseTo(50, 6);
+    expect(second.returnPercentUsd).toBeCloseTo(0, 6);
+  });
+
+  it("mide la ganancia de cada posición en dólares y no convirtiendo la de pesos", () => {
+    const mover = [...second.gainers, ...second.losers].find((m) => m.ticker === "AAPL")!;
+    expect(mover.pnlArs).toBe(500);
+    // 500 / 1500 daría 0,33: eso sería la ganancia en pesos disfrazada de dólares.
+    expect(mover.pnlUsd).toBe(0);
+  });
+
+  it("deja el rendimiento en dólares en null cuando no hay CCL", () => {
+    const noCcl = buildEvolutionSeries(
+      inputs({
+        trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+        flows: [flow(AAPL, "2026-01-01", 1000)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-02"), close: 150 },
+        ]),
+        to: utc("2026-01-02"),
+      })
+    );
+
+    expect(noCcl.series.daily[1]!.returnPercentUsd).toBeNull();
+  });
+
+  it("convierte el aporte del período al CCL del día en que se hizo", () => {
+    // El aporte cae adentro del bucket, no en su cierre: se compró el 02 con el CCL en
+    // 1000 y el tramo cierra el 05 con el CCL en 2000. Convertir al cierre diría que se
+    // aportó medio dólar cuando se aportó uno.
+    const withPurchase = buildEvolutionSeries(
+      inputs({
+        trades: [
+          trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100),
+          trade(AAPL, "AAPL", "BUY", "2026-01-02", 10, 100),
+        ],
+        flows: [flow(AAPL, "2026-01-01", 1000, 1), flow(AAPL, "2026-01-02", 1000, 1)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-05"), close: 100 },
+        ]),
+        ccl: new TimeSeries([
+          { date: utc("2026-01-01"), value: 1000 },
+          { date: utc("2026-01-05"), value: 2000 },
+        ]),
+        tradingDays: [utc("2026-01-01"), utc("2026-01-05")],
+        to: utc("2026-01-05"),
+      })
+    );
+
+    const point = withPurchase.series.daily[1]!;
+    expect(point.netFlowArs).toBe(1000);
+    expect(point.netFlowUsd).toBe(1);
+    // En pesos el tramo no se movió: 1000 → 2000 con 1000 de aporte.
+    expect(point.returnPercent).toBe(0);
+    // En dólares sí: entró un dólar y la cartera sigue valiendo uno.
+    expect(point.valueUsd).toBe(1);
+    expect(point.returnPercentUsd).toBeCloseTo(-100, 6);
   });
 });

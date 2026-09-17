@@ -92,6 +92,9 @@ export type TransactionForFlows = {
    * ni siquiera forma parte.
    */
   instrumentEligible: boolean;
+  /** Para atribuir el flujo a un ticker (ver `attributeMonthlyPositionGains`). Opcional: los
+   *  consumidores que no necesitan atribución por ticker (ej. el dashboard) pueden omitirlo. */
+  instrumentId?: string | null;
 };
 
 export type MonetaryEvent = {
@@ -99,6 +102,7 @@ export type MonetaryEvent = {
   /** Capital: positivo = compra, negativo = venta. Renta: positivo = cobro, negativo = costo. */
   amount: number;
   currency: "ARS" | "USD";
+  instrumentId: string | null;
 };
 
 /**
@@ -147,6 +151,7 @@ function collect(
       date: tx.tradeDate,
       amount: direction * magnitude,
       currency: isUsdCurrency(tx.currencyCode) ? "USD" : "ARS",
+      instrumentId: tx.instrumentId ?? null,
     });
   }
 

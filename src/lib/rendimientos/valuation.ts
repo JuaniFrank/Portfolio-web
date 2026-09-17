@@ -20,7 +20,7 @@ import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { isOnOrBeforeUtcDay, toUtcDay } from "./months";
 import type { PriceIndex, TimeSeries } from "./price-series";
 import { unrealizedReturn } from "./returns";
-import type { MonthCoverage, PositionDetail } from "./types";
+import type { MonthCoverage, MonthlyPositionDetail, PositionDetail } from "./types";
 import type { MonetaryEvent } from "./cashflows";
 
 /** Importe ya expresado en ARS, fechado al día UTC en que ocurrió. */
@@ -51,11 +51,21 @@ export type PortfolioValuation = {
   /** Solo posiciones a mercado, sin renta. */
   holdingsValueArs: number;
   costBasisArs: number;
+  /**
+   * Costo en dólares: cada compra al CCL **de su propia fecha**.
+   *
+   * `null` si alguna compra quedó fuera del histórico de CCL. No es `costBasisArs`
+   * dividido por `cclMid`: esa cuenta usa el mismo tipo de cambio arriba y abajo, se
+   * cancela, y deja el rendimiento en dólares clavado al de pesos.
+   */
+  costBasisUsd: number | null;
   accumulatedIncomeArs: number;
   positions: PositionDetail[];
   coverage: MonthCoverage;
   staleTickers: string[];
   unrealizedReturnPct: number | null;
+  /** El mismo no realizado medido en dólares. `null` sin CCL o sin costo medible. */
+  unrealizedReturnPctUsd: number | null;
 };
 
 /**
@@ -100,16 +110,32 @@ export function valuatePortfolioAt(
     if (hit.date.getTime() < windowStart.getTime()) staleTickers.push(trade.ticker);
   }
 
-  const holdings = buildHoldings(tradesToDate, priceMap, eventsByInstrument);
   const cclHit = ccl.asOf(valuationDate);
   const cclMid = cclHit?.value ?? null;
 
+  // El costo en dólares se replaya con el CCL del día de cada compra y el valor con el
+  // CCL de este cierre: esa asimetría es lo que hace que el rendimiento en dólares mida
+  // el tipo de cambio en vez de cancelarlo.
+  const holdings = buildHoldings(tradesToDate, priceMap, eventsByInstrument, {
+    cclAt: (tradeDate) => ccl.asOf(tradeDate)?.value ?? null,
+    currentCcl: cclMid,
+  });
+
   let holdingsValueArs = new Decimal(0);
   let costBasisArs = new Decimal(0);
+  let costBasisUsd: Decimal | null = new Decimal(0);
   for (const holding of holdings) {
     holdingsValueArs = holdingsValueArs.plus(new Decimal(holding.marketValueArs));
     costBasisArs = costBasisArs.plus(new Decimal(holding.costBasisArs));
+    if (costBasisUsd === null) continue;
+    // Una sola posición sin costo medible deja el total sin medir: sumar las que sí se
+    // pueden daría un costo parcial que se lee como si fuera el de toda la cartera.
+    costBasisUsd =
+      holding.costBasisUsd === null ? null : costBasisUsd.plus(new Decimal(holding.costBasisUsd));
   }
+
+  const holdingsValueUsd =
+    cclMid && cclMid > 0 ? holdingsValueArs.div(cclMid) : null;
 
   // Valor invertido = posiciones a mercado + renta acumulada. Sin efectivo: el saldo
   // de la cuenta no forma parte del perímetro que se mide.
@@ -120,6 +146,8 @@ export function valuatePortfolioAt(
   const positions: PositionDetail[] = holdings.map((holding) => {
     const valueArsNumber = Number(holding.marketValueArs);
     const holdingCost = Number(holding.costBasisArs);
+    const holdingCostUsd = holding.costBasisUsd === null ? null : Number(holding.costBasisUsd);
+    const valueUsdNumber = cclMid && cclMid > 0 ? valueArsNumber / cclMid : 0;
     return {
       instrumentId: holding.instrumentId,
       ticker: holding.ticker,
@@ -128,10 +156,17 @@ export function valuatePortfolioAt(
       quantity: Number(holding.quantity),
       priceArs: Number(holding.currentPriceArs),
       valueArs: valueArsNumber,
-      valueUsd: cclMid && cclMid > 0 ? valueArsNumber / cclMid : 0,
+      valueUsd: valueUsdNumber,
       costBasisArs: holdingCost,
       unrealizedPnlArs: Number(holding.pnlArs),
       unrealizedReturnPct: unrealizedReturn(valueArsNumber, holdingCost),
+      costBasisUsd: holdingCostUsd,
+      unrealizedPnlUsd:
+        holdingCostUsd === null || !cclMid ? null : valueUsdNumber - holdingCostUsd,
+      unrealizedReturnPctUsd:
+        holdingCostUsd === null || !cclMid
+          ? null
+          : unrealizedReturn(valueUsdNumber, holdingCostUsd),
       priceIsStale: staleTickers.includes(holding.ticker),
     };
   });
@@ -150,6 +185,7 @@ export function valuatePortfolioAt(
     valueUsd: valueUsd.toNumber(),
     holdingsValueArs: holdingsValueArs.toNumber(),
     costBasisArs: costBasisArs.toNumber(),
+    costBasisUsd: costBasisUsd === null ? null : costBasisUsd.toNumber(),
     accumulatedIncomeArs: accumulatedIncomeArs.toNumber(),
     positions,
     coverage,
@@ -158,6 +194,10 @@ export function valuatePortfolioAt(
       holdingsValueArs.toNumber(),
       costBasisArs.toNumber()
     ),
+    unrealizedReturnPctUsd:
+      costBasisUsd === null || holdingsValueUsd === null
+        ? null
+        : unrealizedReturn(holdingsValueUsd.toNumber(), costBasisUsd.toNumber()),
   };
 }
 
@@ -186,6 +226,55 @@ export function accumulateInArs(events: MonetaryEvent[], ccl: TimeSeries): Dated
   }
 
   return amounts.sort((a, b) => a.time - b.time);
+}
+
+/**
+ * Atribuye a cada posición cuánto ganó/perdió puntualmente en el período: valor al
+ * cierre menos valor al cierre anterior menos el capital neto invertido en ese
+ * instrumento durante el período.
+ *
+ * Es la misma identidad que usa `gainArs` a nivel de cartera en `series.ts`
+ * (`valor(fin) − valor(inicio) − capital neto`), aplicada ticker por ticker en vez de
+ * al total. Por eso, y solo por eso, sumar `monthGainArs` de todas las filas de un mes
+ * coincide con la `gainArs` de ese mes (salvo la renta cobrada, que no se atribuye por
+ * ticker acá). `unrealizedPnlArs` — contra el costo de toda la vida — nunca coincide,
+ * y confundir una cosa con la otra fue el origen de este helper.
+ */
+export function attributeMonthlyPositionGains(
+  endPositions: PositionDetail[],
+  startPositions: PositionDetail[],
+  netInvestedByInstrumentArs: Map<string, number>,
+  /**
+   * El mismo capital en dólares, convertido al CCL del día de cada operación. Sin él la
+   * atribución en dólares no se calcula: dividir `monthGainArs` por el CCL del cierre
+   * sería la ganancia en pesos con otra etiqueta.
+   */
+  netInvestedByInstrumentUsd?: Map<string, number>
+): MonthlyPositionDetail[] {
+  const startByInstrument = new Map(startPositions.map((p) => [p.instrumentId, p]));
+
+  return endPositions.map((position) => {
+    const start = startByInstrument.get(position.instrumentId);
+    const startValue = start?.valueArs ?? 0;
+    const netInvested = netInvestedByInstrumentArs.get(position.instrumentId) ?? 0;
+    const monthGainArs = position.valueArs - startValue - netInvested;
+
+    // Base para el %: lo que ya había al empezar el mes: si la posición es nueva
+    // (startValue = 0), se mide contra lo que se puso en el mes.
+    const basis = startValue > 0 ? startValue : netInvested;
+    const monthReturnPct = basis > 0 ? (monthGainArs / basis) * 100 : null;
+
+    const startValueUsd = start?.valueUsd ?? 0;
+    const netInvestedUsd = netInvestedByInstrumentUsd?.get(position.instrumentId) ?? 0;
+    const monthGainUsd = netInvestedByInstrumentUsd
+      ? position.valueUsd - startValueUsd - netInvestedUsd
+      : null;
+    const basisUsd = startValueUsd > 0 ? startValueUsd : netInvestedUsd;
+    const monthReturnPctUsd =
+      monthGainUsd !== null && basisUsd > 0 ? (monthGainUsd / basisUsd) * 100 : null;
+
+    return { ...position, monthGainArs, monthReturnPct, monthGainUsd, monthReturnPctUsd };
+  });
 }
 
 /** Suma acumulada hasta `cutoff` inclusive. Asume `amounts` ordenado ascendente. */

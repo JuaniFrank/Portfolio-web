@@ -17,8 +17,9 @@ import {
 } from "@/lib/importers/duplicates";
 import { buildImportIdempotencyHash } from "@/lib/importers/idempotency";
 import type { ImportedTransactionRow } from "@/lib/imports/filters";
+import { runMacroBackfill, runPriceBackfill } from "@/lib/market/backfill";
 import { prisma } from "@/lib/prisma";
-import { ImportStatus, TransactionSource } from "@/lib/generated/prisma";
+import { ImportStatus, TransactionSource, TransactionType } from "@/lib/generated/prisma";
 import type { CommitImportRow, DuplicateStrategy } from "@/lib/importers/types";
 
 /** Tope defensivo para las operaciones masivas disparadas desde el cliente. */
@@ -200,6 +201,41 @@ export async function checkImportDuplicatesAction(
 }
 
 // ---------------------------------------------------------------------------
+// Auto-clear (usado por ImportEditTable para pre-excluir filas de bajo valor)
+// ---------------------------------------------------------------------------
+
+/**
+ * De los tickers dados, cuáles ya tienen un movimiento AMORTIZATION registrado
+ * en la cuenta del usuario. Un bono/letra amortizado ya cerró: no tiene sentido
+ * seguir importando movimientos nuevos para ese ticker.
+ */
+export async function getAmortizedTickersAction(
+  tickers: string[]
+): Promise<string[] | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "unauthorized" };
+  if (tickers.length === 0) return [];
+
+  const rows = await prisma.transaction.findMany({
+    where: {
+      type: TransactionType.AMORTIZATION,
+      portfolio: { userId: user.id },
+      instrument: { ticker: { in: tickers } },
+    },
+    select: { instrument: { select: { ticker: true } } },
+  });
+
+  return [
+    ...new Set(
+      rows
+        .map((r) => r.instrument?.ticker)
+        .filter((t): t is string => Boolean(t))
+        .map((t) => t.toUpperCase())
+    ),
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Commit
 // ---------------------------------------------------------------------------
 
@@ -285,9 +321,23 @@ export async function commitImportAction(
         );
       }
     });
+
+    // Sin esto, las métricas de /rendimientos quedan vacías hasta la corrida
+    // nocturna de los crons: `after` corre en background, no bloquea la
+    // respuesta del import.
+    after(() => runImportBackfill());
   }
 
   return result;
+}
+
+async function runImportBackfill(): Promise<void> {
+  try {
+    await runMacroBackfill();
+    await runPriceBackfill();
+  } catch (error) {
+    console.error("Backfill post-import error", error);
+  }
 }
 
 // ---------------------------------------------------------------------------

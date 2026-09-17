@@ -2,11 +2,10 @@
 
 import { useState } from "react";
 import { CalendarSync } from "lucide-react";
-import type { CorporateEventDTO } from "@/lib/events/types";
-import { resolveApplicableRecommendations } from "@/lib/events/recommended";
+import type { CorporateEventDTO, SuggestedCorporateEventDTO } from "@/lib/events/types";
 import { EventsList } from "./events-list";
 import { EventFormDialog } from "./event-form-dialog";
-import { RecommendedEvents } from "./recommended-events";
+import { SuggestedEvents } from "./suggested-events";
 
 type InstrumentOption = {
   id: string;
@@ -17,10 +16,12 @@ type InstrumentOption = {
 type Props = {
   initialEvents: CorporateEventDTO[];
   instruments: InstrumentOption[];
+  initialSuggestions: SuggestedCorporateEventDTO[];
 };
 
-export function EventsPage({ initialEvents, instruments }: Props) {
+export function EventsPage({ initialEvents, instruments, initialSuggestions }: Props) {
   const [events, setEvents] = useState<CorporateEventDTO[]>(initialEvents);
+  const [suggestions, setSuggestions] = useState<SuggestedCorporateEventDTO[]>(initialSuggestions);
 
   function handleEventCreated(newEvent: CorporateEventDTO) {
     setEvents((prev) =>
@@ -32,15 +33,24 @@ export function EventsPage({ initialEvents, instruments }: Props) {
     setEvents((prev) => prev.filter((e) => e.id !== deletedId));
   }
 
+  /** Aplicar una sugerencia crea el CorporateEvent real: deja de tener sentido
+   *  seguir mostrándola como pendiente/descartada, así que se saca de la lista. */
+  function handleSuggestionApplied(newEvent: CorporateEventDTO, suggestionId: string) {
+    handleEventCreated(newEvent);
+    setSuggestions((prev) => prev.filter((s) => s.id !== suggestionId));
+  }
+
+  function handleSuggestionDismissChanged(suggestionId: string, dismissed: boolean) {
+    setSuggestions((prev) =>
+      prev.map((s) => (s.id === suggestionId ? { ...s, dismissed } : s))
+    );
+  }
+
   // KPIs
   const eventCount = events.length;
   const lastDate =
     events.length > 0 ? events[0]!.effectiveDate : null;
   const distinctInstruments = new Set(events.map((e) => e.instrumentId)).size;
-
-  // Recomputed each render: once an event is applied it lands in `events`,
-  // so the matching recommendation drops out automatically.
-  const recommendations = resolveApplicableRecommendations(instruments, events);
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
@@ -79,10 +89,11 @@ export function EventsPage({ initialEvents, instruments }: Props) {
         </div>
       </div>
 
-      {/* Suggested events (curated, one-click apply) */}
-      <RecommendedEvents
-        recommendations={recommendations}
-        onApplied={handleEventCreated}
+      {/* Suggested events (auto-detected by the price backfill cron) */}
+      <SuggestedEvents
+        suggestions={suggestions}
+        onApplied={handleSuggestionApplied}
+        onDismissChanged={handleSuggestionDismissChanged}
       />
 
       {/* Events list */}

@@ -1,9 +1,19 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, Filter, Pencil, RotateCcw } from "lucide-react";
+import { AlertTriangle, Filter, Pencil, RotateCcw, Search, Sparkles, X } from "lucide-react";
+import { toast } from "sonner";
+import { getAmortizedTickersAction } from "@/app/actions/imports";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -13,6 +23,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { InstrumentType, TransactionType } from "@/lib/generated/prisma";
+import {
+  AUTO_CLEAR_REASON_LABELS,
+  collectTickers,
+  computeAutoClearMatches,
+  type AutoClearReason,
+} from "@/lib/importers/auto-clear";
 import {
   EDITABLE_CURRENCIES,
   EDITABLE_INSTRUMENT_TYPES,
@@ -39,6 +55,20 @@ const STATUS_VARIANT = {
   invalid: "destructive",
 } as const;
 
+type RowFilters = {
+  type: TransactionType | "all";
+  instrumentType: InstrumentType | "all" | "none";
+  currencyCode: string;
+  ticker: string;
+};
+
+const DEFAULT_FILTERS: RowFilters = {
+  type: "all",
+  instrumentType: "all",
+  currencyCode: "all",
+  ticker: "",
+};
+
 /** El parser ancla las fechas al mediodía UTC para que ningún corrimiento de
  *  zona horaria cambie el día calendario. Las ediciones siguen la misma regla. */
 function isoToDateInput(iso: string): string {
@@ -60,13 +90,76 @@ export function ImportEditTable({
   onResetRow,
 }: Props) {
   const [onlyProblems, setOnlyProblems] = useState(false);
+  const [filters, setFilters] = useState<RowFilters>(DEFAULT_FILTERS);
+  const [autoClearing, setAutoClearing] = useState(false);
 
   const stats = useMemo(() => computeRowStats(rows, excluded), [rows, excluded]);
 
-  const visibleRows = useMemo(
-    () => (onlyProblems ? rows.filter((r) => r.status !== "valid") : rows),
-    [rows, onlyProblems]
-  );
+  // Solo se ofrecen como opciones los valores que realmente aparecen en el
+  // archivo: evita selects con decenas de tipos/monedas que no aplican.
+  const availableTypes = useMemo(() => {
+    const set = new Set<TransactionType>();
+    rows.forEach((r) => {
+      if (r.parsed) set.add(r.parsed.type);
+    });
+    return Array.from(set).sort((a, b) =>
+      TRANSACTION_TYPE_LABELS[a].localeCompare(TRANSACTION_TYPE_LABELS[b])
+    );
+  }, [rows]);
+
+  const availableInstruments = useMemo(() => {
+    const set = new Set<InstrumentType>();
+    let hasNone = false;
+    rows.forEach((r) => {
+      if (!r.parsed) return;
+      if (r.parsed.instrumentType) set.add(r.parsed.instrumentType);
+      else hasNone = true;
+    });
+    return {
+      types: Array.from(set).sort((a, b) =>
+        (INSTRUMENT_TYPE_LABELS[a] ?? a).localeCompare(INSTRUMENT_TYPE_LABELS[b] ?? b)
+      ),
+      hasNone,
+    };
+  }, [rows]);
+
+  const availableCurrencies = useMemo(() => {
+    const set = new Set<string>();
+    rows.forEach((r) => {
+      if (r.parsed) set.add(r.parsed.currencyCode);
+    });
+    return Array.from(set).sort();
+  }, [rows]);
+
+  const hasActiveFilters =
+    filters.type !== "all" ||
+    filters.instrumentType !== "all" ||
+    filters.currencyCode !== "all" ||
+    filters.ticker.trim() !== "";
+
+  function clearFilters() {
+    setFilters(DEFAULT_FILTERS);
+  }
+
+  const visibleRows = useMemo(() => {
+    return rows.filter((r) => {
+      if (onlyProblems && r.status === "valid") return false;
+      if (filters.type !== "all" && r.parsed?.type !== filters.type) return false;
+      if (filters.instrumentType !== "all") {
+        if (filters.instrumentType === "none") {
+          if (r.parsed?.instrumentType) return false;
+        } else if (r.parsed?.instrumentType !== filters.instrumentType) {
+          return false;
+        }
+      }
+      if (filters.currencyCode !== "all" && r.parsed?.currencyCode !== filters.currencyCode) {
+        return false;
+      }
+      const query = filters.ticker.trim().toUpperCase();
+      if (query && !(r.parsed?.ticker ?? "").toUpperCase().includes(query)) return false;
+      return true;
+    });
+  }, [rows, onlyProblems, filters]);
 
   const allVisibleIncluded =
     visibleRows.length > 0 && visibleRows.every((r) => !excluded.has(r.rowNumber));
@@ -84,6 +177,42 @@ export function ImportEditTable({
   function excludeInvalid() {
     const invalidNumbers = rows.filter((r) => r.status === "invalid").map((r) => r.rowNumber);
     onSetExcluded([...new Set([...excluded, ...invalidNumbers])]);
+  }
+
+  /**
+   * Pre-excluye filas de bajo valor: depósitos/retiros, ajustes, bonos/letras
+   * (sin histórico de precios) y tickers que ya tienen una amortización
+   * registrada. No borra nada de la base — solo tilda "omitir" en este import,
+   * el usuario puede revertirlo fila por fila antes de confirmar.
+   */
+  async function handleAutoClear() {
+    setAutoClearing(true);
+    try {
+      const tickers = collectTickers(rows);
+      const amortizedResult = await getAmortizedTickersAction(tickers);
+      if ("error" in amortizedResult) {
+        toast.error(amortizedResult.error);
+        return;
+      }
+
+      const matches = computeAutoClearMatches(rows, new Set(amortizedResult));
+      if (matches.length === 0) {
+        toast.info("No hay movimientos para limpiar automáticamente");
+        return;
+      }
+
+      const newlyExcluded = matches.map((m) => m.rowNumber);
+      onSetExcluded([...new Set([...excluded, ...newlyExcluded])]);
+
+      const counts = new Map<AutoClearReason, number>();
+      for (const m of matches) counts.set(m.reason, (counts.get(m.reason) ?? 0) + 1);
+      const summary = [...counts.entries()]
+        .map(([reason, count]) => `${count} ${AUTO_CLEAR_REASON_LABELS[reason]}`)
+        .join(", ");
+      toast.success(`Auto-clear: ${matches.length} movimientos omitidos (${summary})`);
+    } finally {
+      setAutoClearing(false);
+    }
   }
 
   return (
@@ -138,6 +267,18 @@ export function ImportEditTable({
             size="sm"
             variant="outline"
             className="h-8"
+            onClick={() => void handleAutoClear()}
+            disabled={autoClearing || rows.length === 0}
+            title="Omite depósitos/retiros, ajustes, bonos/letras y tickers ya amortizados"
+          >
+            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+            {autoClearing ? "Limpiando…" : "Auto-clear"}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8"
             onClick={() => onSetExcluded([])}
             disabled={stats.excluded === 0}
           >
@@ -155,6 +296,102 @@ export function ImportEditTable({
           </div>
         </div>
       )}
+
+      <div className="space-y-2 rounded-md border border-zinc-800 bg-zinc-950/40 p-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-400">
+            <Filter className="h-3.5 w-3.5" />
+            Filtrar filas
+          </div>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="flex items-center gap-1 text-xs text-zinc-500 transition-colors hover:text-zinc-200"
+            >
+              <X className="h-3 w-3" />
+              Limpiar filtros
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+            <Input
+              value={filters.ticker}
+              onChange={(e) => setFilters((f) => ({ ...f, ticker: e.target.value }))}
+              placeholder="Ticker..."
+              className="h-8 pl-8 text-xs"
+              aria-label="Filtrar por ticker"
+            />
+          </div>
+
+          <Select
+            value={filters.type}
+            onValueChange={(v) =>
+              setFilters((f) => ({ ...f, type: v as RowFilters["type"] }))
+            }
+          >
+            <SelectTrigger className="h-8 text-xs" aria-label="Filtrar por tipo">
+              <SelectValue placeholder="Tipo" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos los tipos</SelectItem>
+              {availableTypes.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {TRANSACTION_TYPE_LABELS[t]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={filters.instrumentType}
+            onValueChange={(v) =>
+              setFilters((f) => ({ ...f, instrumentType: v as RowFilters["instrumentType"] }))
+            }
+          >
+            <SelectTrigger className="h-8 text-xs" aria-label="Filtrar por instrumento">
+              <SelectValue placeholder="Instrumento" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos los instrumentos</SelectItem>
+              {availableInstruments.hasNone && (
+                <SelectItem value="none">Sin instrumento</SelectItem>
+              )}
+              {availableInstruments.types.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {INSTRUMENT_TYPE_LABELS[t] ?? t}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={filters.currencyCode}
+            onValueChange={(v) => setFilters((f) => ({ ...f, currencyCode: v }))}
+          >
+            <SelectTrigger className="h-8 text-xs" aria-label="Filtrar por moneda">
+              <SelectValue placeholder="Moneda" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas las monedas</SelectItem>
+              {availableCurrencies.map((c) => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {hasActiveFilters && (
+          <p className="text-[11px] text-zinc-500">
+            Mostrando {visibleRows.length} de {rows.length} filas
+          </p>
+        )}
+      </div>
 
       <div className="max-h-[min(55vh,460px)] overflow-auto rounded-md border border-zinc-800">
         <Table>

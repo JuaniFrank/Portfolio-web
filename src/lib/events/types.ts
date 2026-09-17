@@ -46,3 +46,24 @@ export type ProjectedPosition = {
 export type EventActionResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string };
+
+/**
+ * Split/cambio de ratio detectado automáticamente por el cron de precios,
+ * pendiente de revisión. Es global (todos los usuarios con el instrumento la
+ * ven), pero `dismissed` es la preferencia del usuario que pide la lista.
+ */
+export type SuggestedCorporateEventDTO = {
+  id: string;
+  instrumentId: string;
+  ticker: string;
+  instrumentName: string;
+  eventType: CorporateEventType;
+  /** YYYY-MM-DD */
+  effectiveDate: string;
+  /** Decimal string */
+  numerator: string;
+  /** Decimal string */
+  denominator: string;
+  source: string;
+  dismissed: boolean;
+};

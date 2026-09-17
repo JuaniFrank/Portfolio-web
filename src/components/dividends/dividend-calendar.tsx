@@ -183,11 +183,9 @@ function MonthDetail({ month, currency }: { month: DividendMonth; currency: View
     <div className="grid gap-3 md:grid-cols-2">
       {month.received.map((r) => {
         const gross = r.currencyCode === "ARS" ? r.grossArs : r.grossUsd;
-        // const tax = r.currencyCode === "ARS" ? r.taxArs : r.taxUsd;
         const tax = r.taxArs;
         const net = r.currencyCode === "ARS" ? r.netArs : r.netUsd;
 
-        console.log({ gross });
         return (
           <div key={r.id} className="rounded-md border border-emerald-900/50 bg-emerald-950/20 p-3">
             <div className="flex items-start justify-between gap-3">
@@ -203,7 +201,7 @@ function MonthDetail({ month, currency }: { month: DividendMonth; currency: View
               </div>
               <div className="text-right">
                 <p className="font-mono text-sm font-semibold text-emerald-400">
-                  {formatMoney(net, currency)}
+                  {formatMoney(net, r.currencyCode)}
                 </p>
                 <p className="text-[11px] text-zinc-500">neto</p>
               </div>
@@ -211,11 +209,11 @@ function MonthDetail({ month, currency }: { month: DividendMonth; currency: View
             <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-zinc-400">
               <div className="rounded bg-zinc-900/60 px-2 py-1">
                 <span className="text-zinc-500">Bruto:</span>{" "}
-                <span className="font-mono text-zinc-200">{formatMoney(gross, currency)}</span>
+                <span className="font-mono text-zinc-200">{formatMoney(gross, r.currencyCode)}</span>
               </div>
               <div className="rounded bg-zinc-900/60 px-2 py-1">
                 <span className="text-zinc-500">Ret.:</span>{" "}
-                <span className="font-mono text-rose-300">{formatMoney(tax, currency)}</span>
+                <span className="font-mono text-rose-300">{Number(tax) > 0 ? formatMoney(tax, "ARS") : "—"}</span>
               </div>
             </div>
           </div>

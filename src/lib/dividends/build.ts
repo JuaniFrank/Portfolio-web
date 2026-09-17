@@ -187,7 +187,12 @@ export function buildDividendsPageData(args: {
       netUsd: t.grossUsd.gt(0) ? t.grossUsd.minus(t.taxUsd).toFixed(2) : "0.00",
       currentQuantity: pickHoldingQuantity(holdings, t.ticker),
     }))
-    .sort((a, b) => Number(b.grossArs) + Number(b.grossUsd) - Number(a.grossArs) - Number(a.grossUsd));
+    .sort((a, b) => {
+      const ccl = cclToday && cclToday > 0 ? cclToday : 0;
+      const totalA = Number(a.grossArs) + (ccl > 0 ? Number(a.grossUsd) * ccl : Number(a.grossUsd));
+      const totalB = Number(b.grossArs) + (ccl > 0 ? Number(b.grossUsd) * ccl : Number(b.grossUsd));
+      return totalB - totalA;
+    });
 
   const monthRows: DividendByMonth[] = Array.from(byMonth.values())
     .map((m) => ({

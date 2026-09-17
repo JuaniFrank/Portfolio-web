@@ -18,6 +18,12 @@ export type BondHolding = {
   nominalHeld: string;
   /** Cost basis in USD (native currency for ON trades). */
   costBasisUsd: string;
+  /**
+   * Cost basis in ARS: each purchase converted at the CCL of its own trade date.
+   * Null when the CCL history does not cover every purchase — or when the caller
+   * did not supply an FX lookup.
+   */
+  costBasisArs: string | null;
   /** Market value in ARS: nominalHeld × (data912.c / 100). Null when price unavailable. */
   marketValueArs: string | null;
   /** Market value in USD: marketValueArs / cclMid. Null when price or CCL unavailable. */

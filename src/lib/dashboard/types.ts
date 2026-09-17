@@ -7,12 +7,20 @@ export type MarketSegment = "CEDEAR" | "Locales" | "Externos" | "Cripto" | "Otro
 
 export type DashboardKpis = {
   totalInvestedArs: string;
+  /** Costo en dólares al CCL del día de cada compra, no al de hoy. */
   totalInvestedUsd: string;
   currentValueArs: string;
   currentValueUsd: string;
   unrealizedPnlArs: string;
   unrealizedPnlUsd: string;
   unrealizedPnlPercent: string;
+  /**
+   * Rendimiento medido en dólares. Difiere del de pesos cuando el CCL se movió: es la
+   * diferencia entre haberle ganado al mercado y haberle ganado al dólar.
+   */
+  unrealizedPnlPercentUsd: string;
+  /** Alguna posición no tenía CCL histórico y su costo en dólares se estimó al de hoy. */
+  usdBasisIsApproximate: boolean;
   cashArs: string;
   cashUsd: string;
   totalInstruments: number;
@@ -30,6 +38,9 @@ export type DashboardHolding = {
   marketValueUsd: string;
   pnlArs: string;
   pnlPercent: string;
+  pnlUsd: string;
+  /** Rendimiento en dólares: valor de hoy al CCL de hoy contra costo al CCL de compra. */
+  pnlPercentUsd: string;
   /** Porcentaje del valor total del portfolio (0-100). */
   weightPercent: string;
 };
@@ -79,6 +90,7 @@ export type TopMover = {
   pnlArs: string;
   pnlUsd: string;
   pnlPercent: string;
+  pnlPercentUsd: string;
 };
 
 export type DashboardData = {
@@ -92,6 +104,12 @@ export type DashboardData = {
   allocationBySector: SectorBar[];
   topGainers: TopMover[];
   topLosers: TopMover[];
+  /**
+   * Ranking medido en dólares. Es una lista propia y no la misma reordenada: el orden
+   * —y el signo— cambian cuando las compras se hicieron a distinto tipo de cambio.
+   */
+  topGainersUsd: TopMover[];
+  topLosersUsd: TopMover[];
   concentration: ConcentrationStats;
   /** Serie histórica reconstruida. Ver `@/lib/dashboard/evolution`. */
   evolution: PortfolioEvolution;

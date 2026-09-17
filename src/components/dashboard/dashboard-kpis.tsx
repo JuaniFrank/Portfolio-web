@@ -13,16 +13,26 @@ export function DashboardKpiCards({ kpis }: Props) {
   const pnlArs = Number(kpis.unrealizedPnlArs);
   const pnlUsd = Number(kpis.unrealizedPnlUsd);
   const pnlPct = Number(kpis.unrealizedPnlPercent);
+  const pnlPctUsd = Number(kpis.unrealizedPnlPercentUsd);
   const pnlClass = pnlArs >= 0 ? "text-emerald-400" : "text-rose-400";
+  // El signo puede diferir del de pesos: ganarle al mercado y perder contra el dólar
+  // es un resultado perfectamente posible, y el color tiene que decirlo.
+  const pnlUsdClass = pnlUsd >= 0 ? "text-emerald-400" : "text-rose-400";
 
   return (
     <div className="grid gap-3 lg:grid-cols-3">
       <KpiCard
         label="Total invertido"
-        hint="Costo total acumulado de tus compras netas (PPP)."
+        hint="Costo total acumulado de tus compras netas (PPP). El importe en dólares usa el CCL del día de cada compra, no el de hoy."
       >
         <CurrencyRow label="ARS" value={formatMoney(kpis.totalInvestedArs, "ARS")} />
         <CurrencyRow label="USD" value={formatMoney(kpis.totalInvestedUsd, "USD")} />
+        {kpis.usdBasisIsApproximate ? (
+          <p className="pt-1 text-[11px] leading-snug text-amber-300/80">
+            Alguna compra quedó fuera del histórico de CCL: su costo en dólares se estimó
+            al tipo de cambio de hoy.
+          </p>
+        ) : null}
       </KpiCard>
 
       <KpiCard
@@ -35,7 +45,7 @@ export function DashboardKpiCards({ kpis }: Props) {
 
       <KpiCard
         label="Rendimiento no realizado"
-        hint="Diferencia entre el valor actual y lo invertido. No incluye dividendos."
+        hint="Diferencia entre el valor actual y lo invertido. No incluye dividendos. El rendimiento en dólares compara el valor de hoy al CCL de hoy contra lo que costó al CCL de cada compra, así que difiere del de pesos cuando el tipo de cambio se movió."
       >
         <CurrencyRow
           label="ARS"
@@ -47,9 +57,9 @@ export function DashboardKpiCards({ kpis }: Props) {
         <CurrencyRow
           label="USD"
           value={formatMoney(kpis.unrealizedPnlUsd, "USD")}
-          valueClass={pnlClass}
-          delta={pnlUsd === 0 ? null : formatSignedPercent(pnlPct)}
-          deltaClass={pnlClass}
+          valueClass={pnlUsdClass}
+          delta={formatSignedPercent(pnlPctUsd)}
+          deltaClass={pnlUsdClass}
         />
       </KpiCard>
 

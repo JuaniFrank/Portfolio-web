@@ -1,11 +1,12 @@
 /**
- * Curated corporate events that the app can suggest applying with one click.
+ * Curated corporate events known ahead of time, used only to seed real
+ * CorporateEvent rows (prisma/seed.ts) for well-known Argentine CEDEAR/
+ * instrument actions whose parameters are public and stable.
  *
- * These are well-known Argentine CEDEAR/instrument corporate actions whose exact
- * parameters are public and stable. The recommendation UI surfaces one only when
- * the user actually holds the instrument AND has not already recorded a matching
- * CorporateEvent. Applying a recommendation just creates a normal CorporateEvent —
- * the adjustment itself always happens at holdings-aggregation time.
+ * The one-click suggestion UI that used to read this list is gone — main's
+ * SuggestedCorporateEvent auto-detection (`src/app/actions/suggested-events.ts`)
+ * replaced it, and already skips any instrument with a real CorporateEvent
+ * recorded, so seeding these facts directly here cannot double-suggest them.
  */
 
 import { CorporateEventType, InstrumentType } from "@/lib/generated/prisma";
@@ -59,49 +60,3 @@ export const RECOMMENDED_EVENTS: RecommendedEvent[] = [
   },
 ];
 
-export type ApplicableRecommendation = RecommendedEvent & {
-  instrumentId: string;
-  instrumentName: string;
-};
-
-type InstrumentLike = { id: string; ticker: string; name: string };
-type ExistingEventLike = {
-  instrumentId: string;
-  effectiveDate: string;
-  eventType: string;
-};
-
-/**
- * Resolve which recommended events apply to this user right now: the instrument
- * is in their portfolio and no matching event (same instrument, date and type)
- * has been recorded yet.
- */
-export function resolveApplicableRecommendations(
-  instruments: InstrumentLike[],
-  existingEvents: ExistingEventLike[]
-): ApplicableRecommendation[] {
-  const applicable: ApplicableRecommendation[] = [];
-
-  for (const rec of RECOMMENDED_EVENTS) {
-    const instrument = instruments.find(
-      (i) => i.ticker.toUpperCase() === rec.ticker.toUpperCase()
-    );
-    if (!instrument) continue; // user does not hold it
-
-    const alreadyRecorded = existingEvents.some(
-      (e) =>
-        e.instrumentId === instrument.id &&
-        e.effectiveDate === rec.effectiveDate &&
-        e.eventType === rec.eventType
-    );
-    if (alreadyRecorded) continue;
-
-    applicable.push({
-      ...rec,
-      instrumentId: instrument.id,
-      instrumentName: instrument.name,
-    });
-  }
-
-  return applicable;
-}
