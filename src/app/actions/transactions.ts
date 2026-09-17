@@ -337,21 +337,6 @@ export async function searchInstrumentsAction(
     } as const;
     const inst = await prisma.instrument.findFirst({ where: identity });
     // Si no se encuentra, no se puede crear porque el ticker no es válido.
-    // if (!inst) {
-    //   try {
-    //     inst = await prisma.instrument.create({
-    //       data: {
-    //         ...identity,
-    //         name: displayNameFor(m.ticker),
-    //         taxJurisdiction: m.type === "STOCK_US" ? "US" : "AR",
-    //         active: true,
-    //       },
-    //     });
-    //   } catch {
-    //     continue; // lost a race or transient error — skip this one
-    //   }
-    // }
-
     if (!inst) continue;
     healed.push({
       ticker: inst.ticker,
