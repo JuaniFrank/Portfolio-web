@@ -71,8 +71,6 @@ def enrich_catalog_instrument(
 
     import yfinance as yf
 
-    console.log("enrich_catalog_instrument", canonical, provider_symbol)
-
     info: dict[str, Any] = yf.Ticker(provider_symbol).info or {}
     name = info.get("longName") or info.get("shortName") or canonical
     currency = info.get("currency")
