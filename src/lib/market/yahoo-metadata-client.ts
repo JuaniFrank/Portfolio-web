@@ -85,12 +85,19 @@ async function postBatch(
   items: BatchItem[]
 ): Promise<{ status: number; results: Array<Record<string, unknown>> }> {
   const secret = process.env.INTERNAL_FUNCTION_SECRET;
-  console.log("postBatch", mode, items);
-  const res = await fetch(`${resolveBaseUrl()}/api/yahoo-metadata`, {
+  // Fail here rather than send an unauthenticated request: the function fails
+  // closed too, so a missing secret would otherwise surface as an indistinguishable
+  // 401 repeated once per instrument.
+  if (!secret) {
+    throw new Error("INTERNAL_FUNCTION_SECRET is not set — cannot authenticate against the function");
+  }
+
+  const url = `${resolveBaseUrl()}/api/yahoo-metadata`;
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(secret ? { "X-Internal-Token": secret } : {}),
+      "X-Internal-Token": secret,
     },
     body: JSON.stringify({ mode, items }),
     cache: "no-store",
@@ -98,7 +105,14 @@ async function postBatch(
   });
 
   if (!res.ok) {
-    throw new Error(`yahoo-metadata function returned ${res.status}`);
+    // The status alone cannot tell the function's own rejection apart from one
+    // by an edge that never ran it — Vercel's deployment protection answers 401
+    // with HTML, the function with JSON. The body is the only discriminator.
+    const body = await res.text().catch(() => "");
+    const excerpt = body.replace(/\s+/g, " ").trim().slice(0, 180);
+    throw new Error(
+      `yahoo-metadata function returned ${res.status} from ${url}${excerpt ? ` — ${excerpt}` : ""}`
+    );
   }
 
   const body = (await res.json()) as { results?: unknown };
