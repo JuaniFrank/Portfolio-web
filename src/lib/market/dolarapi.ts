@@ -2,6 +2,7 @@
  * Cliente para dolarapi.com — API pública de cotizaciones del dólar en Argentina.
  *
  * Endpoint CCL (Contado con Liquidación): https://dolarapi.com/v1/dolares/contadoconliqui
+ * Endpoint MEP (Bolsa): https://dolarapi.com/v1/dolares/bolsa (design §4.5, T-33)
  *
  * No requiere autenticación. Para no saturarla, cacheamos la respuesta vía
  * Next 16 fetch revalidate (15 min). Si la API falla, devolvemos null y la UI
@@ -9,6 +10,7 @@
  */
 
 const CCL_ENDPOINT = "https://dolarapi.com/v1/dolares/contadoconliqui";
+const MEP_ENDPOINT = "https://dolarapi.com/v1/dolares/bolsa";
 const REVALIDATE_SECONDS = 60 * 15;
 
 type DolarapiResponse = {
@@ -31,10 +33,10 @@ export type CclQuote = {
   updatedAt: string | null;
 };
 
-export async function fetchCclQuote(): Promise<CclQuote | null> {
+async function fetchDolarapiQuote(url: string, tag: string): Promise<CclQuote | null> {
   try {
-    const res = await fetch(CCL_ENDPOINT, {
-      next: { revalidate: REVALIDATE_SECONDS, tags: ["ccl-quote"] },
+    const res = await fetch(url, {
+      next: { revalidate: REVALIDATE_SECONDS, tags: [tag] },
       headers: { Accept: "application/json" },
     });
     if (!res.ok) return null;
@@ -51,4 +53,17 @@ export async function fetchCclQuote(): Promise<CclQuote | null> {
   } catch {
     return null;
   }
+}
+
+export async function fetchCclQuote(): Promise<CclQuote | null> {
+  return fetchDolarapiQuote(CCL_ENDPOINT, "ccl-quote");
+}
+
+/**
+ * MEP (dólar Bolsa) quote — same shape, same opt-in cache, same null-on-
+ * failure contract as `fetchCclQuote`. Feeds `ReferenceRates.mep` for the
+ * MEP/CCL split (design AD-13b, §4.5). `ccl-rate.ts` is NOT modified.
+ */
+export async function fetchMepQuote(): Promise<CclQuote | null> {
+  return fetchDolarapiQuote(MEP_ENDPOINT, "mep-quote");
 }

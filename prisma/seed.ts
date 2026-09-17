@@ -5,68 +5,42 @@ import {
   PrismaClient,
   VenueType,
 } from "../src/lib/generated/prisma";
+import { RECOMMENDED_EVENTS } from "../src/lib/events/recommended";
 
 const prisma = new PrismaClient();
 
 async function main() {
   // 1. Currencies
   const currencies = [
-    {
-      code: "ARS",
-      name: "Peso Argentino",
-      symbol: "$",
-      decimals: 2,
-      isFiat: true,
-      isCrypto: false,
-    },
-    {
-      code: "USD",
-      name: "US Dollar",
-      symbol: "US$",
-      decimals: 2,
-      isFiat: true,
-      isCrypto: false,
-    },
-    {
-      code: "EUR",
-      name: "Euro",
-      symbol: "€",
-      decimals: 2,
-      isFiat: true,
-      isCrypto: false,
-    },
-    {
-      code: "USDT",
-      name: "Tether",
-      symbol: "USDT",
-      decimals: 6,
-      isFiat: false,
-      isCrypto: true,
-    },
-    {
-      code: "USDC",
-      name: "USD Coin",
-      symbol: "USDC",
-      decimals: 6,
-      isFiat: false,
-      isCrypto: true,
-    },
-    {
-      code: "BTC",
-      name: "Bitcoin",
-      symbol: "₿",
-      decimals: 8,
-      isFiat: false,
-      isCrypto: true,
-    },
-    {
-      code: "ETH",
-      name: "Ethereum",
-      symbol: "Ξ",
-      decimals: 18,
-      isFiat: false,
-      isCrypto: true,
-    },
+    // --- Originales ---
+    { code: "USD", name: "US Dollar", symbol: "US$", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "EUR", name: "Euro", symbol: "€", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "ARS", name: "Peso Argentino", symbol: "$ars", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "MXN", name: "Peso Mexicano", symbol: "$mxn", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "BRL", name: "Real", symbol: "R$", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "USDT", name: "Tether", symbol: "USDT", decimals: 6, isCrypto: true, isFiat: false },
+    { code: "USDC", name: "USD Coin", symbol: "USDC", decimals: 6, isCrypto: true, isFiat: false },
+    { code: "BTC", name: "Bitcoin", symbol: "₿", decimals: 8, isCrypto: true, isFiat: false },
+    { code: "ETH", name: "Ethereum", symbol: "Ξ", decimals: 18, isCrypto: true, isFiat: false },
+
+    // --- Monedas de países con CEDEARs en BYMA ---
+    { code: "GBP", name: "Libra Esterlina", symbol: "£", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "CHF", name: "Franco Suizo", symbol: "CHF", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "JPY", name: "Yen Japonés", symbol: "¥", decimals: 0, isCrypto: false, isFiat: true },
+    { code: "CNY", name: "Yuan Chino", symbol: "CN¥", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "INR", name: "Rupia India", symbol: "₹", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "TWD", name: "Nuevo Dólar Taiwanés", symbol: "NT$", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "ZAR", name: "Rand Sudafricano", symbol: "R", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "CAD", name: "Dólar Canadiense", symbol: "CA$", decimals: 2, isCrypto: false, isFiat: true },
+
+    // --- Extras (plazas grandes / LatAm regional) ---
+    { code: "AUD", name: "Dólar Australiano", symbol: "A$", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "HKD", name: "Dólar de Hong Kong", symbol: "HK$", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "SGD", name: "Dólar de Singapur", symbol: "S$", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "CLP", name: "Peso Chileno", symbol: "CLP$", decimals: 0, isCrypto: false, isFiat: true },
+    { code: "COP", name: "Peso Colombiano", symbol: "COL$", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "PEN", name: "Sol Peruano", symbol: "S/", decimals: 2, isCrypto: false, isFiat: true },
+    { code: "UYU", name: "Peso Uruguayo", symbol: "$U", decimals: 2, isCrypto: false, isFiat: true },
   ];
 
   for (const c of currencies) {
@@ -113,6 +87,41 @@ async function main() {
       country: null,
       timezone: "UTC",
       type: VenueType.CRYPTO,
+    },
+    {
+      code: "AMEX",
+      name: "NYSE American (AMEX)",
+      country: "US",
+      timezone: "America/New_York",
+      type: VenueType.EXCHANGE,
+    },
+    {
+      code: "CBOE",
+      name: "Cboe Global Markets",
+      country: "US",
+      timezone: "America/Chicago",
+      type: VenueType.EXCHANGE,
+    },
+    {
+      code: "B3",
+      name: "B3 Brasil",
+      country: "BR",
+      timezone: "America/Sao_Paulo",
+      type: VenueType.EXCHANGE,
+    },
+    {
+      code: "LSE",
+      name: "London Stock Exchange",
+      country: "GB",
+      timezone: "Europe/London",
+      type: VenueType.EXCHANGE,
+    },
+    {
+      code: "BCBA",
+      name: "Bolsa de Comercio de Buenos Aires",
+      country: "AR",
+      timezone: "America/Argentina/Buenos_Aires",
+      type: VenueType.EXCHANGE,
     },
   ];
 
@@ -367,6 +376,54 @@ async function main() {
 
   await upsertCashInstrument({ ticker: "CASH-ARS", name: "Efectivo ARS", currencyCode: "ARS" });
   await upsertCashInstrument({ ticker: "CASH-USD", name: "Efectivo USD", currencyCode: "USD" });
+
+  // 6. Known public corporate actions (FR-15), loaded from RECOMMENDED_EVENTS.
+  // Seeded as real CorporateEvent rows so main's SuggestedCorporateEvent
+  // auto-detection never re-suggests them (it skips instruments that already
+  // have a matching CorporateEvent). createdByUserId is null: this is a
+  // global fact about the instrument, not a user record
+  // (schema comment on CorporateEvent.createdByUserId).
+  for (const rec of RECOMMENDED_EVENTS) {
+    const instrument = await prisma.instrument.upsert({
+      where: {
+        ticker_type_venueCode_currencyCode: {
+          ticker: rec.ticker,
+          type: rec.instrumentType,
+          venueCode: "BYMA",
+          currencyCode: "ARS",
+        },
+      },
+      create: {
+        ticker: rec.ticker,
+        name: `${rec.ticker} (${rec.instrumentType})`,
+        type: rec.instrumentType,
+        venueCode: "BYMA",
+        currencyCode: "ARS",
+        taxJurisdiction: "AR",
+      },
+      update: {},
+    });
+
+    await prisma.corporateEvent.upsert({
+      where: {
+        instrumentId_effectiveDate_eventType: {
+          instrumentId: instrument.id,
+          effectiveDate: new Date(rec.effectiveDate),
+          eventType: rec.eventType,
+        },
+      },
+      create: {
+        instrumentId: instrument.id,
+        eventType: rec.eventType,
+        effectiveDate: new Date(rec.effectiveDate),
+        numerator: new Prisma.Decimal(rec.numerator),
+        denominator: new Prisma.Decimal(rec.denominator),
+        notes: rec.notes,
+        createdByUserId: null,
+      },
+      update: {},
+    });
+  }
 }
 
 main()

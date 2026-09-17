@@ -1,8 +1,13 @@
-import { Prisma, type InstrumentType } from "@/lib/generated/prisma";
+import { Prisma, type InstrumentType, type Settlement } from "@/lib/generated/prisma";
 import { prisma } from "@/lib/prisma";
-import { buildYahooSymbol, fetchYahooQuote } from "./yahoo";
+import { resolveCclRate } from "./ccl-rate";
+import { resolveMonitoringRouting } from "./provider-routing";
+import { fetchYahooQuote } from "./yahoo";
 
-/** Tipos que cotizan en BYMA y por lo tanto llevan sufijo `.BA` en Yahoo. */
+/** Tipos que cotizan en BYMA y por lo tanto llevan sufijo `.BA` en Yahoo.
+ * Kept for other callers (history-sync.ts, forecast.ts); `refreshLatestQuotes`
+ * itself now resolves its symbol via `resolveMonitoringRouting` (T-30/T-35,
+ * AD-6) instead of this inline check. */
 export const ARGENTINIAN_TYPES = new Set<InstrumentType>([
   "CEDEAR",
   "STOCK_AR",
@@ -18,6 +23,12 @@ export type InstrumentForQuote = {
   id: string;
   ticker: string;
   type: InstrumentType;
+  /** Currency-aware routing (AD-6). Optional for backward compatibility with
+   * callers that only quote already-ARS-native instruments; defaults applied
+   * below make such a call behave exactly as before this change. */
+  currencyCode?: string;
+  settlement?: Settlement;
+  baseInstrument?: { ticker: string } | null;
 };
 
 export type RefreshQuotesResult = {
@@ -26,12 +37,14 @@ export type RefreshQuotesResult = {
 };
 
 /**
- * Para cada instrumento devuelve su último precio en moneda nativa del ticker
- * (ARS para CEDEAR/STOCK_AR vía Yahoo .BA, USD para STOCK_US/ETF).
+ * Para cada instrumento devuelve su último precio en ARS.
  *
- * Usa PriceCache si hay un valor reciente; si no, pega a Yahoo, guarda
- * el nuevo precio y lo devuelve. Falla silenciosa por ticker para no
- * romper la página entera.
+ * Usa PriceCache si hay un valor reciente; si no, resuelve el símbolo/moneda
+ * vía `resolveMonitoringRouting(inst, "spot")` (AD-6): un variante linkeado
+ * cotiza contra el símbolo `.BA` de su base; el resultado se convierte a ARS
+ * cuando la moneda resuelta es USD, vía la misma `resolveCclRate()` que ya
+ * usa la rama ON. `PriceCache` permanece siempre en ARS — su semántica no
+ * cambia. Falla silenciosa por ticker para no romper la página entera.
  */
 export async function refreshLatestQuotes(
   instruments: InstrumentForQuote[]
@@ -61,12 +74,39 @@ export async function refreshLatestQuotes(
     }
   }
 
+  if (toFetch.length === 0) return { prices, errors };
+
+  // Resolved lazily, once, only if a USD-routed instrument actually needs it.
+  let cclRatePromise: Promise<number | null> | null = null;
+  const resolveCcl = () => (cclRatePromise ??= resolveCclRate());
+
   await Promise.all(
     toFetch.map(async (inst) => {
-      const symbol = buildYahooSymbol(inst.ticker, ARGENTINIAN_TYPES.has(inst.type));
+      const routing = resolveMonitoringRouting(
+        {
+          id: inst.id,
+          ticker: inst.ticker,
+          type: inst.type,
+          currencyCode: inst.currencyCode ?? "ARS",
+          settlement: inst.settlement ?? "ARS",
+          baseInstrument: inst.baseInstrument ?? null,
+        },
+        "spot"
+      );
+      const symbol = routing.externalSymbol;
+
       try {
         const quote = await fetchYahooQuote(symbol);
-        prices.set(inst.id, quote.price.toString());
+        let priceArs = quote.price;
+        if (routing.currency === "USD") {
+          const cclRate = await resolveCcl();
+          if (!cclRate || cclRate <= 0) {
+            throw new Error("CCL rate unavailable for USD-routed quote conversion");
+          }
+          priceArs = quote.price * cclRate;
+        }
+
+        prices.set(inst.id, priceArs.toString());
         const datetime = quote.asOf ? new Date(quote.asOf * 1000) : new Date();
         await prisma.priceCache.upsert({
           where: {
@@ -79,11 +119,11 @@ export async function refreshLatestQuotes(
           create: {
             instrumentId: inst.id,
             datetime,
-            close: new Prisma.Decimal(quote.price),
+            close: new Prisma.Decimal(priceArs),
             source: "yahoo",
           },
           update: {
-            close: new Prisma.Decimal(quote.price),
+            close: new Prisma.Decimal(priceArs),
           },
         });
       } catch (err) {

@@ -4,7 +4,11 @@ import { syncInstrumentCatalog } from "@/lib/market/catalog-sync";
 // `Authorization: Bearer $CRON_SECRET`, which we verify so the endpoint can't
 // be triggered by anyone who guesses the URL.
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// 300s (design §9.2, T-54): the reordered pipeline now includes the AD-12
+// currency-oracle fan-out (~70 batched requests) and AD-13's whole-universe
+// ISIN linking pass on top of the original ingestion work. `backfill-prices`
+// already proves 300 works on this Vercel plan.
+export const maxDuration = 300;
 
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;

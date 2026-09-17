@@ -7,7 +7,7 @@
     "build": "prisma migrate deploy && prisma generate && next build",
     "postinstall": "prisma generate",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
     "diagnose:rendimientos": "tsx scripts/diagnose-rendimientos.ts",

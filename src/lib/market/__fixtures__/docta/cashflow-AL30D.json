@@ -1,0 +1,219 @@
+{
+  "ticker": "AL30D",
+  "data": [
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2021-07-09",
+      "capital": 0,
+      "interest_rate": 0.13,
+      "interest_amount": 0.1096986301369863,
+      "residual_value": 100,
+      "cash_flow": 0.1096986301369863,
+      "adj_interest_amount": 0.1096986301369863,
+      "adj_capital": 0
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2022-01-09",
+      "capital": 0,
+      "interest_rate": 0.5,
+      "interest_amount": 0.25205479452054796,
+      "residual_value": 100,
+      "cash_flow": 0.25205479452054796,
+      "adj_interest_amount": 0.25205479452054796,
+      "adj_capital": 0
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2022-07-09",
+      "capital": 0,
+      "interest_rate": 0.5,
+      "interest_amount": 0.24794520547945206,
+      "residual_value": 100,
+      "cash_flow": 0.2479452054794521,
+      "adj_interest_amount": 0.2479452054794521,
+      "adj_capital": 0
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2023-01-09",
+      "capital": 0,
+      "interest_rate": 0.5,
+      "interest_amount": 0.25205479452054796,
+      "residual_value": 100,
+      "cash_flow": 0.25205479452054796,
+      "adj_interest_amount": 0.25205479452054796,
+      "adj_capital": 0
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2023-07-09",
+      "capital": 0,
+      "interest_rate": 0.5,
+      "interest_amount": 0.24794520547945206,
+      "residual_value": 100,
+      "cash_flow": 0.2479452054794521,
+      "adj_interest_amount": 0.2479452054794521,
+      "adj_capital": 0
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2024-01-09",
+      "capital": 0,
+      "interest_rate": 0.75,
+      "interest_amount": 0.37808219178082186,
+      "residual_value": 100,
+      "cash_flow": 0.3780821917808218,
+      "adj_interest_amount": 0.3780821917808218,
+      "adj_capital": 0
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2024-07-09",
+      "capital": 4,
+      "interest_rate": 0.75,
+      "interest_amount": 0.373972602739726,
+      "residual_value": 96,
+      "cash_flow": 4.373972602739726,
+      "adj_interest_amount": 0.373972602739726,
+      "adj_capital": 4
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2025-01-09",
+      "capital": 8,
+      "interest_rate": 0.75,
+      "interest_amount": 0.37808219178082186,
+      "residual_value": 88,
+      "cash_flow": 8.36295890410959,
+      "adj_interest_amount": 0.362958904109589,
+      "adj_capital": 8
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2025-07-09",
+      "capital": 8,
+      "interest_rate": 0.75,
+      "interest_amount": 0.371917808219178,
+      "residual_value": 80,
+      "cash_flow": 8.327287671232877,
+      "adj_interest_amount": 0.32728767123287666,
+      "adj_capital": 8
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2026-01-09",
+      "capital": 8,
+      "interest_rate": 0.75,
+      "interest_amount": 0.37808219178082186,
+      "residual_value": 72,
+      "cash_flow": 8.302465753424658,
+      "adj_interest_amount": 0.3024657534246575,
+      "adj_capital": 8
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2026-07-09",
+      "capital": 8,
+      "interest_rate": 0.75,
+      "interest_amount": 0.371917808219178,
+      "residual_value": 64,
+      "cash_flow": 8.267780821917809,
+      "adj_interest_amount": 0.26778082191780817,
+      "adj_capital": 8
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2027-01-09",
+      "capital": 8,
+      "interest_rate": 0.75,
+      "interest_amount": 0.37808219178082186,
+      "residual_value": 56,
+      "cash_flow": 8.241972602739725,
+      "adj_interest_amount": 0.24197260273972598,
+      "adj_capital": 8
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2027-07-09",
+      "capital": 8,
+      "interest_rate": 0.75,
+      "interest_amount": 0.371917808219178,
+      "residual_value": 48,
+      "cash_flow": 8.20827397260274,
+      "adj_interest_amount": 0.2082739726027397,
+      "adj_capital": 8
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2028-01-09",
+      "capital": 8,
+      "interest_rate": 1.7500000000000002,
+      "interest_amount": 0.8821917808219178,
+      "residual_value": 40,
+      "cash_flow": 8.42345205479452,
+      "adj_interest_amount": 0.4234520547945205,
+      "adj_capital": 8
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2028-07-09",
+      "capital": 8,
+      "interest_rate": 1.7500000000000002,
+      "interest_amount": 0.8726027397260274,
+      "residual_value": 32,
+      "cash_flow": 8.349041095890412,
+      "adj_interest_amount": 0.349041095890411,
+      "adj_capital": 8
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2029-01-09",
+      "capital": 8,
+      "interest_rate": 1.7500000000000002,
+      "interest_amount": 0.8821917808219178,
+      "residual_value": 24,
+      "cash_flow": 8.282301369863013,
+      "adj_interest_amount": 0.2823013698630137,
+      "adj_capital": 8
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2029-07-09",
+      "capital": 8,
+      "interest_rate": 1.7500000000000002,
+      "interest_amount": 0.8678082191780823,
+      "residual_value": 16,
+      "cash_flow": 8.20827397260274,
+      "adj_interest_amount": 0.20827397260273972,
+      "adj_capital": 8
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2030-01-09",
+      "capital": 8,
+      "interest_rate": 1.7500000000000002,
+      "interest_amount": 0.8821917808219178,
+      "residual_value": 8,
+      "cash_flow": 8.141150684931507,
+      "adj_interest_amount": 0.14115068493150684,
+      "adj_capital": 8
+    },
+    {
+      "issue_date": "2020-09-04",
+      "payment_date": "2030-07-09",
+      "capital": 8,
+      "interest_rate": 1.7500000000000002,
+      "interest_amount": 0.8678082191780823,
+      "residual_value": 0,
+      "cash_flow": 8.069424657534247,
+      "adj_interest_amount": 0.06942465753424658,
+      "adj_capital": 8
+    }
+  ],
+  "metadata": {
+    "subasset_class": "HARD_DOLLAR",
+    "nominal_units": 100,
+    "total_records": 19
+  }
+}

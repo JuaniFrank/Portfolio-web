@@ -44,6 +44,8 @@ const INSTRUMENT_TYPE_OPTIONS: { value: InstrumentType; label: string }[] = [
   { value: InstrumentType.CEDEAR, label: "CEDEAR" },
   { value: InstrumentType.STOCK_AR, label: "Acción argentina" },
   { value: InstrumentType.ON, label: "Obligación negociable" },
+  { value: InstrumentType.BOND_AR, label: "Bono soberano" },
+  { value: InstrumentType.LETRA, label: "Letra" },
 ];
 
 function todayIso() {
@@ -182,7 +184,11 @@ export function NewTransactionDialog() {
                   <datalist id={listId}>
                     {instruments.map((i) => (
                       <option key={`${i.ticker}-${i.type}`} value={i.ticker}>
-                        {i.name}
+                        {/* FR-8 settlement chip: no chip for ARS. A native
+                         * <datalist> option cannot render a real colored
+                         * Badge — the closest faithful equivalent within this
+                         * browser-native control is the bracketed code. */}
+                        {i.settlement === "ARS" ? i.name : `${i.name} [${i.settlement}]`}
                       </option>
                     ))}
                   </datalist>

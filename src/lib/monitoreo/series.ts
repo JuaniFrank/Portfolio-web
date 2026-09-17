@@ -5,7 +5,7 @@ import type {
   MonitoringHistoryStatus,
   MonitoringRange,
   MonitoringSeries,
-  MonitoringSeriesKind,
+  UiMonitoringSeriesKind,
 } from "./types";
 
 /**
@@ -229,7 +229,7 @@ export function buildMonitoringSeries(opts: {
   ticker: string;
   label: string;
   currency: MonitoringCurrency;
-  kind: MonitoringSeriesKind;
+  kind: UiMonitoringSeriesKind;
   chartType?: MonitoringSeries["chartType"];
   provider: MonitoringSeries["provider"];
   source: string;

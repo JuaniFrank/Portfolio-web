@@ -1,8 +1,10 @@
 /**
- * Adapta posiciones ON (valuación data912) al formato de Dashboard y Transacciones.
+ * Adapta posiciones de renta fija (ON, BOND_AR, LETRA — valuación data912) al
+ * formato de Dashboard y Transacciones.
  */
 
 import Decimal from "decimal.js";
+import type { InstrumentType } from "@/lib/generated/prisma";
 import type { HoldingForDashboard } from "@/lib/dashboard/build";
 import type { FetchOnPricesResult } from "@/lib/market/data912";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
@@ -13,6 +15,8 @@ import { markToMarket } from "./valuation";
 export type ValuatedOnPosition = {
   instrumentId: string;
   ticker: string;
+  /** ON, BOND_AR, or LETRA — never hardcoded, carried from the source trades. */
+  instrumentType: InstrumentType;
   instrumentName: string;
   nominalHeld: string;
   costBasisUsd: string;
@@ -54,6 +58,7 @@ export function toBondTrade(t: TradeForHoldings, currencyCode: string): TradeFor
   return {
     instrumentId: t.instrumentId,
     ticker: t.ticker,
+    instrumentType: t.instrumentType,
     type: t.type,
     quantity: t.quantity,
     netAmount: t.netAmount,
@@ -72,6 +77,11 @@ export function valuateOnPositions(
   const buySell = trades.filter((t) => t.type === "BUY" || t.type === "SELL");
   const raw = buildBondHoldings(buySell, fx);
 
+  const typesById = new Map<string, InstrumentType>();
+  for (const t of trades) {
+    if (!typesById.has(t.instrumentId)) typesById.set(t.instrumentId, t.instrumentType);
+  }
+
   return raw.map((h) => {
     const quote = priceResult.quotes.get(h.ticker.toUpperCase()) ?? null;
     const isStale = priceResult.stale && quote !== null;
@@ -86,6 +96,7 @@ export function valuateOnPositions(
     return {
       instrumentId: h.instrumentId,
       ticker: h.ticker,
+      instrumentType: typesById.get(h.instrumentId) ?? "ON",
       instrumentName: namesById.get(h.instrumentId) ?? h.ticker,
       nominalHeld: h.nominalHeld,
       costBasisUsd: h.costBasisUsd,
@@ -114,7 +125,7 @@ export function toHoldingRow(p: ValuatedOnPosition): HoldingRow {
   return {
     instrumentId: p.instrumentId,
     ticker: p.ticker,
-    instrumentType: "ON",
+    instrumentType: p.instrumentType,
     instrumentName: p.instrumentName,
     quantity: p.nominalHeld,
     avgPriceArs,
@@ -130,12 +141,15 @@ export function toHoldingRow(p: ValuatedOnPosition): HoldingRow {
   };
 }
 
-export function toDashboardHolding(p: ValuatedOnPosition): HoldingForDashboard {
+export function toDashboardHolding(
+  p: ValuatedOnPosition,
+  sector: string | null = null
+): HoldingForDashboard {
   return {
     instrumentId: p.instrumentId,
     ticker: p.ticker,
     instrumentName: p.instrumentName,
-    instrumentType: "ON",
+    instrumentType: p.instrumentType,
     quantity: p.nominalHeld,
     costBasisArs: p.costBasisArs,
     marketValueArs: p.marketValueArs,
@@ -145,6 +159,6 @@ export function toDashboardHolding(p: ValuatedOnPosition): HoldingForDashboard {
     marketValueUsd: p.marketValueUsd,
     pnlUsd: p.pnlUsd,
     pnlPercentUsd: p.pnlPercentUsd,
-    sector: null,
+    sector,
   };
 }

@@ -8,6 +8,7 @@ import {
   ensureDefaultImportTargets,
   findDefaultImportTargets,
 } from "@/lib/importers/commit-import";
+import { enrichUsedInstruments } from "@/lib/market/yahoo-catalog";
 import {
   toDuplicateRow,
   type DuplicateBatch,
@@ -294,6 +295,33 @@ export async function commitImportAction(
 
   if (result.ok) {
     revalidateImportConsumers();
+
+    // AD-9/T-53: enrichment runs after the response is prepared — a Yahoo/
+    // Docta failure here can never fail this commit (FR-13). Instruments are
+    // re-resolved from the just-committed batch rather than threaded through
+    // commitImportBatch's return shape, keeping that contract unchanged.
+    const importBatchId = result.importBatchId;
+    after(async () => {
+      try {
+        const rows = await prisma.transaction.findMany({
+          where: { importBatchId, instrumentId: { not: null } },
+          distinct: ["instrumentId"],
+          select: { instrumentId: true },
+        });
+        const ids = rows.flatMap((r) => (r.instrumentId ? [r.instrumentId] : []));
+        if (ids.length === 0) return;
+        await enrichUsedInstruments(ids);
+        const { enrichDoctaHeldInstruments } = await import("@/lib/market/docta-enrichment");
+        await enrichDoctaHeldInstruments(ids);
+      } catch (error) {
+        console.warn(
+          `[imports] post-commit enrichment failed for batch ${importBatchId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    });
+
     // Sin esto, las métricas de /rendimientos quedan vacías hasta la corrida
     // nocturna de los crons: `after` corre en background, no bloquea la
     // respuesta del import.

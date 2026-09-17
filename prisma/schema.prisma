@@ -101,6 +101,16 @@ enum FxSource {
   BROKER
 }
 
+// Instrument.settlement (AD-1). ARS = main board. USD = settles in USD, MEP
+// vs CCL split not yet determined. MEP/CCL = split known. Every state is a
+// positive assertion; there is no "unknown" outside this enum's own USD case.
+enum Settlement {
+  ARS
+  USD
+  MEP
+  CCL
+}
+
 enum MacroCode {
   IPC_AR
   CPI_US
@@ -134,13 +144,13 @@ model Currency {
   isFiat   Boolean @default(true)
 
   // relaciones inversas
-  instrumentsByCurrency       Instrument[]
-  portfoliosAsBase            Portfolio[]      @relation("PortfolioBaseCurrency")
-  usersAsDisplay              User[]           @relation("UserDisplayCurrency")
-  brokerAccountsByCurrency    BrokerAccount[]
-  transactionsByCurrency      Transaction[]
-  fxRatesAsBase               FxRate[]         @relation("FxRateBase")
-  fxRatesAsQuote              FxRate[]         @relation("FxRateQuote")
+  instrumentsByCurrency    Instrument[]
+  portfoliosAsBase         Portfolio[]     @relation("PortfolioBaseCurrency")
+  usersAsDisplay           User[]          @relation("UserDisplayCurrency")
+  brokerAccountsByCurrency BrokerAccount[]
+  transactionsByCurrency   Transaction[]
+  fxRatesAsBase            FxRate[]        @relation("FxRateBase")
+  fxRatesAsQuote           FxRate[]        @relation("FxRateQuote")
 }
 
 model Venue {
@@ -184,13 +194,13 @@ model User {
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
 
-  portfolios                     Portfolio[]
-  brokerAccounts                 BrokerAccount[]
-  imports                        ImportBatch[]
-  auditLogs                      AuditLog[]
-  tags                           Tag[]
-  corporateEventsCreated         CorporateEvent[]                   @relation("CorporateEventCreator")
-  suggestedEventDismissals       SuggestedCorporateEventDismissal[]
+  portfolios               Portfolio[]
+  brokerAccounts           BrokerAccount[]
+  imports                  ImportBatch[]
+  auditLogs                AuditLog[]
+  tags                     Tag[]
+  corporateEventsCreated   CorporateEvent[]                   @relation("CorporateEventCreator")
+  suggestedEventDismissals SuggestedCorporateEventDismissal[]
 }
 
 model Portfolio {
@@ -265,6 +275,11 @@ model Instrument {
   underlyingAssetId String?
   underlyingAsset   UnderlyingAsset? @relation(fields: [underlyingAssetId], references: [id])
   conversionRatio   Decimal?         @db.Decimal(20, 8) // para CEDEARs
+  // NEVER add @unique to isin. Settlement variants (e.g. AL30 / AL30D)
+  // deliberately SHARE an ISIN — that sharing IS the base<->variant link
+  // (design AD-13, R-2e). A unique constraint would make it impossible to
+  // persist a base and its variant at the same time, and the failure would
+  // surface at insert time on a reset database, not at review time.
   isin              String?
   taxJurisdiction   String? // "AR" | "US" | etc — para reporting impositivo futuro
   taxExempt         Boolean          @default(false)
@@ -272,15 +287,44 @@ model Instrument {
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
-  transactions              Transaction[]
-  prices                    PriceCache[]
-  corporateEvents           CorporateEvent[]
-  suggestedCorporateEvents  SuggestedCorporateEvent[]
-  bondTerms                 BondTerms?
+  // Settlement variants (AD-1, AD-12, AD-13). settlement is non-nullable:
+  // every row is a positive assertion, never a default. baseInstrumentId
+  // stays nullable for a semantic reason — a base instrument has no base.
+  settlement       Settlement   @default(ARS)
+  baseInstrumentId String?
+  baseInstrument   Instrument?  @relation("InstrumentVariants", fields: [baseInstrumentId], references: [id], onDelete: SetNull)
+  variants         Instrument[] @relation("InstrumentVariants")
+
+  // Provider-sourced metadata (AD-3, AD-13). Written only by the ingestion/
+  // enrichment pipeline through the EnrichmentPatch allowlist (AD-0, FR-14) —
+  // never currencyCode/settlement/baseInstrumentId/venueCode/ticker/type.
+  // A row with baseInstrumentId IS NOT NULL must never store its own
+  // sector/industry/issuer/law/assetClass — it reads through baseInstrument.
+  sector     String?
+  industry   String?
+  issuer     String?
+  law        String?
+  assetClass String?
+  // Marks a STOCK_AR/CEDEAR row as attempted by the equity-profile drip
+  // (yahoo-catalog.ts, enrichUnusedEquityProfiles), regardless of outcome —
+  // an explicit column instead of inferring "unenriched" from `name === ticker`,
+  // which would false-positive whenever a ticker's real name IS its symbol.
+  profileEnrichedAt DateTime?
+
+  transactions             Transaction[]
+  prices                   PriceCache[]
+  marketSnapshot           MarketSnapshot?
+  providerSymbols          InstrumentProviderSymbol[]
+  corporateEvents          CorporateEvent[]
+  suggestedCorporateEvents SuggestedCorporateEvent[]
+  bondTerms                BondTerms?
+  bondSchedule             BondSchedule?
 
   @@unique([ticker, type, venueCode, currencyCode])
   @@index([type])
   @@index([underlyingAssetId])
+  @@index([baseInstrumentId])
+  @@index([isin])
 }
 
 // ============================================================
@@ -339,20 +383,20 @@ model Transaction {
 // ============================================================
 
 model PortfolioSnapshot {
-  id              String    @id @default(cuid())
-  portfolioId     String
-  portfolio       Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
-  date            DateTime   // snapshot UTC timestamp
-  totalValueArs   Decimal    @db.Decimal(20,8) // value in base currency (ARS)
-  totalValueUsd   Decimal    @db.Decimal(20,8) // value converted to USD for comparison
-  cashArs         Decimal    @default(0) @db.Decimal(20,8)
-  cashUsd         Decimal    @default(0) @db.Decimal(20,8)
-  netDepositsArs  Decimal    @default(0) @db.Decimal(20,8) // net deposits cumulative
-  netDepositsUsd  Decimal    @default(0) @db.Decimal(20,8)
-  twrSinceInception Decimal? @db.Decimal(20,8)
-  positions       Json      // JSON snapshot of holdings for the day
-  createdAt        DateTime   @default(now())
-  updatedAt        DateTime   @updatedAt
+  id                String    @id @default(cuid())
+  portfolioId       String
+  portfolio         Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  date              DateTime // snapshot UTC timestamp
+  totalValueArs     Decimal   @db.Decimal(20, 8) // value in base currency (ARS)
+  totalValueUsd     Decimal   @db.Decimal(20, 8) // value converted to USD for comparison
+  cashArs           Decimal   @default(0) @db.Decimal(20, 8)
+  cashUsd           Decimal   @default(0) @db.Decimal(20, 8)
+  netDepositsArs    Decimal   @default(0) @db.Decimal(20, 8) // net deposits cumulative
+  netDepositsUsd    Decimal   @default(0) @db.Decimal(20, 8)
+  twrSinceInception Decimal?  @db.Decimal(20, 8)
+  positions         Json // JSON snapshot of holdings for the day
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@unique([portfolioId, date])
   @@index([portfolioId, date])
@@ -361,7 +405,7 @@ model PortfolioSnapshot {
 model Sp500Snapshot {
   id    String   @id @default(cuid())
   date  DateTime @unique
-  close Decimal  @db.Decimal(20,8)
+  close Decimal  @db.Decimal(20, 8)
 }
 
 // ============================================================
@@ -407,6 +451,44 @@ model PriceCache {
 
   @@unique([instrumentId, datetime, source])
   @@index([instrumentId, datetime])
+}
+
+// Última cotización conocida por instrumento. A diferencia de PriceCache, no
+// guarda una serie histórica: representa el book/estado de mercado actual y
+// nunca es parte de los metadatos del catálogo.
+model MarketSnapshot {
+  id           String     @id @default(cuid())
+  instrumentId String     @unique
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  price        Decimal?   @db.Decimal(20, 8)
+  pctChange    Decimal?   @db.Decimal(20, 8)
+  volume       Decimal?   @db.Decimal(20, 8)
+  bidQuantity  Decimal?   @db.Decimal(20, 8)
+  bidPrice     Decimal?   @db.Decimal(20, 8)
+  askPrice     Decimal?   @db.Decimal(20, 8)
+  askQuantity  Decimal?   @db.Decimal(20, 8)
+  openInterest Decimal?   @db.Decimal(20, 8)
+  asOf         DateTime
+  source       String
+  updatedAt    DateTime   @updatedAt
+
+  @@index([source, asOf])
+}
+
+// Identificadores específicos de cada proveedor. Instrument.ticker continúa
+// siendo el símbolo canónico del catálogo/Data912; por ejemplo, GGAL se mapea
+// a GGAL.BA para Yahoo sin contaminar su identidad canónica.
+model InstrumentProviderSymbol {
+  id             String     @id @default(cuid())
+  instrumentId   String
+  instrument     Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  provider       String
+  providerSymbol String
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([instrumentId, provider])
+  @@unique([provider, providerSymbol])
 }
 
 model FxRate {
@@ -478,8 +560,12 @@ model CorporateEvent {
   denominator     Decimal            @db.Decimal(20, 8)
   notes           String?
   appliedAt       DateTime           @default(now())
-  createdByUserId String
-  createdByUser   User               @relation("CorporateEventCreator", fields: [createdByUserId], references: [id])
+  // Nullable so the seed can load known public corporate actions (e.g. the
+  // SPY CEDEAR ratio change) with no creator (FR-15). The creator is audit
+  // metadata, not part of the event's identity — @@unique below already
+  // treats a corporate event as a global fact about the instrument.
+  createdByUserId String?
+  createdByUser   User?              @relation("CorporateEventCreator", fields: [createdByUserId], references: [id])
 
   @@unique([instrumentId, effectiveDate, eventType])
   @@index([instrumentId])
@@ -541,24 +627,24 @@ enum RateType {
 }
 
 model BondTerms {
-  id                     String     @id @default(cuid())
-  instrumentId           String     @unique
-  instrument             Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
-  faceValue              Decimal    @db.Decimal(20, 8)
-  currencyCode           String
-  rateType               RateType
-  couponRate             Decimal    @db.Decimal(20, 8)
-  couponFrequencyMonths  Int
-  issueDate              DateTime
-  maturityDate           DateTime
+  id                    String     @id @default(cuid())
+  instrumentId          String     @unique
+  instrument            Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  faceValue             Decimal    @db.Decimal(20, 8)
+  currencyCode          String
+  rateType              RateType
+  couponRate            Decimal    @db.Decimal(20, 8)
+  couponFrequencyMonths Int
+  issueDate             DateTime
+  maturityDate          DateTime
   /**
    * JSON array of { date: string (ISO), principalPct: number }.
    * principalPct values must sum to 100.
    */
-  amortizationSchedule   Json
-  dayCountConvention     String     @default("ACT/365")
-  createdAt              DateTime   @default(now())
-  updatedAt              DateTime   @updatedAt
+  amortizationSchedule  Json
+  dayCountConvention    String     @default("ACT/365")
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
 
   @@index([instrumentId])
 }
@@ -569,6 +655,26 @@ model ScrapedBondData {
   sourceUrl String
   payload   Json
   fetchedAt DateTime @default(now())
+}
+
+// Docta's per-period cashflow schedule, stored verbatim (AD-14). Read by the
+// bonds UI in preference to BondTerms + projectCashFlows derivation whenever
+// present — a step-up bond (e.g. AL30) can never be represented by a single
+// BondTerms.couponRate, so its schedule is stored instead of derived.
+model BondSchedule {
+  id           String     @id @default(cuid())
+  instrumentId String     @unique
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  source       String // "docta"
+  /**
+   * JSON array of { paymentDate, capital, interestRate, interestAmount,
+   * residualValue, cashFlow }, copied verbatim from Docta's cashflow response
+   * — including a stepped interestRate sequence, never summarized to one value.
+   */
+  rows         Json
+  fetchedAt    DateTime   @default(now())
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 }
 
 // ============================================================

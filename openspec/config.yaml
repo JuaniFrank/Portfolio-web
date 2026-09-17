@@ -1,0 +1,78 @@
+schema: spec-driven
+
+project: portfolio-web
+
+context: |
+  Next.js 16 (App Router) + TypeScript (strict) + Prisma/Postgres + Tailwind v4.
+  Prisma client generated to src/lib/generated/prisma (excluded from lint).
+  Feature-oriented lib modules: rendimientos, dashboard, events, bonds, dividends,
+  monitoreo, market; server actions under src/app/actions.
+  Deployed on Vercel; vercel.json declares 4 cron jobs (serverless functions):
+  sync-catalog, snapshots, backfill-macro, backfill-prices.
+  CRITICAL: repo AGENTS.md states this Next.js version has breaking API/convention
+  changes from training data. Read node_modules/next/dist/docs/ before writing code.
+
+strict_tdd: true
+
+testing:
+  test_runner:
+    command: "npm test"
+    underlying: "vitest run"
+    framework: vitest
+  test_layers:
+    unit: true
+    integration: false
+    e2e: false
+  convention: |
+    Only pure modules are unit-tested (math/lookup logic with no DB or network,
+    e.g. returns, months, price-series, cashflows, benchmarks). Prisma-backed
+    orchestrators (e.g. series.ts) are deliberately excluded from the suite by
+    design — do not propose tests for them; keep risky logic in pure modules
+    that wrap the orchestrator instead.
+  test_file_count: 15
+  test_count_approx: 246
+  coverage:
+    available: false
+    command: ""
+  quality_tools:
+    linter:
+      available: true
+      command: "npm run lint"
+      tool: "eslint (eslint-config-next core-web-vitals + typescript)"
+    type_checker:
+      available: true
+      command: "npx tsc --noEmit"
+    formatter:
+      available: true
+      command: "npx prettier --write ."
+      note: "no package.json script wired; config in .prettierrc"
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Flag any change touching TransactionType/holdings math or corporate events as high-risk
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+    - Note when a Next.js API/convention differs from pre-16 behavior; cite node_modules/next/dist/docs/
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+    - Do not schedule unit tests for Prisma-backed orchestrators; test the pure modules they call instead
+  apply:
+    guidelines:
+      - Follow existing code patterns (feature-oriented src/lib modules, server actions in src/app/actions)
+      - Before writing any Next.js API usage, check node_modules/next/dist/docs/ for breaking changes
+      - Never use cat/grep/find/sed/ls; use bat/rg/fd/sd/eza
+      - Conventional commits only, no AI attribution beyond what the harness specifies
+    tdd: true
+    test_command: "npm test"
+  verify:
+    test_command: "npm test"
+    build_command: "npm run build"
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas

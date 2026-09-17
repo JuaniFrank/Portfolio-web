@@ -62,7 +62,7 @@ function buildSummaryMap($: cheerio.CheerioAPI): Map<string, string> {
   return summary;
 }
 
-function resolveCurrencyCode(moneda: string | undefined): string | null {
+function parseMonedaPagoLabel(moneda: string | undefined): string | null {
   if (!moneda) return null;
   if (/d[oó]lar/i.test(moneda)) return "USD";
   if (/peso/i.test(moneda)) return "ARS";
@@ -92,7 +92,7 @@ export function parseArgenBondHtml(html: string): ScrapedBondProposal {
     }
 
     const summary = buildSummaryMap($);
-    const currencyCode = resolveCurrencyCode(summary.get("Moneda Pago"));
+    const currencyCode = parseMonedaPagoLabel(summary.get("Moneda Pago"));
     const rateType = resolveRateType(summary.get("Tipo Cupón"));
     const couponFrequencyMonths = resolveFrequencyMonths(summary.get("Frecuencia"));
     const maturityDate = parseArgDate(summary.get("Vencimiento") ?? "");

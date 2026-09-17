@@ -14,12 +14,35 @@ import { prisma } from "@/lib/prisma";
 import { TransactionType } from "@/lib/generated/prisma";
 import {
   buildBondCashflowOutlook,
-  projectCashFlows,
   scaleFlowsToHolding,
   type BondCashflowEntry,
   type BondTermsForProjection,
+  type ProjectedFlow,
 } from "@/lib/bonds/cashflows";
 import { computeBondAnalytics, type CashFlow } from "@/lib/bonds/analytics";
+import { resolveBondSchedule, type BondScheduleRow } from "@/lib/bonds/schedule-source";
+
+const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
+
+/** AD-14: Docta's stored schedule has no COUPON/AMORTIZATION distinction of
+ * its own (one row combines both) — split by whichever component of the row
+ * is non-zero, matching the shape `projectCashFlows` already produces. */
+function scheduleRowsToProjectedFlows(rows: BondScheduleRow[], today: Date): ProjectedFlow[] {
+  const todayTime = today.getTime();
+  return rows
+    .filter((r) => new Date(r.paymentDate).getTime() > todayTime)
+    .flatMap((r): ProjectedFlow[] => {
+      const t = (new Date(r.paymentDate).getTime() - todayTime) / MS_PER_YEAR;
+      const flows: ProjectedFlow[] = [];
+      if (r.interestAmount > 0) {
+        flows.push({ date: r.paymentDate, amount: r.interestAmount, t, flowType: "COUPON", assumedRate: false, periodDays: null });
+      }
+      if (r.capital > 0) {
+        flows.push({ date: r.paymentDate, amount: r.capital, t, flowType: "AMORTIZATION", assumedRate: false, periodDays: null });
+      }
+      return flows;
+    });
+}
 
 export async function getBondsPageDataAction(): Promise<
   BondsPageDataV2 | { error: "unauthorized" }
@@ -51,6 +74,7 @@ export async function getBondsPageDataAction(): Promise<
           ticker: true,
           type: true,
           bondTerms: true,
+          bondSchedule: true,
         },
       },
     },
@@ -91,6 +115,17 @@ export async function getBondsPageDataAction(): Promise<
     }
   }
 
+  // Build BondSchedule map: instrumentId → stored rows (AD-14, T-51)
+  const bondScheduleMap = new Map<string, BondScheduleRow[]>();
+  for (const row of txRows) {
+    if (row.instrument?.bondSchedule) {
+      bondScheduleMap.set(
+        row.instrument.bondSchedule.instrumentId,
+        row.instrument.bondSchedule.rows as unknown as BondScheduleRow[]
+      );
+    }
+  }
+
   // Map Prisma rows to the shape expected by buildBondsPageData.
   // TradeForBondHoldings.type is now widened to `string` (batch-3 quality debt fix),
   // so no unsafe cast is needed.
@@ -99,6 +134,7 @@ export async function getBondsPageDataAction(): Promise<
     .map((r) => ({
       instrumentId: r.instrument!.id,
       ticker: r.instrument!.ticker,
+      instrumentType: r.instrument!.type,
       type: r.type as string,
       quantity: r.quantity.toString(),
       netAmount: r.netAmount.toString(),
@@ -111,9 +147,52 @@ export async function getBondsPageDataAction(): Promise<
 
   // Augment each holding with analytics and projected flows (v2)
   const cashflowEntries: BondCashflowEntry[] = [];
+  const today = new Date();
   const holdingsV2: BondHoldingV2[] = v1Data.holdings.map((holding) => {
     const terms = bondTermsMap.get(holding.instrumentId);
+    const storedSchedule = bondScheduleMap.get(holding.instrumentId);
     const hasTerms = !!terms;
+
+    // AD-14 / T-51: BondSchedule (when present) is read directly — never
+    // through projectCashFlows. A step-up bond (e.g. AL30) has no BondTerms
+    // at all (refused by design, R-3c) and is display-only here: YTM/duration
+    // for a schedule-only bond needs a schedule-aware solver, out of scope
+    // for this wiring — it reports noTerms, exactly like today's "no terms"
+    // case, while still showing the correct stored flows.
+    if (storedSchedule && storedSchedule.length > 0) {
+      const scheduleFlows = scheduleRowsToProjectedFlows(storedSchedule, today);
+      const scaledFlows = terms
+        ? scaleFlowsToHolding(scheduleFlows, holding.nominalHeld, "100")
+        : scheduleFlows;
+
+      if (terms) {
+        cashflowEntries.push({ ticker: holding.ticker, currencyCode: terms.currencyCode, flows: scaledFlows });
+      }
+
+      const upcomingFlows: UpcomingFlow[] = scaledFlows.map((f) => ({
+        date: f.date,
+        flowType: f.flowType,
+        amount: f.amount.toFixed(8).replace(/\.?0+$/, "") || "0",
+        assumedRate: f.assumedRate,
+        periodDays: f.periodDays,
+      }));
+
+      return {
+        ...holding,
+        analytics: {
+          ytm: null,
+          macaulayDuration: null,
+          modifiedDuration: null,
+          noConvergence: false,
+          noTerms: !hasTerms,
+          invalidPrice: false,
+          matured: scaledFlows.length === 0,
+        } satisfies BondAnalytics,
+        projectedFlows: upcomingFlows,
+        hasTerms,
+        dayCountConvention: terms?.dayCountConvention ?? null,
+      };
+    }
 
     if (!hasTerms) {
       return {
@@ -133,11 +212,13 @@ export async function getBondsPageDataAction(): Promise<
       };
     }
 
-    // Project cash flows
-    const projected = projectCashFlows(terms);
+    // Project cash flows — no stored schedule for this instrument, derive
+    // via BondTerms (schedule-source.ts's fallback path).
+    const projected = resolveBondSchedule(null, terms, today) as { source: "derived"; flows: ProjectedFlow[] };
+    const projectedFlows = projected.flows;
 
     // Convert projected flows to CashFlow[] for analytics
-    const cashFlowsForAnalytics: CashFlow[] = projected.map((f) => ({
+    const cashFlowsForAnalytics: CashFlow[] = projectedFlows.map((f) => ({
       t: f.t,
       amount: f.amount,
     }));
@@ -173,7 +254,7 @@ export async function getBondsPageDataAction(): Promise<
 
     // Display flows must reflect the actual position size, not the one-lámina
     // basis projectCashFlows() uses for YTM/duration — scale by nominalHeld.
-    const scaledFlows = scaleFlowsToHolding(projected, holding.nominalHeld, terms.faceValue);
+    const scaledFlows = scaleFlowsToHolding(projectedFlows, holding.nominalHeld, terms.faceValue);
     cashflowEntries.push({
       ticker: holding.ticker,
       currencyCode: terms.currencyCode,

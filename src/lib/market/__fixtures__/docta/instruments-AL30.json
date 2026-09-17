@@ -1,0 +1,17 @@
+{
+  "data": [
+    {
+      "ticker": "AL30",
+      "name": "Soberano HD 2030 U$S 1.75% (AL30)",
+      "asset_class": "BOND",
+      "sub_asset_class": "HARD_DOLLAR",
+      "sector": "Soberano",
+      "issuer": "Tesorería General De La Nación (Argentina)",
+      "law": "Ley Argentina",
+      "isin": "ARARGE3209S6"
+    }
+  ],
+  "metadata": {
+    "total_records": 1
+  }
+}
