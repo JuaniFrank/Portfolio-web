@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _yahoo_catalog import enrich_catalog_instrument, normalize_symbol, resolve_yahoo_symbol
 
 BATCH_LIMIT = 25
+QUOTE_ENDPOINT = "https://query2.finance.yahoo.com/v7/finance/quote"
 
 
 def _unauthorized(req: Any) -> None:
@@ -59,37 +60,81 @@ def _is_authorized(req: Any) -> bool:
     return hmac.compare_digest(token, secret)
 
 
-def _currency_verdict(symbol: str, instrument_type: str) -> dict[str, Any]:
-    """AD-12 oracle for one symbol. Distinguishes a genuine Yahoo 404
-    (evidence of absence — the ratio-only fallback applies) from a transport
-    failure (no evidence at all — the caller must fail closed, never guess).
-    """
-    canonical = normalize_symbol(symbol)
-    provider_symbol = resolve_yahoo_symbol(canonical, instrument_type)
-    if provider_symbol is None:
-        # Not a Yahoo-supported type (BOND_AR/LETRA, or any other type this
-        # oracle does not cover) — treated as "not listed": ratio-only path.
+def _verdict_from_quote(canonical: str, quote: dict[str, Any] | None) -> dict[str, Any]:
+    """Map one symbol's slot in the batch response to an AD-12 verdict."""
+    if quote is None:
+        # Yahoo omits symbols it does not list — evidence of absence, which is
+        # what the caller's ratio-only fallback needs (measured: NOEXISTE9Z.BA).
         return {"symbol": canonical, "ok": True, "listed": False, "currency": None}
 
-    import yfinance as yf
+    currency = quote.get("currency")
+    if not isinstance(currency, str) or not currency.strip():
+        # Present but asserting no currency (`quoteType: NONE`, e.g. AL30.BA):
+        # indistinguishable from absent for this oracle's purposes.
+        return {"symbol": canonical, "ok": True, "listed": False, "currency": None}
+
+    code = currency.strip().upper()
+    if code not in {"ARS", "USD"}:
+        # An unexpected venue currency is not evidence to act on — never a
+        # passthrough.
+        return {"symbol": canonical, "ok": False, "error": f"unexpected currency {code}"}
+
+    return {"symbol": canonical, "ok": True, "listed": True, "currency": code}
+
+
+def _currency_verdicts(items: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    """AD-12 oracle for a whole batch in ONE Yahoo call.
+
+    Resolving each symbol through `Ticker(...).info` cost a request per symbol
+    (several, really — `.info` pulls quoteSummary modules nobody reads here),
+    which put the ~1,100-symbol Yahoo-covered universe far past the caller's
+    per-request timeout and its overall budget. The batch quote endpoint answers
+    every symbol of a batch at once; `YfData` owns the cookie/crumb handshake
+    and the re-handshake on 401, which is the whole reason yfinance is here.
+
+    A failed call is no evidence at all, so its symbols fail closed rather than
+    being reported as unlisted — the caller must never guess a currency.
+    """
+    verdicts: list[dict[str, Any]] = []
+    pending: dict[str, list[int]] = {}
+
+    for symbol, instrument_type in items:
+        canonical = normalize_symbol(symbol)
+        provider_symbol = resolve_yahoo_symbol(canonical, instrument_type)
+        if provider_symbol is None:
+            # Not a Yahoo-supported type (ON/BOND_AR/LETRA): no call, no cost.
+            verdicts.append({"symbol": canonical, "ok": True, "listed": False, "currency": None})
+            continue
+        verdicts.append({"symbol": canonical, "ok": False, "error": "not resolved"})
+        pending.setdefault(provider_symbol, []).append(len(verdicts) - 1)
+
+    if not pending:
+        return verdicts
 
     try:
-        info: dict[str, Any] = yf.Ticker(provider_symbol).info or {}
+        from yfinance.data import YfData
+
+        payload = (
+            YfData().get_raw_json(QUOTE_ENDPOINT, params={"symbols": ",".join(pending)}) or {}
+        )
+        quotes = payload.get("quoteResponse", {}).get("result") or []
     except Exception as error:  # noqa: BLE001 - any yfinance/network failure
-        return {"symbol": canonical, "ok": False, "error": str(error)}
+        for indexes in pending.values():
+            for index in indexes:
+                verdicts[index] = {
+                    "symbol": verdicts[index]["symbol"],
+                    "ok": False,
+                    "error": str(error),
+                }
+        return verdicts
 
-    if not info:
-        # yfinance returns an empty/near-empty dict for a symbol Yahoo does
-        # not list (e.g. AL30.BA), rather than raising — this IS the 404 case.
-        return {"symbol": canonical, "ok": True, "listed": False, "currency": None}
-
-    currency = info.get("currency")
-    if not isinstance(currency, str) or currency.strip().upper() not in {"ARS", "USD"}:
-        # Anything other than ARS/USD (missing, or an unexpected venue
-        # currency) is not evidence to act on — never a passthrough.
-        return {"symbol": canonical, "ok": False, "error": "unexpected or missing currency"}
-
-    return {"symbol": canonical, "ok": True, "listed": True, "currency": currency.strip().upper()}
+    by_symbol = {q.get("symbol"): q for q in quotes if isinstance(q, dict)}
+    for provider_symbol, indexes in pending.items():
+        for index in indexes:
+            verdicts[index] = _verdict_from_quote(
+                verdicts[index]["symbol"], by_symbol.get(provider_symbol)
+            )
+    return verdicts
 
 
 def _metadata_result(symbol: str, instrument_type: str) -> dict[str, Any]:
@@ -133,20 +178,29 @@ class handler(BaseHTTPRequestHandler):
 
         mode = body.get("mode", "metadata")
 
-        results: list[dict[str, Any]] = []
+        # Parsed up front so the currency oracle can resolve the batch in one
+        # call while each result still lands back on its own request slot.
+        parsed: list[tuple[str, str] | None] = []
         for item in items:
             if not isinstance(item, dict):
-                results.append({"symbol": "", "ok": False, "error": "malformed item"})
+                parsed.append(None)
                 continue
             symbol = item.get("symbol")
             instrument_type = item.get("type")
             if not isinstance(symbol, str) or not isinstance(instrument_type, str):
-                results.append({"symbol": "", "ok": False, "error": "malformed item"})
+                parsed.append(None)
                 continue
+            parsed.append((symbol, instrument_type))
 
-            if mode == "currency":
-                results.append(_currency_verdict(symbol, instrument_type))
-            else:
-                results.append(_metadata_result(symbol, instrument_type))
+        malformed = {"symbol": "", "ok": False, "error": "malformed item"}
+        results: list[dict[str, Any]] = []
+
+        if mode == "currency":
+            verdicts = iter(_currency_verdicts([p for p in parsed if p is not None]))
+            results = [dict(malformed) if p is None else next(verdicts) for p in parsed]
+        else:
+            results = [
+                dict(malformed) if p is None else _metadata_result(p[0], p[1]) for p in parsed
+            ]
 
         _respond(self, 200, {"results": results})
