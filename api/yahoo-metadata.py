@@ -19,8 +19,15 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import sys
 from http.server import BaseHTTPRequestHandler
 from typing import Any
+
+# Vercel imports this entrypoint by absolute path without putting its own
+# directory on sys.path, so a bare `import _yahoo_catalog` raises
+# ModuleNotFoundError at load time and the function 500s before serving a single
+# request. The sibling is bundled — only unreachable — so make it importable.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _yahoo_catalog import enrich_catalog_instrument, normalize_symbol, resolve_yahoo_symbol
 
