@@ -1,11 +1,11 @@
 import {
   AssetType,
+  CorporateEventType,
   InstrumentType,
   Prisma,
   PrismaClient,
   VenueType,
 } from "../src/lib/generated/prisma";
-import { RECOMMENDED_EVENTS } from "../src/lib/events/recommended";
 
 const prisma = new PrismaClient();
 
@@ -377,13 +377,27 @@ async function main() {
   await upsertCashInstrument({ ticker: "CASH-ARS", name: "Efectivo ARS", currencyCode: "ARS" });
   await upsertCashInstrument({ ticker: "CASH-USD", name: "Efectivo USD", currencyCode: "USD" });
 
-  // 6. Known public corporate actions (FR-15), loaded from RECOMMENDED_EVENTS.
-  // Seeded as real CorporateEvent rows so main's SuggestedCorporateEvent
-  // auto-detection never re-suggests them (it skips instruments that already
-  // have a matching CorporateEvent). createdByUserId is null: this is a
-  // global fact about the instrument, not a user record
-  // (schema comment on CorporateEvent.createdByUserId).
-  for (const rec of RECOMMENDED_EVENTS) {
+  // 6. Known public corporate actions (FR-15), seeded as *suggestions*, never as
+  // applied CorporateEvent rows: applying one is a per-user decision, and a
+  // CorporateEvent without a creator is undeletable through the events UI, which
+  // scopes deletes by createdByUserId.
+  //
+  // Only actions the detector cannot find belong here. It reads the splits Yahoo
+  // reports, which covers the SPY CEDEAR ratio change (seeding that one too would
+  // duplicate it under a different effective date, and applying both would adjust
+  // the position twice). Yahoo reports no split under YPFD, so that one is ours.
+  const curatedSuggestions = [
+    {
+      ticker: "YPFD",
+      instrumentType: InstrumentType.STOCK_AR,
+      eventType: CorporateEventType.STOCK_SPLIT,
+      effectiveDate: "2026-08-03",
+      numerator: "10",
+      denominator: "1",
+    },
+  ];
+
+  for (const rec of curatedSuggestions) {
     const instrument = await prisma.instrument.upsert({
       where: {
         ticker_type_venueCode_currencyCode: {
@@ -404,7 +418,7 @@ async function main() {
       update: {},
     });
 
-    await prisma.corporateEvent.upsert({
+    await prisma.suggestedCorporateEvent.upsert({
       where: {
         instrumentId_effectiveDate_eventType: {
           instrumentId: instrument.id,
@@ -418,8 +432,7 @@ async function main() {
         effectiveDate: new Date(rec.effectiveDate),
         numerator: new Prisma.Decimal(rec.numerator),
         denominator: new Prisma.Decimal(rec.denominator),
-        notes: rec.notes,
-        createdByUserId: null,
+        source: "CURATED",
       },
       update: {},
     });
