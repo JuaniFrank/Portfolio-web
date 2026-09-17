@@ -1,1 +1,4 @@
-yfinance==0.2.*
+# Pinned to the exact patch: the currency oracle reads yfinance.data.YfData to
+# reuse its cookie/crumb handshake, and that is an internal path a 0.2.x bump
+# could move without notice.
+yfinance==0.2.66
