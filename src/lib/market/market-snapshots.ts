@@ -1,6 +1,15 @@
 import { Prisma } from "@/lib/generated/prisma";
 import { prisma } from "@/lib/prisma";
+import { mapWithConcurrency } from "@/lib/utils/concurrency";
 import { fetchData912Live, type CatalogInstrument } from "./data912-universe";
+
+/** Matched to the Prisma connection pool: one upsert holds one connection, and
+ * `Promise.all` over the ~1,900-row universe starved the pool so thoroughly
+ * that every write timed out waiting for a connection. */
+const SNAPSHOT_CONCURRENCY = 5;
+/** A snapshot is the latest market state, refreshed every run, so running out
+ * of budget costs nothing but freshness — unlike blocking the rest of the sync. */
+const SNAPSHOT_BUDGET_MS = 60_000;
 
 /**
  * Persist only the latest market state per instrument; no historical rows.
@@ -27,11 +36,12 @@ export async function syncLatestData912Snapshots(rows?: CatalogInstrument[]): Pr
   // venueCode/currencyCode, which this reconciliation does not have.
   const byTickerType = new Map(instruments.map((i) => [`${i.ticker}|${i.type}`, i]));
 
-  let saved = 0;
-  await Promise.all(
-    snapshots.map(async (snapshot) => {
+  const results = await mapWithConcurrency(
+    snapshots,
+    SNAPSHOT_CONCURRENCY,
+    async (snapshot) => {
       const instrument = byTickerType.get(`${snapshot.ticker}|${snapshot.type}`);
-      if (!instrument) return;
+      if (!instrument) return false;
       const data = {
         source: "data912",
         asOf,
@@ -49,8 +59,10 @@ export async function syncLatestData912Snapshots(rows?: CatalogInstrument[]): Pr
         create: { instrumentId: instrument.id, ...data },
         update: data,
       });
-      saved += 1;
-    })
+      return true;
+    },
+    { budgetMs: SNAPSHOT_BUDGET_MS }
   );
-  return saved;
+
+  return results.filter((r) => r.status === "fulfilled" && r.value).length;
 }
