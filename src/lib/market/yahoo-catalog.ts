@@ -1,4 +1,4 @@
-import type { InstrumentType } from "@/lib/generated/prisma";
+import type { InstrumentType, Prisma } from "@/lib/generated/prisma";
 import { prisma } from "@/lib/prisma";
 import {
   fetchYahooMetadataBatch,
@@ -38,17 +38,17 @@ export type { YahooCatalogMetadata };
  * type, so a future writer of any of those is a TypeScript compile error,
  * not a silent data change (AD-0, FR-14, T-37 — the structural guard R-1b's
  * mitigation depends on).
+ *
+ * Picked from Prisma's own update input so the allowlist cannot drift from the
+ * schema: a field the column does not have fails to compile here instead of
+ * throwing `Unknown argument` once per instrument at runtime. Yahoo's
+ * `website` has no column and no reader, so it is discarded like its
+ * `currencyCode` already is.
  */
-export type EnrichmentPatch = {
-  name?: string;
-  isin?: string;
-  sector?: string;
-  industry?: string;
-  issuer?: string;
-  law?: string;
-  assetClass?: string;
-  website?: string;
-};
+export type EnrichmentPatch = Pick<
+  Prisma.InstrumentUpdateInput,
+  "name" | "isin" | "sector" | "industry" | "issuer" | "law" | "assetClass"
+>;
 
 /** The catalog symbol stays canonical. This only decides whether Yahoo applies. */
 export function supportsYahooMetadata(type: InstrumentType): boolean {
@@ -116,7 +116,6 @@ export async function enrichUsedInstruments(instrumentIds: string[]): Promise<vo
           name: metadata.name,
           sector: metadata.sector,
           industry: metadata.industry,
-          website: metadata.website,
         };
         // Prisma ignores `undefined` values in `data`, so omit rather than
         // write an empty string for a field Yahoo did not return.
@@ -193,7 +192,6 @@ export async function enrichUnusedEquityProfiles(
               name: metadata.name,
               sector: metadata.sector,
               industry: metadata.industry,
-              website: metadata.website,
             }
           : {};
         const data: EnrichmentPatch = Object.fromEntries(
