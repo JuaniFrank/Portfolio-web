@@ -560,12 +560,11 @@ model CorporateEvent {
   denominator     Decimal            @db.Decimal(20, 8)
   notes           String?
   appliedAt       DateTime           @default(now())
-  // Nullable so the seed can load known public corporate actions (e.g. the
-  // SPY CEDEAR ratio change) with no creator (FR-15). The creator is audit
-  // metadata, not part of the event's identity — @@unique below already
-  // treats a corporate event as a global fact about the instrument.
-  createdByUserId String?
-  createdByUser   User?              @relation("CorporateEventCreator", fields: [createdByUserId], references: [id])
+  // Required: an event only exists because a user applied it, and the events UI
+  // scopes deletes by createdByUserId — an ownerless row would be undeletable.
+  // Known public actions are seeded as SuggestedCorporateEvent instead.
+  createdByUserId String
+  createdByUser   User               @relation("CorporateEventCreator", fields: [createdByUserId], references: [id])
 
   @@unique([instrumentId, effectiveDate, eventType])
   @@index([instrumentId])
