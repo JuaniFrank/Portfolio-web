@@ -68,6 +68,14 @@ export function parseCurrencyVerdict(
 
 function resolveBaseUrl(): string {
   if (process.env.INTERNAL_FUNCTION_BASE_URL) return process.env.INTERNAL_FUNCTION_BASE_URL;
+  // The project's production domain, not this deployment's URL. Vercel documents
+  // VERCEL_URL as unusable with Standard Deployment Protection: the generated
+  // deployment hostname sits behind Vercel Authentication, so calling ourselves
+  // through it is rejected at the edge with "Protected deployment" and the
+  // function never runs. The production alias is not protected.
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  }
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
   return "http://localhost:3000";
 }
