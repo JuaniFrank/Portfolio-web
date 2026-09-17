@@ -4,6 +4,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { RateType, type BondTerms } from "@/lib/generated/prisma";
 import { fetchArgenBondProposal, type ScrapedBondProposal } from "@/lib/bonds/argen-bond-scraper";
+import { fetchDoctaCashflow, isDoctaEnabled } from "@/lib/market/docta-client";
+import { mapDoctaCashflow } from "@/lib/market/docta-mapping";
 
 // ---------------------------------------------------------------------------
 // Input validation types
@@ -252,7 +254,7 @@ export async function getBondTermsProposalAction(
         some: { portfolio: { userId: user.id } },
       },
     },
-    select: { id: true, ticker: true },
+    select: { id: true, ticker: true, name: true },
   });
 
   if (!instrument) {
@@ -260,6 +262,58 @@ export async function getBondTermsProposalAction(
       success: false,
       error: "Instrument not found or does not belong to your portfolio",
     };
+  }
+
+  // T-50: Docta, when enabled, is preferred over the argen.bond scraper.
+  // Queried directly (not via the shared ScrapedBondData cache — see
+  // docta-client.ts's docstring on the ticker-key collision residual) so
+  // this preference is explicit rather than an accident of write order.
+  if (isDoctaEnabled()) {
+    try {
+      const cashflowResult = await fetchDoctaCashflow(instrument.ticker);
+      if (cashflowResult.kind === "ok") {
+        const cashflow = cashflowResult.data;
+        const gated = mapDoctaCashflow(cashflow, instrument.name);
+        const cashflowSchedule = cashflow.data.map((r) => ({
+          date: r.payment_date,
+          interestPct: r.interest_rate,
+          principalPct: r.capital,
+        }));
+        const proposal: ScrapedBondProposal = gated.ok
+          ? {
+              faceValue: 100,
+              currencyCode: gated.terms.currencyCode,
+              rateType: gated.terms.rateType,
+              couponRate: Number(gated.terms.couponRate),
+              couponFrequencyMonths: gated.terms.couponFrequencyMonths,
+              issueDate: gated.terms.issueDate,
+              maturityDate: gated.terms.maturityDate,
+              amortizationSchedule: gated.terms.amortizationSchedule,
+              cashflowSchedule,
+              dayCountConvention: null,
+            }
+          : {
+              faceValue: null,
+              currencyCode: null,
+              rateType: null,
+              couponRate: null,
+              couponFrequencyMonths: null,
+              issueDate: null,
+              maturityDate: null,
+              amortizationSchedule: [],
+              cashflowSchedule,
+              dayCountConvention: null,
+            };
+        return { success: true, data: proposal };
+      }
+    } catch (error) {
+      console.warn(
+        `[bond-terms] Docta proposal failed for ${instrument.ticker}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      // Falls through to the argen.bond path below.
+    }
   }
 
   const cached = await prisma.scrapedBondData.findUnique({

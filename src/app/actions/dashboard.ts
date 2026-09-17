@@ -21,7 +21,11 @@ import {
   buildHoldings,
   type TradeForHoldings,
 } from "@/lib/transactions/holdings";
-import { TRADE_INSTRUMENT_TYPES, TRADE_TYPES } from "@/lib/transactions/types";
+import {
+  FIXED_INCOME_TYPES,
+  TRADE_INSTRUMENT_TYPES,
+  TRADE_TYPES,
+} from "@/lib/transactions/types";
 
 export async function getDashboardPageDataAction(): Promise<
   DashboardData | { error: "unauthorized" }
@@ -59,6 +63,10 @@ export async function getDashboardPageDataAction(): Promise<
             ticker: true,
             name: true,
             type: true,
+            currencyCode: true,
+            settlement: true,
+            sector: true,
+            baseInstrument: { select: { ticker: true, sector: true } },
             underlyingAsset: { select: { sector: true } },
           },
         },
@@ -100,6 +108,7 @@ export async function getDashboardPageDataAction(): Promise<
   const onBondTrades: ReturnType<typeof toBondTrade>[] = [];
   const sectorByInstrument = new Map<string, string | null>();
   const onNamesById = new Map<string, string>();
+  const uniqueInstruments = new Map<string, InstrumentForQuote>();
 
   for (const r of rows) {
     if (!r.instrument) continue;
@@ -115,23 +124,32 @@ export async function getDashboardPageDataAction(): Promise<
       tradeDate: r.tradeDate.toISOString(),
     };
 
-    if (r.instrument.type === "ON") {
+    // AD-3 3-step sector fallback (design §2.3): instrument.sector ??
+    // baseInstrument.sector ?? underlyingAsset.sector ?? null. Applied on
+    // BOTH branches — the fixed-income branch used to `continue` before this
+    // line and therefore never recorded a sector for a bond/ON at all.
+    const sector =
+      r.instrument.sector ??
+      r.instrument.baseInstrument?.sector ??
+      r.instrument.underlyingAsset?.sector ??
+      null;
+    sectorByInstrument.set(r.instrument.id, sector);
+
+    if (FIXED_INCOME_TYPES.includes(r.instrument.type)) {
       onBondTrades.push(toBondTrade(trade, r.currencyCode));
       onNamesById.set(r.instrument.id, r.instrument.name);
       continue;
     }
 
     trades.push(trade);
-    sectorByInstrument.set(r.instrument.id, r.instrument.underlyingAsset?.sector ?? null);
-  }
-
-  const uniqueInstruments = new Map<string, InstrumentForQuote>();
-  for (const t of trades) {
-    if (!uniqueInstruments.has(t.instrumentId)) {
-      uniqueInstruments.set(t.instrumentId, {
-        id: t.instrumentId,
-        ticker: t.ticker,
-        type: t.instrumentType,
+    if (!uniqueInstruments.has(r.instrument.id)) {
+      uniqueInstruments.set(r.instrument.id, {
+        id: r.instrument.id,
+        ticker: r.instrument.ticker,
+        type: r.instrument.type,
+        currencyCode: r.instrument.currencyCode,
+        settlement: r.instrument.settlement,
+        baseInstrument: r.instrument.baseInstrument,
       });
     }
   }
@@ -162,7 +180,7 @@ export async function getDashboardPageDataAction(): Promise<
       pnlPercent: h.pnlPercent,
       sector: sectorByInstrument.get(h.instrumentId) ?? null,
     })),
-    ...onPositions.map((p) => toDashboardHolding(p, cclRate)),
+    ...onPositions.map((p) => toDashboardHolding(p, cclRate, sectorByInstrument.get(p.instrumentId) ?? null)),
   ];
 
   return buildDashboardData({

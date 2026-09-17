@@ -11,13 +11,13 @@ import {
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { fetchOnPrices } from "@/lib/market/data912";
 import { fetchInstrumentUniverse } from "@/lib/market/data912-universe";
-import { displayNameFor } from "@/lib/market/instrument-names";
 import { refreshLatestQuotes, type InstrumentForQuote } from "@/lib/market/quotes";
 import { prisma } from "@/lib/prisma";
 import {
   InstrumentType,
   Prisma,
   TransactionSource,
+  type Settlement,
 } from "@/lib/generated/prisma";
 import {
   buildHoldings,
@@ -25,7 +25,11 @@ import {
 } from "@/lib/transactions/holdings";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
 import type { TradeHistoryRow, TransactionsPageData } from "@/lib/transactions/types";
-import { TRADE_INSTRUMENT_TYPES, TRADE_TYPES } from "@/lib/transactions/types";
+import {
+  FIXED_INCOME_TYPES,
+  TRADE_INSTRUMENT_TYPES,
+  TRADE_TYPES,
+} from "@/lib/transactions/types";
 import {
   newTransactionInputSchema,
   type NewTransactionInput,
@@ -83,7 +87,15 @@ export async function getTransactionsPageDataAction(): Promise<
       orderBy: { tradeDate: "desc" },
       include: {
         instrument: {
-          select: { id: true, ticker: true, name: true, type: true },
+          select: {
+            id: true,
+            ticker: true,
+            name: true,
+            type: true,
+            currencyCode: true,
+            settlement: true,
+            baseInstrument: { select: { ticker: true } },
+          },
         },
         importBatch: {
           select: { broker: { select: { code: true, name: true } } },
@@ -135,6 +147,7 @@ export async function getTransactionsPageDataAction(): Promise<
   const onBondTrades: ReturnType<typeof toBondTrade>[] = [];
   const onNamesById = new Map<string, string>();
   const history: TradeHistoryRow[] = [];
+  const uniqueInstruments = new Map<string, InstrumentForQuote>();
 
   for (const r of rows) {
     if (!r.instrument) continue;
@@ -153,11 +166,21 @@ export async function getTransactionsPageDataAction(): Promise<
       tradeDate: r.tradeDate.toISOString(),
     };
 
-    if (r.instrument.type === "ON") {
+    if (FIXED_INCOME_TYPES.includes(r.instrument.type)) {
       onBondTrades.push(toBondTrade(trade, r.currencyCode));
       onNamesById.set(r.instrument.id, r.instrument.name);
     } else {
       tradesForHoldings.push(trade);
+      if (!uniqueInstruments.has(r.instrument.id)) {
+        uniqueInstruments.set(r.instrument.id, {
+          id: r.instrument.id,
+          ticker: r.instrument.ticker,
+          type: r.instrument.type,
+          currencyCode: r.instrument.currencyCode,
+          settlement: r.instrument.settlement,
+          baseInstrument: r.instrument.baseInstrument,
+        });
+      }
     }
 
     const tagFromDb = r.tags[0]?.tag.name;
@@ -186,17 +209,6 @@ export async function getTransactionsPageDataAction(): Promise<
       tagLabel,
       source: r.source,
     });
-  }
-
-  const uniqueInstruments = new Map<string, InstrumentForQuote>();
-  for (const t of tradesForHoldings) {
-    if (!uniqueInstruments.has(t.instrumentId)) {
-      uniqueInstruments.set(t.instrumentId, {
-        id: t.instrumentId,
-        ticker: t.ticker,
-        type: t.instrumentType,
-      });
-    }
   }
 
   const onTickers = Array.from(new Set(onBondTrades.map((t) => t.ticker.toUpperCase())));
@@ -233,6 +245,8 @@ export type TransactionInstrumentOption = {
   name: string;
   type: InstrumentType;
   currencyCode: string;
+  /** FR-8: no chip renders for "ARS". */
+  settlement: Settlement;
 };
 
 const SEARCH_LIMIT = 10;
@@ -264,13 +278,44 @@ export async function searchInstrumentsAction(
         { name: { contains: q, mode: "insensitive" } },
       ],
     },
-    select: { ticker: true, name: true, type: true, currencyCode: true },
-    // Prefix matches on the ticker feel most relevant, so surface them first.
-    orderBy: [{ ticker: "asc" }],
-    take: SEARCH_LIMIT,
+    select: {
+      ticker: true,
+      name: true,
+      type: true,
+      currencyCode: true,
+      settlement: true,
+      baseInstrument: { select: { ticker: true } },
+    },
+    take: SEARCH_LIMIT * 4, // over-fetch: sorted/trimmed below by ticker family
   });
 
-  if (rows.length > 0) return rows;
+  if (rows.length > 0) {
+    // FR-8: flat, independent rows — no grouping/nesting of variants under a
+    // base — but within a ticker family (own ticker for a base, or the
+    // linked base's ticker for a variant) the ARS row sorts first, ahead of
+    // strict alphabetical order. Plain ticker-ASC is not sufficient: a
+    // ticker-rewrite family (TGNO4/TGN4D) is not a prefix relationship, so
+    // alphabetical order alone would NOT put the base first.
+    const sorted = [...rows]
+      .sort((a, b) => {
+        const familyA = a.baseInstrument?.ticker ?? a.ticker;
+        const familyB = b.baseInstrument?.ticker ?? b.ticker;
+        if (familyA !== familyB) return familyA.localeCompare(familyB);
+        const rankA = a.settlement === "ARS" ? 0 : 1;
+        const rankB = b.settlement === "ARS" ? 0 : 1;
+        if (rankA !== rankB) return rankA - rankB;
+        return a.ticker.localeCompare(b.ticker);
+      })
+      .slice(0, SEARCH_LIMIT)
+      .map(({ ticker, name, type, currencyCode, settlement }) => ({
+        ticker,
+        name,
+        type,
+        currencyCode,
+        settlement,
+      }));
+    return sorted;
+  }
 
   // --- Self-heal: nothing in the catalog, but it looks like a real ticker ---
   const upper = q.toUpperCase();
@@ -290,7 +335,7 @@ export async function searchInstrumentsAction(
       // venueCode: m.venueCode,
       // currencyCode: m.currencyCode,
     } as const;
-    let inst = await prisma.instrument.findFirst({ where: identity });
+    const inst = await prisma.instrument.findFirst({ where: identity });
     // Si no se encuentra, no se puede crear porque el ticker no es válido.
     // if (!inst) {
     //   try {
@@ -313,6 +358,7 @@ export async function searchInstrumentsAction(
       name: inst.name,
       type: inst.type,
       currencyCode: inst.currencyCode,
+      settlement: inst.settlement,
     });
   }
   return healed;

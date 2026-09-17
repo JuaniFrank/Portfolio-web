@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBondCashflowOutlook,
+  projectCashFlows,
   scaleFlowsToHolding,
   type BondCashflowEntry,
+  type BondTermsForProjection,
   type ProjectedFlow,
 } from "./cashflows";
 
@@ -50,6 +52,49 @@ describe("scaleFlowsToHolding", () => {
     const scaled = scaleFlowsToHolding([amortFlow], "300", "1000")[0]!;
 
     expect(scaled.amount).toBe(300);
+  });
+
+  it("faceValue neutrality (T-29): projecting the same bond at faceValue=100 and faceValue=1000 yields identical scaled flows for the same nominalHeld — the property that makes AD-14's unconditional faceValue=100 auto-fill safe", () => {
+    // projectCashFlows generates raw flows proportional to terms.faceValue
+    // (e.g. couponRate × faceValue / periodsPerYear); scaleFlowsToHolding
+    // then divides by that same faceValue. Every scaled amount is
+    // homogeneous of degree 1 in faceValue, so it cancels exactly — the
+    // basis is a labeling choice, not a fact about the bond.
+    const baseTerms: BondTermsForProjection = {
+      faceValue: "100",
+      currencyCode: "USD",
+      rateType: "FIXED",
+      couponRate: "0.075",
+      couponFrequencyMonths: 6,
+      issueDate: "2026-05-11",
+      maturityDate: "2030-05-13",
+      amortizationSchedule: [{ date: "2030-05-13", principalPct: 100 }],
+      dayCountConvention: "ACT/365",
+    };
+    const today = new Date("2026-06-01T00:00:00.000Z");
+    const nominalHeld = "250";
+
+    const flowsAt100 = scaleFlowsToHolding(
+      projectCashFlows(baseTerms, today),
+      nominalHeld,
+      baseTerms.faceValue
+    );
+    const termsAt1000 = { ...baseTerms, faceValue: "1000" };
+    const flowsAt1000 = scaleFlowsToHolding(
+      projectCashFlows(termsAt1000, today),
+      nominalHeld,
+      termsAt1000.faceValue
+    );
+
+    expect(flowsAt1000).toHaveLength(flowsAt100.length);
+    flowsAt1000.forEach((flow, i) => {
+      // Rounding-order differences in the Decimal chain (faceValue=1000
+      // computes 10x-larger intermediate amounts before scaling back down)
+      // introduce sub-cent floating noise — the property under test is
+      // cancellation, not bit-identical output, so compare with a tight
+      // cents-level tolerance.
+      expect(flow.amount).toBeCloseTo(flowsAt100[i]!.amount, 6);
+    });
   });
 });
 

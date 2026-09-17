@@ -2,7 +2,19 @@ import type { InstrumentType } from "@/lib/generated/prisma";
 
 export type MonitoringCurrency = "ARS" | "USD";
 export type MonitoringRange = "1M" | "3M" | "6M" | "1Y" | "ALL";
-export type MonitoringSeriesKind = "native" | "cedear-underlying" | "cedear-theoretical";
+/** "spot" (T-30, design AD-6): the currency-aware quote-refresh routing used
+ * by `quotes.ts`'s `refreshLatestQuotes` — resolves off the base's `.BA`
+ * symbol for a linked settlement variant, or the instrument's own symbol
+ * otherwise, always at `currency: "ARS"` (PriceCache stays ARS-only). */
+export type MonitoringSeriesKind =
+  | "native"
+  | "cedear-underlying"
+  | "cedear-theoretical"
+  | "spot";
+
+/** The subset a user can actually pick in the monitoring UI — "spot" is an
+ * internal quote-refresh routing concept only (T-30), never user-selectable. */
+export type UiMonitoringSeriesKind = Exclude<MonitoringSeriesKind, "spot">;
 export type MonitoringChartType = "line" | "candles";
 export type MonitoringAdjustmentPolicy = "raw" | "split-adjusted";
 export type MonitoringCacheCoverage = "none" | "partial" | "two-years";
@@ -45,7 +57,7 @@ export type MonitoringSeries = {
   ticker: string;
   label: string;
   currency: MonitoringCurrency;
-  kind: MonitoringSeriesKind;
+  kind: UiMonitoringSeriesKind;
   chartType: MonitoringChartType;
   provider: "data912" | "yahoo" | "fmp" | "derived";
   source: string;

@@ -26,7 +26,7 @@ import type {
   MonitoringCurrency,
   MonitoringRange,
   MonitoringSeries,
-  MonitoringSeriesKind,
+  UiMonitoringSeriesKind,
 } from "@/lib/monitoreo/types";
 import { AssetSelector } from "./asset-selector";
 import { formatCurrency, formatPercent, formatTradingDate } from "./format";
@@ -52,7 +52,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
   );
   const [range, setRange] = React.useState<MonitoringRange>("ALL");
   const [chartType, setChartType] = React.useState<MonitoringChartType>("line");
-  const [kind, setKind] = React.useState<MonitoringSeriesKind>(
+  const [kind, setKind] = React.useState<UiMonitoringSeriesKind>(
     initialSeries?.kind ?? (selectedInstrument?.isCedear ? "cedear-underlying" : "native")
   );
 
@@ -66,7 +66,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
       targetCurrency: MonitoringCurrency,
       targetRange: MonitoringRange,
       targetChartType: MonitoringChartType,
-      targetKind: MonitoringSeriesKind
+      targetKind: UiMonitoringSeriesKind
     ) => {
       startTransition(async () => {
         const res = await getMonitoringSeriesAction({
@@ -93,7 +93,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
     if (!inst) return;
 
     setSelectedId(id);
-    const newKind: MonitoringSeriesKind = inst.isCedear ? "cedear-underlying" : "native";
+    const newKind: UiMonitoringSeriesKind = inst.isCedear ? "cedear-underlying" : "native";
     const newCurrency: MonitoringCurrency = inst.isCedear ? "USD" : "ARS";
 
     setKind(newKind);
@@ -103,7 +103,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
   };
 
   // Handle CEDEAR mode toggle
-  const handleToggleCedearMode = (targetKind: MonitoringSeriesKind) => {
+  const handleToggleCedearMode = (targetKind: UiMonitoringSeriesKind) => {
     if (!selectedId) return;
     const targetCurrency: MonitoringCurrency =
       targetKind === "cedear-underlying" ? "USD" : "ARS";

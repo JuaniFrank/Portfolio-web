@@ -1,0 +1,98 @@
+{
+  "ticker": "MCC3O",
+  "data": [
+    {
+      "issue_date": "2026-05-11",
+      "payment_date": "2026-11-11",
+      "capital": 0.0,
+      "interest_rate": 7.5,
+      "interest_amount": 3.780821917808219,
+      "residual_value": 100.0,
+      "cash_flow": 3.780821917808219,
+      "adj_interest_amount": 3.780821917808219,
+      "adj_capital": 0.0
+    },
+    {
+      "issue_date": "2026-05-11",
+      "payment_date": "2027-05-11",
+      "capital": 0.0,
+      "interest_rate": 7.5,
+      "interest_amount": 3.719178082191781,
+      "residual_value": 100.0,
+      "cash_flow": 3.7191780821917804,
+      "adj_interest_amount": 3.7191780821917804,
+      "adj_capital": 0.0
+    },
+    {
+      "issue_date": "2026-05-11",
+      "payment_date": "2027-11-11",
+      "capital": 0.0,
+      "interest_rate": 7.5,
+      "interest_amount": 3.780821917808219,
+      "residual_value": 100.0,
+      "cash_flow": 3.780821917808219,
+      "adj_interest_amount": 3.780821917808219,
+      "adj_capital": 0.0
+    },
+    {
+      "issue_date": "2026-05-11",
+      "payment_date": "2028-05-11",
+      "capital": 0.0,
+      "interest_rate": 7.5,
+      "interest_amount": 3.73972602739726,
+      "residual_value": 100.0,
+      "cash_flow": 3.73972602739726,
+      "adj_interest_amount": 3.73972602739726,
+      "adj_capital": 0.0
+    },
+    {
+      "issue_date": "2026-05-11",
+      "payment_date": "2028-11-13",
+      "capital": 0.0,
+      "interest_rate": 7.5,
+      "interest_amount": 3.821917808219178,
+      "residual_value": 100.0,
+      "cash_flow": 3.821917808219178,
+      "adj_interest_amount": 3.821917808219178,
+      "adj_capital": 0.0
+    },
+    {
+      "issue_date": "2026-05-11",
+      "payment_date": "2029-05-11",
+      "capital": 0.0,
+      "interest_rate": 7.5,
+      "interest_amount": 3.6780821917808217,
+      "residual_value": 100.0,
+      "cash_flow": 3.678082191780822,
+      "adj_interest_amount": 3.678082191780822,
+      "adj_capital": 0.0
+    },
+    {
+      "issue_date": "2026-05-11",
+      "payment_date": "2029-11-12",
+      "capital": 0.0,
+      "interest_rate": 7.5,
+      "interest_amount": 3.8013698630136985,
+      "residual_value": 100.0,
+      "cash_flow": 3.801369863013698,
+      "adj_interest_amount": 3.801369863013698,
+      "adj_capital": 0.0
+    },
+    {
+      "issue_date": "2026-05-11",
+      "payment_date": "2030-05-13",
+      "capital": 100.0,
+      "interest_rate": 7.5,
+      "interest_amount": 3.73972602739726,
+      "residual_value": 0.0,
+      "cash_flow": 103.73972602739725,
+      "adj_interest_amount": 3.73972602739726,
+      "adj_capital": 100.0
+    }
+  ],
+  "metadata": {
+    "subasset_class": "ON",
+    "nominal_units": 100,
+    "total_records": 8
+  }
+}

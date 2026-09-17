@@ -2,17 +2,25 @@
 
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
+/** No-op subscription: mount state never changes after hydration, so there is
+ * nothing to re-subscribe to. This avoids calling setState from an effect
+ * body (react-hooks/set-state-in-effect) while keeping the exact same
+ * SSR-false / client-true hydration-safe behavior. */
+function subscribeToNothing() {
+  return () => {};
+}
+
 export function ThemeToggle({ className }: { className?: string }) {
   const { resolvedTheme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  const mounted = useSyncExternalStore(
+    subscribeToNothing,
+    () => true,
+    () => false
+  );
 
   const isDark = resolvedTheme === "dark";
 

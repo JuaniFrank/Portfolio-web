@@ -8,6 +8,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { buildImportIdempotencyHash } from "./idempotency";
 import type { CommitImportRow, DuplicateStrategy, ParsedImportRowData } from "./types";
+import { instrumentKey } from "@/lib/market/instrument-identity";
 
 export type CommitImportInput = {
   userId: string;
@@ -52,16 +53,6 @@ function venueFor(type: InstrumentType): string | null {
     type === InstrumentType.ON
     ? "BYMA"
     : null;
-}
-
-/** Stable identity of an instrument for the import lookup. */
-function instrumentKey(parts: {
-  ticker: string;
-  type: InstrumentType;
-  currencyCode: string;
-  venueCode: string | null;
-}): string {
-  return `${parts.ticker}|${parts.type}|${parts.currencyCode}|${parts.venueCode ?? ""}`;
 }
 
 /**
@@ -234,6 +225,10 @@ export async function commitImportBatch(input: CommitImportInput): Promise<Commi
   }
 
   // 3. Resolve all instruments in bulk.
+  // AD-9/T-53: enrichment no longer runs here. A Yahoo/Docta hiccup must
+  // never fail an otherwise-valid import commit — it is re-issued from
+  // commitImportAction (src/app/actions/imports.ts) inside `after()`, after
+  // the response is already prepared, where a throw cannot reach the user.
   let instrumentMap: Map<string, string>;
   try {
     instrumentMap = await resolveInstrumentsBatch(

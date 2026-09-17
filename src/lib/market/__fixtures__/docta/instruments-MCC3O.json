@@ -1,0 +1,17 @@
+{
+  "data": [
+    {
+      "ticker": "MCC3O",
+      "name": "Pecom Servicios Energã­A S.A.U. 2030 U$S 7.50% (MCC3O)",
+      "asset_class": "BOND",
+      "sub_asset_class": "ON",
+      "sector": "Oil & Gas",
+      "issuer": "Pecom Servicios Energã­A S.A.U.",
+      "law": "Ley Argentina",
+      "isin": "AR0922852063"
+    }
+  ],
+  "metadata": {
+    "total_records": 1
+  }
+}

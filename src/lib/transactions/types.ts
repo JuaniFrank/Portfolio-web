@@ -1,7 +1,17 @@
 import type { InstrumentType, TransactionType } from "@/lib/generated/prisma";
 
 /** Instrumentos incluidos en resumen e historial (extensible). */
-export const TRADE_INSTRUMENT_TYPES: InstrumentType[] = ["STOCK_AR", "CEDEAR", "ON"];
+export const TRADE_INSTRUMENT_TYPES: InstrumentType[] = [
+  "STOCK_AR",
+  "CEDEAR",
+  "ON",
+  "BOND_AR",
+  "LETRA",
+];
+
+/** Fixed-income types: routed through toBondTrade/valuateOnPositions, never
+ * through buildHoldings + refreshLatestQuotes (FR-7). */
+export const FIXED_INCOME_TYPES: InstrumentType[] = ["ON", "BOND_AR", "LETRA"];
 
 export const TRADE_TYPES: TransactionType[] = ["BUY", "SELL"];
 

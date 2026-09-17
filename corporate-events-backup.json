@@ -1,0 +1,47 @@
+[
+  {
+    "id": "cmthsvz8700tr52p0q92oybby",
+    "instrumentId": "cmthnufr0000b52z8rrlodd0a",
+    "eventType": "CEDEAR_RATIO_CHANGE",
+    "effectiveDate": "2026-05-29T00:00:00.000Z",
+    "numerator": "3",
+    "denominator": "1",
+    "notes": "Detectado automáticamente (YAHOO_SPLIT).",
+    "appliedAt": "2026-08-31T22:19:04.088Z",
+    "createdByUserId": "cmthnfa06000152z8bokizz3w",
+    "instrument": {
+      "ticker": "SPY",
+      "type": "CEDEAR"
+    }
+  },
+  {
+    "id": "cmu3lu707002452bjohd731w0",
+    "instrumentId": "cmthnufr0000b52z8rrlodd0a",
+    "eventType": "CEDEAR_RATIO_CHANGE",
+    "effectiveDate": "2026-06-01T00:00:00.000Z",
+    "numerator": "3",
+    "denominator": "1",
+    "notes": "Cambio de ratio CEDEAR SPY de 20:1 a 60:1 (01/06/2026).",
+    "appliedAt": "2026-09-16T04:32:39.415Z",
+    "createdByUserId": null,
+    "instrument": {
+      "ticker": "SPY",
+      "type": "CEDEAR"
+    }
+  },
+  {
+    "id": "cmthsw11c00tt52p0ihs4et0b",
+    "instrumentId": "cmthncdgb001g52r1xm0qg0gq",
+    "eventType": "STOCK_SPLIT",
+    "effectiveDate": "2026-08-03T00:00:00.000Z",
+    "numerator": "10",
+    "denominator": "1",
+    "notes": "Detectado automáticamente (YAHOO_SPLIT).",
+    "appliedAt": "2026-08-31T22:19:06.432Z",
+    "createdByUserId": "cmthnfa06000152z8bokizz3w",
+    "instrument": {
+      "ticker": "YPFD",
+      "type": "STOCK_AR"
+    }
+  }
+]

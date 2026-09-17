@@ -1,4 +1,4 @@
-import type { InstrumentType } from "@/lib/generated/prisma";
+import type { InstrumentType, Settlement } from "@/lib/generated/prisma";
 import type {
   MonitoringAdjustmentPolicy,
   MonitoringCurrency,
@@ -34,6 +34,14 @@ export type ResolvableInstrument = {
   ticker: string;
   type: InstrumentType;
   currencyCode: string;
+  /** AD-1 settlement. Required for the "spot" branch (T-30); unused by the
+   * pre-existing branches. */
+  settlement: Settlement;
+  /** Present when this instrument is a linked settlement variant (AD-6). The
+   * "spot" branch keys off ITS PRESENCE, never off `settlement` alone — a
+   * `settlement: "USD"` row whose split is not yet determined still prices
+   * off its base when one is known. */
+  baseInstrument?: { ticker: string } | null;
   underlyingAsset?: { ticker: string } | null;
 };
 
@@ -45,6 +53,26 @@ export function resolveMonitoringRouting(
   const isCedear = instrument.type === "CEDEAR";
   const isStockAr = instrument.type === "STOCK_AR";
   const hasFmpKey = Boolean(process.env.FINANCIALMODELINGPREP_APIKEY);
+
+  // "spot" (T-30, AD-6): currency-aware quote routing for refreshLatestQuotes,
+  // scoped to the BYMA-quoted types (mirrors quotes.ts's ARGENTINIAN_TYPES —
+  // duplicated here, not imported, so provider-routing.ts stays the one
+  // module with no dependency on the Prisma orchestrator it is routed by).
+  // A linked variant prices off its BASE's .BA symbol; an unlinked row (base
+  // or an unlinked USD variant) prices off its own .BA symbol. Always ARS —
+  // PriceCache stays single-currency; the caller converts via CCL/MEP.
+  const isArgentineFixedIncome =
+    instrument.type === "ON" || instrument.type === "BOND_AR" || instrument.type === "LETRA";
+  if (seriesKind === "spot" && (isCedear || isStockAr || isArgentineFixedIncome)) {
+    const symbolTicker = instrument.baseInstrument?.ticker ?? instrument.ticker;
+    return {
+      provider: "yahoo",
+      source: YAHOO_EOD_SOURCE,
+      externalSymbol: `${symbolTicker}.BA`,
+      currency: "ARS",
+      adjustmentPolicy: "raw",
+    };
+  }
 
   // CEDEAR Underlying mode (USD)
   if (isCedear && seriesKind === "cedear-underlying") {

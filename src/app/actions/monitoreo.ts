@@ -45,6 +45,7 @@ export async function getMonitoringBootstrapAction(): Promise<
   if (!user) return { error: "unauthorized" };
 
   const instruments = await listMonitoringInstruments(user.id);
+
   if (instruments.length === 0) {
     return {
       instruments: [],

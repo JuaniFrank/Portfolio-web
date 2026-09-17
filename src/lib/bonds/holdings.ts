@@ -1,16 +1,19 @@
 /**
- * Pure functions for ON (corporate bond) position aggregation.
+ * Pure functions for fixed-income (ON, BOND_AR, LETRA) position aggregation.
  *
- * Scoped exclusively to instrumentType = "ON".
  * Does NOT touch TRADE_INSTRUMENT_TYPES or any other instrument domain.
  */
 
 import Decimal from "decimal.js";
+import type { InstrumentType } from "@/lib/generated/prisma";
 import type { BondHolding } from "./types";
 
 export type TradeForBondHoldings = {
   instrumentId: string;
   ticker: string;
+  /** ON, BOND_AR, or LETRA — carried through so the bridge doesn't have to
+   * hardcode a single fixed-income type (FR-7). */
+  instrumentType: InstrumentType;
   /**
    * Transaction type as a string. Widened from "BUY"|"SELL" to accommodate the
    * full set of ON transaction types (COUPON, AMORTIZATION) that share the same
