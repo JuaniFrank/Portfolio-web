@@ -9,6 +9,12 @@ import { prisma } from "@/lib/prisma";
 import { buildImportIdempotencyHash } from "./idempotency";
 import type { CommitImportRow, DuplicateStrategy, ParsedImportRowData } from "./types";
 import { instrumentKey } from "@/lib/market/instrument-identity";
+import {
+  denominationsFromRows,
+  instrumentCurrencyForRow,
+  instrumentScopeKey,
+  type DenominationRow,
+} from "./instrument-currency";
 
 export type CommitImportInput = {
   userId: string;
@@ -65,30 +71,27 @@ function venueFor(type: InstrumentType): string | null {
 async function resolveInstrumentsBatch(
   db: DbClient,
   rows: ParsedImportRowData[]
-): Promise<Map<string, string>> {
-  const wanted = new Map<
-    string,
-    { ticker: string; type: InstrumentType; currencyCode: string; venueCode: string | null }
-  >();
-
+): Promise<{ idByKey: Map<string, string>; currencyByScope: Map<string, string> }> {
+  const candidates: DenominationRow[] = [];
   for (const p of rows) {
     if (!p.ticker || !p.instrumentType) continue;
-    const parts = {
+    candidates.push({
       ticker: p.ticker,
-      type: p.instrumentType,
-      currencyCode: p.currencyCode,
+      instrumentType: p.instrumentType,
       venueCode: venueFor(p.instrumentType),
-    };
-    wanted.set(instrumentKey(parts), parts);
+      currencyCode: p.currencyCode,
+      type: p.type,
+    });
   }
 
-  const map = new Map<string, string>();
-  if (wanted.size === 0) return map;
+  const idByKey = new Map<string, string>();
+  const currencyByScope = denominationsFromRows(candidates);
+  if (candidates.length === 0) return { idByKey, currencyByScope };
 
-  const tickers = [...new Set([...wanted.values()].map((w) => w.ticker))];
+  const tickers = [...new Set(candidates.map((c) => c.ticker))];
   const existing = await db.instrument.findMany({ where: { ticker: { in: tickers } } });
   for (const inst of existing) {
-    map.set(
+    idByKey.set(
       instrumentKey({
         ticker: inst.ticker,
         type: inst.type,
@@ -99,7 +102,38 @@ async function resolveInstrumentsBatch(
     );
   }
 
-  const missing = [...wanted.entries()].filter(([key]) => !map.has(key)).map(([, v]) => v);
+  // A catalog row states its own denomination, but only trust it when the scope
+  // holds exactly one — otherwise a phantom row from a past import could outvote
+  // the trades in this batch, which already won above.
+  const catalogCurrencies = new Map<string, Set<string>>();
+  for (const inst of existing) {
+    const scope = instrumentScopeKey({
+      ticker: inst.ticker,
+      instrumentType: inst.type,
+      venueCode: inst.venueCode,
+    });
+    catalogCurrencies.set(scope, (catalogCurrencies.get(scope) ?? new Set()).add(inst.currencyCode));
+  }
+  for (const [scope, currencies] of catalogCurrencies) {
+    if (currencyByScope.has(scope) || currencies.size !== 1) continue;
+    currencyByScope.set(scope, [...currencies][0]!);
+  }
+
+  const wanted = new Map<
+    string,
+    { ticker: string; type: InstrumentType; currencyCode: string; venueCode: string | null }
+  >();
+  for (const c of candidates) {
+    const parts = {
+      ticker: c.ticker,
+      type: c.instrumentType,
+      currencyCode: instrumentCurrencyForRow(c, currencyByScope.get(instrumentScopeKey(c))),
+      venueCode: c.venueCode,
+    };
+    wanted.set(instrumentKey(parts), parts);
+  }
+
+  const missing = [...wanted.entries()].filter(([key]) => !idByKey.has(key)).map(([, v]) => v);
   if (missing.length > 0) {
     await db.instrument.createMany({
       data: missing.map((m) => ({
@@ -117,7 +151,7 @@ async function resolveInstrumentsBatch(
       where: { ticker: { in: missing.map((m) => m.ticker) } },
     });
     for (const inst of created) {
-      map.set(
+      idByKey.set(
         instrumentKey({
           ticker: inst.ticker,
           type: inst.type,
@@ -129,7 +163,7 @@ async function resolveInstrumentsBatch(
     }
   }
 
-  return map;
+  return { idByKey, currencyByScope };
 }
 
 function toDateOrNull(value: string | null | undefined): Date | null {
@@ -229,12 +263,13 @@ export async function commitImportBatch(input: CommitImportInput): Promise<Commi
   // never fail an otherwise-valid import commit — it is re-issued from
   // commitImportAction (src/app/actions/imports.ts) inside `after()`, after
   // the response is already prepared, where a throw cannot reach the user.
-  let instrumentMap: Map<string, string>;
+  let idByKey: Map<string, string>;
+  let currencyByScope: Map<string, string>;
   try {
-    instrumentMap = await resolveInstrumentsBatch(
+    ({ idByKey, currencyByScope } = await resolveInstrumentsBatch(
       prisma,
       toInsert.map((t) => t.parsed)
-    );
+    ));
   } catch (error) {
     console.error("commitImportBatch:resolveInstruments", error);
     return { ok: false, error: "No se pudieron resolver los instrumentos del archivo" };
@@ -242,13 +277,19 @@ export async function commitImportBatch(input: CommitImportInput): Promise<Commi
 
   const instrumentIdFor = (parsed: ParsedImportRowData): string | null => {
     if (!parsed.ticker || !parsed.instrumentType) return null;
+    const venueCode = venueFor(parsed.instrumentType);
+    const scope = instrumentScopeKey({
+      ticker: parsed.ticker,
+      instrumentType: parsed.instrumentType,
+      venueCode,
+    });
     return (
-      instrumentMap.get(
+      idByKey.get(
         instrumentKey({
           ticker: parsed.ticker,
           type: parsed.instrumentType,
-          currencyCode: parsed.currencyCode,
-          venueCode: venueFor(parsed.instrumentType),
+          currencyCode: instrumentCurrencyForRow(parsed, currencyByScope.get(scope)),
+          venueCode,
         })
       ) ?? null
     );
