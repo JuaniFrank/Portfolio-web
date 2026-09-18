@@ -50,22 +50,25 @@ export const CHART_COLORS = [
 ];
 
 export const SECTOR_COLORS: Record<string, string> = {
-  "Energía": "#14b8a6",
-  "Consumo básico": "#a855f7",
-  Finanzas: "#ec4899",
-  "Consumo discrecional": "#ef4444",
-  Tecnología: "#f97316",
-  Comunicación: "#06b6d4",
-  "Servicios públicos": "#eab308",
-  Materiales: "#84cc16",
-  Industria: "#3b82f6",
-  Salud: "#10b981",
-  "Real Estate": "#f59e0b",
-  "Renta fija": "#6366f1",
-  "Fondos comunes": "#8b5cf6",
-  Cripto: "#fb7185",
-  ETF: "#22d3ee",
-  "Sin clasificar": "#71717a",
+  // Yahoo Finance — sectores
+  Tecnología: "#3b82f6", // Azul — tecnología, innovación
+  "Servicios financieros": "#16a34a", // Verde — dinero, crecimiento
+  Industria: "#64748b", // Gris acero — industria, maquinaria
+  Salud: "#10b981", // Verde/teal — salud, bienestar
+  Comunicación: "#a855f7", // Violeta — medios, comunicación
+  "Consumo cíclico": "#f97316", // Naranja — retail, ocio, consumo
+  Energía: "#eab308", // Amarillo/ámbar — petróleo, energía, electricidad
+  "Consumo defensivo": "#84cc16", // Verde lima — alimentos, básicos
+  "Materiales básicos": "#a16207", // Marrón/dorado — minería, metales, químicos
+  Inmobiliario: "#c2410c", // Terracota — propiedades, construcción
+  "Servicios públicos": "#06b6d4", // Cyan/azul — agua, gas, electricidad
+
+  // Instrumentos que no son sectores de Yahoo
+  "Renta fija": "#6366f1", // Índigo — bonos
+  "Fondos comunes": "#8b5cf6", // Violeta — fondos
+  Cripto: "#f59e0b", // Ámbar — crypto
+  ETF: "#0891b2", // Azul/cyan — ETFs
+  "Sin clasificar": "#71717a", // Gris — desconocido
 };
 
 export const MARKET_COLORS: Record<string, string> = {
