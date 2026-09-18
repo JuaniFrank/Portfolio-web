@@ -38,19 +38,34 @@ export type HoldingForDashboard = {
 };
 
 const SECTOR_ES: Record<string, string> = {
+  // Yahoo Finance — 11 sectores actuales
   Technology: "Tecnología",
-  "Consumer Discretionary": "Consumo discrecional",
-  "Consumer Staples": "Consumo básico",
-  Financials: "Finanzas",
-  Energy: "Energía",
-  Utilities: "Servicios públicos",
-  Materials: "Materiales",
+  "Financial Services": "Servicios financieros",
   Industrials: "Industria",
-  "Health Care": "Salud",
   Healthcare: "Salud",
   "Communication Services": "Comunicación",
+  "Consumer Cyclical": "Consumo cíclico",
+  Energy: "Energía",
+  "Consumer Defensive": "Consumo defensivo",
+  "Basic Materials": "Materiales básicos",
+  "Real Estate": "Inmobiliario",
+  Utilities: "Servicios públicos",
+
+  // Variantes / nombres históricos / aliases
+  Financials: "Servicios financieros",
+  Finance: "Servicios financieros",
+
+  "Consumer Discretionary": "Consumo cíclico",
+  "Consumer Staples": "Consumo defensivo",
+
+  "Health Care": "Salud",
+  "Health Care Services": "Salud",
+
   Communications: "Comunicación",
-  "Real Estate": "Real Estate",
+
+  Materials: "Materiales básicos",
+
+  "Real Estate Investment Trusts": "Inmobiliario",
 };
 
 function translateSector(raw: string | null, instrumentType: InstrumentType): string {
