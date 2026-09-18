@@ -78,3 +78,122 @@ export const MARKET_COLORS: Record<string, string> = {
   Cripto: "#f97316",
   Otros: "#71717a",
 };
+
+export const SECTOR_DESCRIPTIONS: Record<string, string> = {
+  // Yahoo Finance — sectores principales
+
+  Technology:
+    "Empresas que desarrollan software, hardware, semiconductores y otras soluciones tecnológicas.",
+
+  "Financial Services":
+    "Bancos, aseguradoras, empresas de inversión, medios de pago y otros servicios relacionados con las finanzas.",
+
+  Industrials:
+    "Empresas dedicadas a la fabricación, maquinaria, construcción, transporte y servicios industriales.",
+
+  Healthcare:
+    "Empresas de productos farmacéuticos, biotecnología, equipamiento y servicios de salud.",
+
+  "Communication Services":
+    "Empresas de telecomunicaciones, medios, entretenimiento, publicidad y plataformas de comunicación.",
+
+  "Consumer Cyclical":
+    "Empresas cuyos productos y servicios suelen tener mayor demanda cuando la economía y el consumo crecen.",
+
+  Energy:
+    "Empresas relacionadas con petróleo, gas, combustibles, generación y producción de energía.",
+
+  "Consumer Defensive":
+    "Empresas de productos y servicios esenciales, como alimentos, bebidas, higiene y productos del hogar.",
+
+  "Basic Materials":
+    "Empresas que producen materias primas como metales, minerales, químicos, papel y materiales de construcción.",
+
+  "Real Estate":
+    "Empresas vinculadas a propiedades, desarrollo inmobiliario, alquileres y gestión de bienes raíces.",
+
+  Utilities:
+    "Empresas que brindan servicios esenciales como electricidad, gas, agua y distribución de energía.",
+
+  // Variantes / aliases de Yahoo Finance
+
+  Financials:
+    "Bancos, aseguradoras, empresas de inversión, medios de pago y otros servicios relacionados con las finanzas.",
+
+  Finance:
+    "Bancos, aseguradoras, empresas de inversión, medios de pago y otros servicios relacionados con las finanzas.",
+
+  "Consumer Discretionary":
+    "Empresas cuyos productos y servicios suelen tener mayor demanda cuando la economía y el consumo crecen.",
+
+  "Consumer Staples":
+    "Empresas de productos y servicios esenciales, como alimentos, bebidas, higiene y productos del hogar.",
+
+  "Health Care":
+    "Empresas de productos farmacéuticos, biotecnología, equipamiento y servicios de salud.",
+
+  "Health Care Services":
+    "Empresas de productos farmacéuticos, biotecnología, equipamiento y servicios de salud.",
+
+  Communications:
+    "Empresas de telecomunicaciones, medios, entretenimiento, publicidad y plataformas de comunicación.",
+
+  Materials:
+    "Empresas que producen materias primas como metales, minerales, químicos, papel y materiales de construcción.",
+
+  "Real Estate Investment Trusts":
+    "Empresas vinculadas a propiedades, desarrollo inmobiliario, alquileres y gestión de bienes raíces.",
+
+  // Categorías propias de la aplicación
+
+  "Renta fija":
+    "Instrumentos que representan deuda y generan pagos de intereses y/o amortización según condiciones preestablecidas.",
+
+  "Fondos comunes":
+    "Vehículos de inversión que agrupan el capital de varios inversores para invertir en una cartera diversificada.",
+
+  Cripto:
+    "Activos digitales basados principalmente en tecnología blockchain, como Bitcoin y otras criptomonedas.",
+
+  ETF:
+    "Fondos que cotizan en bolsa y permiten invertir en una cartera de activos, índice, sector o estrategia.",
+
+  "Sin clasificar":
+    "Instrumentos para los que todavía no se ha identificado o asignado un sector.",
+
+  // Español (nombres traducidos en el dashboard)
+
+  Tecnología:
+    "Empresas que desarrollan software, hardware, semiconductores y otras soluciones tecnológicas.",
+
+  "Servicios financieros":
+    "Bancos, aseguradoras, empresas de inversión, medios de pago y otros servicios relacionados con las finanzas.",
+
+  Industria:
+    "Empresas dedicadas a la fabricación, maquinaria, construcción, transporte y servicios industriales.",
+
+  Salud:
+    "Empresas de productos farmacéuticos, biotecnología, equipamiento y servicios de salud.",
+
+  Comunicación:
+    "Empresas de telecomunicaciones, medios, entretenimiento, publicidad y plataformas de comunicación.",
+
+  "Consumo cíclico":
+    "Empresas cuyos productos y servicios suelen tener mayor demanda cuando la economía y el consumo crecen.",
+
+  Energía:
+    "Empresas relacionadas con petróleo, gas, combustibles, generación y producción de energía.",
+
+  "Consumo defensivo":
+    "Empresas de productos y servicios esenciales, como alimentos, bebidas, higiene y productos del hogar.",
+
+  "Materiales básicos":
+    "Empresas que producen materias primas como metales, minerales, químicos, papel y materiales de construcción.",
+
+  Inmobiliario:
+    "Empresas vinculadas a propiedades, desarrollo inmobiliario, alquileres y gestión de bienes raíces.",
+
+  "Servicios públicos":
+    "Empresas que brindan servicios esenciales como electricidad, gas, agua y distribución de energía.",
+};
+

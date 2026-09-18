@@ -63,11 +63,24 @@ export type AllocationSlice = {
   details?: AllocationSliceDetail[];
 };
 
+export type SectorHoldingDetail = {
+  ticker: string;
+  name: string;
+  valueArs: string;
+  valueUsd: string;
+  /** Porcentaje que representa sobre el total del portfolio */
+  percent: string;
+  /** Porcentaje relativo dentro de este sector */
+  percentOfSector: string;
+};
+
 export type SectorBar = {
   sector: string;
   valueArs: string;
   valueUsd: string;
   percent: string;
+  /** Posiciones que componen este sector al hacer hover */
+  holdings?: SectorHoldingDetail[];
 };
 
 export type ConcentrationStats = {

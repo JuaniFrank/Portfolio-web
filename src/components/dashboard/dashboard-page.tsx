@@ -114,7 +114,11 @@ export function DashboardPage({ data }: Props) {
         description="Diversificación sectorial de tu portfolio."
         icon={<Factory className="h-4 w-4" />}
       >
-        <SectorBars data={data.allocationBySector} currency={currency} />
+        <SectorBars
+          data={data.allocationBySector}
+          currency={currency}
+          holdings={data.holdings}
+        />
       </ChartCard>
 
       <ChartCard

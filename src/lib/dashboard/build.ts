@@ -266,16 +266,37 @@ export function buildDashboardData(args: {
     .sort((a, b) => Number(b.valueArs) - Number(a.valueArs));
 
   const sectorMap = new Map<string, Decimal>();
+  const sectorHoldingsMap = new Map<string, DashboardHolding[]>();
   for (const h of holdings) {
+    if (Number(h.marketValueArs) <= 0) continue;
     sectorMap.set(h.sector, (sectorMap.get(h.sector) ?? new Decimal(0)).plus(h.marketValueArs));
+    const list = sectorHoldingsMap.get(h.sector) ?? [];
+    list.push(h);
+    sectorHoldingsMap.set(h.sector, list);
   }
   const allocationBySector: SectorBar[] = Array.from(sectorMap.entries())
-    .map(([sector, val]) => ({
-      sector,
-      valueArs: val.toFixed(2),
-      valueUsd: toUsd(val, cclRate).toFixed(2),
-      percent: pctOf(val, totalValue),
-    }))
+    .map(([sector, val]) => {
+      const items = (sectorHoldingsMap.get(sector) ?? [])
+        .slice()
+        .sort((a, b) => Number(b.marketValueArs) - Number(a.marketValueArs));
+      return {
+        sector,
+        valueArs: val.toFixed(2),
+        valueUsd: toUsd(val, cclRate).toFixed(2),
+        percent: pctOf(val, totalValue),
+        holdings: items.map((h) => {
+          const itemVal = new Decimal(h.marketValueArs);
+          return {
+            ticker: h.ticker,
+            name: h.instrumentName,
+            valueArs: h.marketValueArs,
+            valueUsd: h.marketValueUsd,
+            percent: h.weightPercent,
+            percentOfSector: val.isZero() ? "0" : pctOf(itemVal, val),
+          };
+        }),
+      };
+    })
     .sort((a, b) => Number(b.valueArs) - Number(a.valueArs));
 
   const moversBase = holdings

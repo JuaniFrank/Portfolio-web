@@ -20,6 +20,7 @@ function trade(over: Partial<TradeForBondHoldings> & { tradeDate: string }): Tra
   return {
     instrumentId: "b1",
     ticker: "YMCJO",
+    instrumentType: "ON",
     type: "BUY",
     quantity: "100",
     netAmount: "100",
