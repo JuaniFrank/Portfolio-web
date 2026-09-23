@@ -101,6 +101,8 @@ export type EvolutionMover = {
   pricePercent: number | null;
   /** El precio del cierre vino por arrastre: el número no es del período. */
   priceIsStale: boolean;
+  /** El precio del cierre es el punto en vivo del día, no un cierre medido. */
+  priceIsLive: boolean;
   /**
    * Hubo compras o ventas del instrumento en el período.
    *
@@ -262,6 +264,7 @@ function computeMovers(
       pnlUsd: round2(pnlUsd),
       pricePercent: pricePercent === null ? null : round4(pricePercent),
       priceIsStale: after?.priceIsStale ?? true,
+      priceIsLive: after?.priceIsLive ?? false,
       hadFlow: netFlow.ars !== 0,
     });
   }

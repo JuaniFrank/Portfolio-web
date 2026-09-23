@@ -11,6 +11,7 @@
 import { prisma } from "@/lib/prisma";
 import type { InstrumentType } from "@/lib/generated/prisma";
 import { EOD_PRICE_SOURCE } from "@/lib/market/history-sync";
+import { fetchLiveOverlayInputs } from "@/lib/market/live-quotes";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
 import {
@@ -18,6 +19,8 @@ import {
   type TransactionForFlows,
 } from "@/lib/rendimientos/cashflows";
 import { toUtcDay } from "@/lib/rendimientos/months";
+import { overlayLiveCcl, overlayLivePrices } from "@/lib/rendimientos/live-overlay";
+import { DEFAULT_MARKET_TIME_ZONE, marketDayOf } from "@/lib/rendimientos/market-day";
 import { loadCclSeries } from "@/lib/market/ccl-history";
 import { PriceIndex, TimeSeries } from "@/lib/rendimientos/price-series";
 import { PERFORMANCE_INSTRUMENT_TYPES } from "@/lib/rendimientos/types";
@@ -37,17 +40,15 @@ const EMPTY: PortfolioEvolution = {
   lastDate: null,
 };
 
-function todayUtc(): Date {
-  return toUtcDay(new Date());
-}
-
 /**
  * @param ccl - Serie de CCL ya cargada. El dashboard la comparte con la valuación de
  *   posiciones para no leer dos veces la misma tabla; sin ella se lee acá.
+ * @param marketTimeZone - Calendario que decide qué día es "hoy" para el precio en vivo.
  */
 export async function loadPortfolioEvolution(
   portfolioIds: string[],
-  ccl?: TimeSeries
+  ccl?: TimeSeries,
+  marketTimeZone: string = DEFAULT_MARKET_TIME_ZONE
 ): Promise<PortfolioEvolution> {
   if (portfolioIds.length === 0) return EMPTY;
 
@@ -67,17 +68,23 @@ export async function loadPortfolioEvolution(
 
   if (transactions.length === 0) return EMPTY;
 
-  const eligibleInstrumentIds = [
-    ...new Set(
+  // Ticker+type de cada instrumento elegible: lo necesita el overlay en vivo para
+  // matchear contra data912, y ya está en `transactions` — no hace falta otra query.
+  const eligibleInstruments = [
+    ...new Map(
       transactions
         .filter((tx) => tx.instrument && ELIGIBLE_TYPES.has(tx.instrument.type))
-        .map((tx) => tx.instrument!.id)
-    ),
+        .map((tx) => [
+          tx.instrument!.id,
+          { id: tx.instrument!.id, ticker: tx.instrument!.ticker, type: tx.instrument!.type },
+        ])
+    ).values(),
   ];
+  const eligibleInstrumentIds = eligibleInstruments.map((instrument) => instrument.id);
 
   if (eligibleInstrumentIds.length === 0) return EMPTY;
 
-  const [priceRows, cclLoaded, eventRows] = await Promise.all([
+  const [priceRows, cclLoaded, eventRows, liveOverlay] = await Promise.all([
     prisma.priceCache.findMany({
       where: { instrumentId: { in: eligibleInstrumentIds }, source: EOD_PRICE_SOURCE },
       orderBy: { datetime: "asc" },
@@ -95,24 +102,37 @@ export async function loadPortfolioEvolution(
         denominator: true,
       },
     }),
+    fetchLiveOverlayInputs(eligibleInstruments),
   ]);
 
-  // Sea la compartida por el dashboard o la que se leyó acá, de acá en más es una sola.
-  const cclSeries = cclLoaded;
+  // "Hoy" para el overlay: un solo corte para precios y CCL.
+  const today = marketDayOf(new Date(), marketTimeZone);
 
-  const prices = new PriceIndex(
+  const { rows: overlaidPriceRows, liveInstrumentIds } = overlayLivePrices(
     priceRows.map((row) => ({
       instrumentId: row.instrumentId,
       date: row.datetime,
       close: Number(row.close),
-    }))
+    })),
+    liveOverlay.priceQuotes,
+    today
   );
+  const prices = new PriceIndex(overlaidPriceRows);
 
-  // Las ruedas: los días en que al menos un instrumento cerró. `priceRows` ya viene
-  // ordenado por fecha, así que el Set preserva el orden ascendente.
+  // Sea la compartida por el dashboard o la que se leyó acá, de acá en más es una sola.
+  // El overlay es idempotente: si ya tiene un punto de hoy (por ejemplo porque
+  // `resolveCclRate` ya lo persistió), no agrega nada.
+  const cclOverlay = overlayLiveCcl(cclLoaded.all(), liveOverlay.cclMid, today);
+  const cclSeries = cclOverlay.isLive ? new TimeSeries(cclOverlay.points) : cclLoaded;
+
+  // Las ruedas: los días en que al menos un instrumento cerró (incluye el overlay en
+  // vivo de hoy, si lo hubo). `overlaidPriceRows` empieza ordenado por fecha y el punto
+  // en vivo se agrega al final, así que el Set no preserva el orden acá: se ordena.
   const tradingDays = [
-    ...new Set(priceRows.map((row) => toUtcDay(row.datetime).getTime())),
-  ].map((time) => new Date(time));
+    ...new Set(overlaidPriceRows.map((row) => toUtcDay(row.date).getTime())),
+  ]
+    .sort((a, b) => a - b)
+    .map((time) => new Date(time));
 
   const eventsByInstrument = new Map<string, CorporateEventForBuilder[]>();
   for (const event of eventRows) {
@@ -175,7 +195,7 @@ export async function loadPortfolioEvolution(
   }));
 
   const from = toUtcDay(new Date(trades[0]!.tradeDate));
-  const to = todayUtc();
+  const to = today;
 
   return buildEvolutionSeries({
     trades,
@@ -185,6 +205,7 @@ export async function loadPortfolioEvolution(
     // La renta cobrada vive dentro del perímetro: un dividendo es retorno generado, no
     // plata que se fue.
     incomeArsByDate: accumulateInArs(classifyIncome(forFlows), cclSeries),
+    liveInstrumentIds,
     flows,
     from,
     to,

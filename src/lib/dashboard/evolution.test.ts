@@ -549,3 +549,23 @@ describe("buildEvolutionSeries — el rendimiento en dólares no es el de pesos"
     expect(point.returnPercentUsd).toBeCloseTo(-100, 6);
   });
 });
+
+describe("buildEvolutionSeries — precio en vivo", () => {
+  it("marca en vivo al mover cuyo cierre del período es el punto en vivo", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+        flows: [flow(AAPL, "2026-01-01", 1000)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-02"), close: 120 },
+        ]),
+        liveInstrumentIds: new Set([AAPL]),
+        to: utc("2026-01-02"),
+      })
+    );
+
+    const mover = result.series.daily.at(-1)!.gainers.find((m) => m.ticker === "AAPL");
+    expect(mover?.priceIsLive).toBe(true);
+  });
+});
