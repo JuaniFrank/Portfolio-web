@@ -22,6 +22,7 @@ import Decimal from "decimal.js";
 import { prisma } from "@/lib/prisma";
 import type { InstrumentType } from "@/lib/generated/prisma";
 import { EOD_PRICE_SOURCE } from "@/lib/market/history-sync";
+import { fetchLiveOverlayInputs } from "@/lib/market/live-quotes";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { buildIndexBenchmark, buildInflationBenchmark } from "./benchmarks";
@@ -38,6 +39,8 @@ import {
   toUtcDay,
   type MonthKey,
 } from "./months";
+import { overlayLiveCcl, overlayLivePrices } from "./live-overlay";
+import { marketDayOf } from "./market-day";
 import { PriceIndex, TimeSeries } from "./price-series";
 import {
   accumulateInArs,
@@ -77,6 +80,8 @@ export type BuildSeriesOptions = {
   from?: Date;
   /** Último mes a reportar. Por defecto, el mes actual. */
   to?: Date;
+  /** Calendario que decide qué día es "hoy" para el precio en vivo. Por defecto, BYMA. */
+  marketTimeZone?: string;
 };
 
 export async function buildPerformanceReport(
@@ -115,15 +120,22 @@ export async function buildPerformanceReport(
   // 2024 sigue formando parte de la cartera de 2026.
   const seriesFloor = monthStart(months[0]!);
 
-  const eligibleInstrumentIds = [
-    ...new Set(
+  // Ticker+type de cada instrumento elegible: lo necesita el overlay en vivo para
+  // matchear contra data912 (mismo criterio que `market-snapshots.ts`), y ya está en
+  // `transactions` — no hace falta una query aparte.
+  const eligibleInstruments = [
+    ...new Map(
       transactions
         .filter((tx) => tx.instrument && ELIGIBLE_TYPES.has(tx.instrument.type))
-        .map((tx) => tx.instrument!.id)
-    ),
+        .map((tx) => [
+          tx.instrument!.id,
+          { id: tx.instrument!.id, ticker: tx.instrument!.ticker, type: tx.instrument!.type },
+        ])
+    ).values(),
   ];
+  const eligibleInstrumentIds = eligibleInstruments.map((instrument) => instrument.id);
 
-  const [priceRows, cclRows, inflationRows, mervalRows, sp500Rows, eventRows] =
+  const [priceRows, cclRows, inflationRows, mervalRows, sp500Rows, eventRows, liveOverlay] =
     await Promise.all([
       eligibleInstrumentIds.length > 0
         ? prisma.priceCache.findMany({
@@ -166,19 +178,32 @@ export async function buildPerformanceReport(
           denominator: true,
         },
       }),
+      eligibleInstruments.length > 0
+        ? fetchLiveOverlayInputs(eligibleInstruments)
+        : Promise.resolve({ priceQuotes: [], cclMid: null }),
     ]);
 
-  const prices = new PriceIndex(
+  // "Hoy" para el overlay: un solo corte para precios y CCL, así que ninguno de los dos
+  // queda a mitad de camino entre "ya cerró" y "todavía no".
+  const today = marketDayOf(new Date(), opts.marketTimeZone);
+
+  const { rows: overlaidPriceRows, liveInstrumentIds } = overlayLivePrices(
     priceRows.map((row) => ({
       instrumentId: row.instrumentId,
       date: row.datetime,
       close: Number(row.close),
-    }))
+    })),
+    liveOverlay.priceQuotes,
+    today
   );
+  const prices = new PriceIndex(overlaidPriceRows);
 
-  const ccl = new TimeSeries(
-    cclRows.map((row) => ({ date: row.date, value: Number(row.mid) }))
+  const { points: overlaidCclPoints } = overlayLiveCcl(
+    cclRows.map((row) => ({ date: row.date, value: Number(row.mid) })),
+    liveOverlay.cclMid,
+    today
   );
+  const ccl = new TimeSeries(overlaidCclPoints);
 
   const eventsByInstrument = new Map<string, CorporateEventForBuilder[]>();
   for (const event of eventRows) {
@@ -236,6 +261,7 @@ export async function buildPerformanceReport(
     ccl,
     eventsByInstrument,
     incomeArsByDate: accumulateInArs(incomeEvents, ccl),
+    liveInstrumentIds,
   };
 
   /** La valuación del núcleo, etiquetada con el mes de la fila que va a alimentar. */
@@ -417,7 +443,10 @@ export async function buildPerformanceReport(
     dataQuality: {
       partialMonths: rows.filter((row) => row.coverage === "partial").map((row) => row.month),
       missingCclMonths: rows.filter((row) => row.cclMonthEnd === null).map((row) => row.month),
-      lastPriceSyncDate: prices.latestDate()?.toISOString() ?? null,
+      // Frescura del backfill nocturno: se mide sobre `priceRows` (solo EOD), no sobre
+      // `prices` (que incluye el overlay en vivo). Si se leyera de `prices`, un precio en
+      // vivo de hoy reportaría "sincronizado hoy" cuando en realidad el cron no corrió.
+      lastPriceSyncDate: latestEodDate(priceRows)?.toISOString() ?? null,
       seriesFloor: seriesFloor.toISOString(),
     },
   };
@@ -433,6 +462,15 @@ export async function buildPerformanceReport(
 
 function monthKeyOf(date: Date): MonthKey {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Fecha más reciente entre las filas EOD crudas, antes del overlay en vivo. */
+function latestEodDate(rows: Array<{ datetime: Date }>): Date | null {
+  let latest: Date | null = null;
+  for (const row of rows) {
+    if (!latest || row.datetime.getTime() > latest.getTime()) latest = row.datetime;
+  }
+  return latest;
 }
 
 /**
