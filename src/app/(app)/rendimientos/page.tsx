@@ -81,6 +81,7 @@ function emptyReport(portfolioName: string): PerformanceReport {
       monthsTracked: 0,
     },
     excludedHoldings: [],
+    positions: [],
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],

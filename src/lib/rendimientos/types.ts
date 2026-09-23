@@ -1,4 +1,5 @@
 import type { InstrumentType } from "@/lib/generated/prisma";
+import type { PositionTableRow } from "./position-rows";
 
 export type ViewCurrency = "ARS" | "USD";
 
@@ -259,4 +260,10 @@ export type PerformanceReport = {
   summary: PerformanceSummary;
   excludedHoldings: ExcludedHolding[];
   dataQuality: DataQuality;
+  /**
+   * Posiciones abiertas al día de hoy, para la tabla interactiva. Distinto de
+   * `months[i].positions`: ese es el detalle desplegable de CADA cierre mensual,
+   * este es siempre el estado actual de la cartera.
+   */
+  positions: PositionTableRow[];
 };

@@ -72,6 +72,7 @@ function report(months: MonthlyPerformanceRow[], benchmarks: BenchmarkSeries[] =
       monthsTracked: 0,
     },
     excludedHoldings: [],
+    positions: [],
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],

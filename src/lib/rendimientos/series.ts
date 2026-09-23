@@ -41,6 +41,7 @@ import {
 } from "./months";
 import { overlayLiveCcl, overlayLivePrices } from "./live-overlay";
 import { marketDayOf } from "./market-day";
+import { buildPositionRows } from "./position-rows";
 import { PriceIndex, TimeSeries } from "./price-series";
 import {
   accumulateInArs,
@@ -434,12 +435,21 @@ export async function buildPerformanceReport(
     ),
   ];
 
+  // La última valuación replayada llega hasta hoy (el cierre del mes en curso se
+  // valúa forward-filled con el precio más reciente), así que sus posiciones son el
+  // estado actual de la cartera — no hace falta un replay aparte para la tabla.
+  const latestValuation = valuations.at(-1);
+  const positions = latestValuation
+    ? buildPositionRows(latestValuation.positions, trades, prices, today)
+    : [];
+
   return {
     portfolioName,
     months: rows,
     benchmarks,
     summary: buildSummary(rows),
     excludedHoldings: findExcludedHoldings(transactions),
+    positions,
     dataQuality: {
       partialMonths: rows.filter((row) => row.coverage === "partial").map((row) => row.month),
       missingCclMonths: rows.filter((row) => row.cclMonthEnd === null).map((row) => row.month),
@@ -686,6 +696,7 @@ function emptyReport(portfolioName: string): PerformanceReport {
     benchmarks: [],
     summary: emptySummary(),
     excludedHoldings: [],
+    positions: [],
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],
