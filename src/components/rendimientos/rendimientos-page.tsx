@@ -9,6 +9,7 @@ import { MonthlyReturns } from "@/components/rendimientos/monthly-returns";
 import { MonthlyTable } from "@/components/rendimientos/monthly-table";
 import { PerformanceKpis } from "@/components/rendimientos/performance-kpis";
 import { PortfolioVsBenchmark } from "@/components/rendimientos/portfolio-vs-benchmark";
+import { PositionsTable } from "@/components/rendimientos/positions-table";
 import { ValueEvolution } from "@/components/rendimientos/value-evolution";
 import { formatDateLong } from "@/components/rendimientos/chart-utils";
 import { useCurrency } from "@/components/providers/currency-provider";
@@ -102,6 +103,8 @@ export function RendimientosPage({ report }: { report: PerformanceReport }) {
           </div>
 
           <PerformanceKpis summary={summary} currency={currency} />
+
+          <PositionsTable positions={report.positions} currency={currency} />
 
           <div className="space-y-4">
             <ValueEvolution data={view.rows} currency={currency} />

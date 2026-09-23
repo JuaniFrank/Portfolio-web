@@ -335,7 +335,7 @@ function PositionsDetail({
 }
 
 /** Precio intradiario de data912: el cierre medido lo reemplaza cuando corre el backfill. */
-function LiveBadge() {
+export function LiveBadge() {
   return (
     <span
       title="Precio en vivo: todavía no hay cierre del día"
