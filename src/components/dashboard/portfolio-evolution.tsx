@@ -417,6 +417,7 @@ function EvolutionTooltip({ row, currency }: { row: ChartRow; currency: ViewCurr
   const returnPercent = currency === "ARS" ? row.returnPercent : row.returnPercentUsd;
   const hasBase = returnPercent !== null;
   const hasFlowMarker = [...row.gainers, ...row.losers].some((mover) => mover.hadFlow);
+  const hasLiveMarker = [...row.gainers, ...row.losers].some((mover) => mover.priceIsLive);
 
   return (
     <div className={TOOLTIP_CLASS}>
@@ -469,6 +470,13 @@ function EvolutionTooltip({ row, currency }: { row: ChartRow; currency: ViewCurr
         </p>
       ) : null}
 
+      {hasLiveMarker ? (
+        <p className="mt-2 border-t border-zinc-800 pt-2 text-[11px] text-zinc-500">
+          <span className="text-emerald-400/80">•</span> Precio en vivo: todavía no hay cierre
+          del día, se reemplaza cuando corre el backfill.
+        </p>
+      ) : null}
+
       {row.staleTickers.length > 0 ? (
         <p className="mt-2 border-t border-zinc-800 pt-2 text-[11px] text-amber-300/80">
           <span className="text-amber-400/80">*</span> Sin cierre propio del período (
@@ -502,6 +510,8 @@ function MoverColumn({
                 {/* Un asterisco donde el precio vino arrastrado: el número está
                     calculado contra un cierre que no es del período. */}
                 {mover.priceIsStale ? <span className="text-amber-400/80">*</span> : null}
+                {/* Un punto verde donde el cierre todavía es el precio en vivo del día. */}
+                {mover.priceIsLive ? <span className="text-emerald-400/80">•</span> : null}
                 {/* Marca las filas donde se operó: es la única explicación posible de
                     que el resultado y la variación del ticker discrepen de signo. */}
                 {mover.hadFlow ? <span className="text-teal-400/80">°</span> : null}
