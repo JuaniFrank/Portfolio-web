@@ -79,6 +79,12 @@ export type PositionDetail = {
    * último conocido. La UI lo marca: un número arrastrado no es un número medido.
    */
   priceIsStale: boolean;
+  /**
+   * `true` cuando el precio viene del overlay en vivo (data912) y no de un cierre
+   * `yahoo-eod` medido. Un precio en vivo es de hoy, pero no es un cierre — distinto
+   * de `priceIsStale`, que marca un arrastre del pasado.
+   */
+  priceIsLive: boolean;
 };
 
 /**

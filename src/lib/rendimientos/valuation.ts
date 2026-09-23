@@ -39,6 +39,11 @@ export type ReplayInputs = {
   eventsByInstrument: Map<string, CorporateEventForBuilder[]>;
   /** Renta en ARS por fecha, ascendente. Ver `accumulateInArs`. */
   incomeArsByDate: DatedAmount[];
+  /**
+   * Instrumentos cuyo precio de hoy vino del overlay en vivo (`live-overlay.ts`), no de
+   * un cierre `yahoo-eod` medido. Opcional: sin overlay, ningún precio es "en vivo".
+   */
+  liveInstrumentIds?: Set<string>;
 };
 
 export type PortfolioValuation = {
@@ -80,7 +85,7 @@ export function valuatePortfolioAt(
   valuationDate: Date,
   windowStart: Date
 ): PortfolioValuation {
-  const { trades, prices, ccl, eventsByInstrument, incomeArsByDate } = inputs;
+  const { trades, prices, ccl, eventsByInstrument, incomeArsByDate, liveInstrumentIds } = inputs;
   const cutoff = valuationDate.getTime();
 
   // Comparación por DÍA, no por instante: `tradeDate` se guarda con hora (mediodía
@@ -93,6 +98,7 @@ export function valuatePortfolioAt(
 
   const priceMap = new Map<string, string>();
   const staleTickers: string[] = [];
+  const livePricedIds = new Set<string>();
   let anyPriced = false;
 
   for (const trade of tradesToDate) {
@@ -108,6 +114,14 @@ export function valuatePortfolioAt(
     anyPriced = true;
     // Arrastre: el precio no es del período, es el último conocido de antes.
     if (hit.date.getTime() < windowStart.getTime()) staleTickers.push(trade.ticker);
+    // El overlay agrega el punto en vivo como el último de la serie: solo es "en vivo"
+    // la valuación que cae en ese punto, no un cierre medido anterior del mismo ticker.
+    if (
+      liveInstrumentIds?.has(trade.instrumentId) &&
+      hit.date.getTime() === prices.latestDateOf(trade.instrumentId)?.getTime()
+    ) {
+      livePricedIds.add(trade.instrumentId);
+    }
   }
 
   const cclHit = ccl.asOf(valuationDate);
@@ -168,6 +182,7 @@ export function valuatePortfolioAt(
           ? null
           : unrealizedReturn(valueUsdNumber, holdingCostUsd),
       priceIsStale: staleTickers.includes(holding.ticker),
+      priceIsLive: livePricedIds.has(holding.instrumentId),
     };
   });
 

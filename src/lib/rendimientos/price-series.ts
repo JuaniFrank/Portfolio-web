@@ -58,6 +58,17 @@ export class TimeSeries {
   }
 
   /**
+   * Copia defensiva de todos los puntos, ordenados ascendente.
+   *
+   * La necesita el overlay en vivo (`live-overlay.ts`) cuando la serie de CCL llega ya
+   * armada como `TimeSeries` (compartida entre `/rendimientos` y el dashboard) en vez de
+   * como filas crudas: sin esto no habría forma de saber si ya existe un punto de hoy.
+   */
+  all(): SeriesPoint[] {
+    return [...this.points];
+  }
+
+  /**
    * Último punto con fecha ≤ `target`. `null` si la serie arranca después
    * (no inventamos hacia atrás: extrapolar un precio al pasado es fabricar dato).
    */
@@ -117,6 +128,11 @@ export class PriceIndex {
       if (last && (!latest || last.date.getTime() > latest.getTime())) latest = last.date;
     }
     return latest;
+  }
+
+  /** Fecha del último punto de un instrumento. `null` si no tiene serie. */
+  latestDateOf(instrumentId: string): Date | null {
+    return this.byInstrument.get(instrumentId)?.last?.date ?? null;
   }
 
   has(instrumentId: string): boolean {
