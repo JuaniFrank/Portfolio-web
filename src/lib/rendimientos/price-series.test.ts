@@ -41,6 +41,34 @@ describe("TimeSeries.asOf", () => {
   });
 });
 
+describe("TimeSeries.before", () => {
+  const series = new TimeSeries([
+    { date: utc("2026-01-02"), value: 100 },
+    { date: utc("2026-01-05"), value: 110 },
+    { date: utc("2026-01-09"), value: 120 },
+  ]);
+
+  it("devuelve el último punto estrictamente anterior a la fecha", () => {
+    const hit = series.before(utc("2026-01-09"));
+    expect(hit?.value).toBe(110);
+    expect(hit?.date.toISOString()).toBe(utc("2026-01-05").toISOString());
+  });
+
+  it("arrastra al último conocido cuando la fecha cae entre dos puntos", () => {
+    const hit = series.before(utc("2026-01-07"));
+    expect(hit?.value).toBe(110);
+  });
+
+  it("devuelve null cuando no hay ningún punto anterior", () => {
+    expect(series.before(utc("2026-01-02"))).toBeNull();
+    expect(series.before(utc("2025-12-31"))).toBeNull();
+  });
+
+  it("devuelve null en una serie vacía", () => {
+    expect(new TimeSeries([]).before(utc("2026-01-01"))).toBeNull();
+  });
+});
+
 describe("TimeSeries constructor", () => {
   it("ordena puntos desordenados", () => {
     const series = new TimeSeries([
@@ -101,5 +129,14 @@ describe("PriceIndex", () => {
 
   it("latestDate es null cuando no hay precios", () => {
     expect(new PriceIndex([]).latestDate()).toBeNull();
+  });
+
+  it("previousClose delega en la serie del instrumento", () => {
+    expect(index.previousClose("aapl", utc("2026-01-09"))?.value).toBe(24000);
+    expect(index.previousClose("aapl", utc("2026-01-02"))).toBeNull();
+  });
+
+  it("previousClose es null para un instrumento sin serie", () => {
+    expect(index.previousClose("desconocido", utc("2026-01-09"))).toBeNull();
   });
 });

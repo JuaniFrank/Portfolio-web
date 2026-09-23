@@ -94,6 +94,34 @@ export class TimeSeries {
     const point = this.points[found]!;
     return { value: point.value, date: point.date };
   }
+
+  /**
+   * Último punto con fecha **estrictamente anterior** a `target`. Es el "cierre de
+   * ayer" que necesita la variación diaria: a diferencia de `asOf`, un punto con la
+   * misma fecha que `target` no cuenta como "anterior".
+   */
+  before(target: Date): SeriesHit | null {
+    const targetTime = target.getTime();
+    if (Number.isNaN(targetTime) || this.times.length === 0) return null;
+
+    let low = 0;
+    let high = this.times.length - 1;
+    let found = -1;
+
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (this.times[mid]! < targetTime) {
+        found = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    if (found === -1) return null;
+    const point = this.points[found]!;
+    return { value: point.value, date: point.date };
+  }
 }
 
 /** Serie de precios de varios instrumentos, indexada por `instrumentId`. */
@@ -118,6 +146,11 @@ export class PriceIndex {
 
   asOf(instrumentId: string, target: Date): SeriesHit | null {
     return this.byInstrument.get(instrumentId)?.asOf(target) ?? null;
+  }
+
+  /** Cierre estrictamente anterior a `target` para un instrumento. Ver `TimeSeries.before`. */
+  previousClose(instrumentId: string, target: Date): SeriesHit | null {
+    return this.byInstrument.get(instrumentId)?.before(target) ?? null;
   }
 
   /** Fecha del último precio de toda la serie — sirve para reportar frescura del backfill. */
