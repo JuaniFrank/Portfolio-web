@@ -301,6 +301,7 @@ describe("positionFigures", () => {
       unrealizedPnlUsd: 0,
       unrealizedReturnPctUsd: 0,
       priceIsStale: false,
+      priceIsLive: false,
       monthGainArs: 500,
       monthReturnPct: 50,
       monthGainUsd: 0,

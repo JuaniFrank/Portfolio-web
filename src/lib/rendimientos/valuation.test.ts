@@ -332,6 +332,7 @@ describe("attributeMonthlyPositionGains", () => {
       unrealizedPnlUsd: null,
       unrealizedReturnPctUsd: null,
       priceIsStale: false,
+      priceIsLive: false,
       ...overrides,
     };
   }
@@ -414,5 +415,42 @@ describe("attributeMonthlyPositionGains", () => {
     const result = attributeMonthlyPositionGains([], start, new Map());
 
     expect(result).toEqual([]);
+  });
+});
+
+describe("valuatePortfolioAt — precio en vivo", () => {
+  // El overlay agrega el punto en vivo como el último de la serie del instrumento.
+  const livePrices = new PriceIndex([
+    { instrumentId: AAPL, date: utc("2026-01-31"), close: 100 },
+    { instrumentId: AAPL, date: utc("2026-02-15"), close: 120 },
+  ]);
+
+  it("marca en vivo la posición valuada con el punto en vivo", () => {
+    const result = valuatePortfolioAt(
+      inputs({
+        trades: [buy(AAPL, "AAPL", "2026-01-05", 10, 100)],
+        prices: livePrices,
+        liveInstrumentIds: new Set([AAPL]),
+      }),
+      utc("2026-02-15"),
+      utc("2026-02-01")
+    );
+
+    expect(result.positions[0]!.priceIsLive).toBe(true);
+  });
+
+  it("no marca en vivo una valuación pasada del mismo instrumento", () => {
+    // El instrumento tiene punto en vivo hoy, pero el cierre de enero es un cierre medido.
+    const result = valuatePortfolioAt(
+      inputs({
+        trades: [buy(AAPL, "AAPL", "2026-01-05", 10, 100)],
+        prices: livePrices,
+        liveInstrumentIds: new Set([AAPL]),
+      }),
+      utc("2026-01-31"),
+      utc("2026-01-01")
+    );
+
+    expect(result.positions[0]!.priceIsLive).toBe(false);
   });
 });
