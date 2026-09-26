@@ -2,9 +2,15 @@
 
 import { useMemo, useState } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { REST_SLICE_KEY, groupAllocationSlices } from "@/lib/dashboard/allocation-grouping";
 import type { AllocationSlice, AllocationSliceDetail } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
 import { CHART_COLORS, formatMoney, formatPercent, type ViewCurrency } from "./format";
+
+const REST_COLOR = "#52525b";
+
+/** Max rows in the "Otros" tooltip; the rest collapse into a "+N más" line. */
+const REST_TOOLTIP_LIMIT = 10;
 
 type Props = {
   data: AllocationSlice[];
@@ -24,47 +30,15 @@ export function AllocationDonut({
   centerSubtitle,
   topN,
 }: Props) {
-  const slices = useMemo(() => {
-    const toSlice = (d: AllocationSlice, i: number): SliceWithColor => ({
-      ...d,
-      value: Number(currency === "ARS" ? d.valueArs : d.valueUsd),
-      color: pickColor(d, i, colorMap),
-    });
-
-    if (!topN || data.length <= topN) {
-      return data.map(toSlice);
-    }
-    const protectedSlices = data.filter((d) => d.details?.length);
-    const regular = data.filter((d) => !d.details?.length);
-    const regularBudget = Math.max(topN - protectedSlices.length, 0);
-    const top = regular.slice(0, regularBudget);
-    const restItems = regular.slice(regularBudget);
-    let restValueArs = 0;
-    let restValueUsd = 0;
-    let restPercent = 0;
-    for (const r of restItems) {
-      restValueArs += Number(r.valueArs);
-      restValueUsd += Number(r.valueUsd);
-      restPercent += Number(r.percent);
-    }
-    return [
-      ...protectedSlices.map((d, i) => toSlice(d, i)),
-      ...top.map((d, i) => toSlice(d, i + protectedSlices.length)),
-      ...(restItems.length > 0
-        ? [
-            {
-              key: "__rest__",
-              label: "Otros",
-              valueArs: restValueArs.toFixed(2),
-              valueUsd: restValueUsd.toFixed(2),
-              percent: restPercent.toFixed(2),
-              value: Number(currency === "ARS" ? restValueArs : restValueUsd),
-              color: "#52525b",
-            },
-          ]
-        : []),
-    ];
-  }, [data, topN, colorMap, currency]);
+  const slices = useMemo(
+    () =>
+      groupAllocationSlices(data, topN).map<SliceWithColor>((d, i) => ({
+        ...d,
+        value: Number(currency === "ARS" ? d.valueArs : d.valueUsd),
+        color: d.key === REST_SLICE_KEY ? REST_COLOR : pickColor(d, i, colorMap),
+      })),
+    [data, topN, colorMap, currency]
+  );
 
   const totalValue = useMemo(
     () => slices.reduce((acc, s) => acc + s.value, 0),
@@ -169,6 +143,26 @@ function DonutTooltipContent({
     padding: "8px 10px",
   } as const;
 
+  if (slice.key === REST_SLICE_KEY && slice.details?.length) {
+    const shown = slice.details.slice(0, REST_TOOLTIP_LIMIT);
+    const hidden = slice.details.length - shown.length;
+    return (
+      <div style={boxStyle} className="space-y-1.5">
+        <p className="font-medium text-zinc-100">
+          {slice.label} · {formatPercent(slice.percent)}
+        </p>
+        <ul className="space-y-1">
+          {shown.map((d) => (
+            <li key={d.key} className="tabular-nums text-zinc-300">
+              <DetailLine detail={d} currency={currency} />
+            </li>
+          ))}
+        </ul>
+        {hidden > 0 ? <p className="text-zinc-500">+{hidden} más</p> : null}
+      </div>
+    );
+  }
+
   if (slice.details?.length) {
     return (
       <div style={boxStyle} className="space-y-1.5">
@@ -194,11 +188,18 @@ function DonutTooltipContent({
   );
 }
 
-function DetailLine({ detail }: { detail: AllocationSliceDetail }) {
+function DetailLine({
+  detail,
+  currency = "USD",
+}: {
+  detail: AllocationSliceDetail;
+  currency?: ViewCurrency;
+}) {
+  const value = currency === "ARS" ? detail.valueArs : detail.valueUsd;
   return (
     <>
       {detail.label} · {formatPercent(detail.percent)} ·{" "}
-      {formatMoney(Number(detail.valueUsd), "USD")}
+      {formatMoney(Number(value), currency)}
     </>
   );
 }
