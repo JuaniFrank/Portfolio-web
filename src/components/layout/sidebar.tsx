@@ -16,6 +16,7 @@ import {
   TrendingUp,
   Wallet,
 } from "lucide-react";
+import { PaletteToggle } from "@/components/layout/palette-toggle";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { cn } from "@/lib/utils";
 
@@ -69,7 +70,8 @@ export function Sidebar() {
           );
         })}
       </nav>
-      <div className="border-t border-zinc-200 px-2 py-3 dark:border-zinc-800">
+      <div className="space-y-1 border-t border-zinc-200 px-2 py-3 dark:border-zinc-800">
+        <PaletteToggle />
         <ThemeToggle />
       </div>
     </aside>
