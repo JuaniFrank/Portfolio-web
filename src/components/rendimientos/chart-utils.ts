@@ -55,6 +55,12 @@ export const SERIES_COLORS = {
   drawdown: "#f43f5e",
 } as const;
 
-/** Estilo del contenedor de tooltip de recharts, idéntico en todos los charts. */
+/**
+ * Estilo del contenedor de tooltip de recharts, idéntico en todos los charts.
+ * `zinc-800`/`zinc-950` en vez de los hex literales (`#27272a`/`#09090b`, que son
+ * exactamente esos colores por default — verificado: oklch(27.4% 0.006 286.033) y
+ * oklch(14.1% 0.005 285.823)): así el tooltip sigue la paleta activa sin cambiar
+ * el look Default.
+ */
 export const TOOLTIP_CLASS =
-  "rounded-lg border border-[#27272a] bg-[#09090b] p-3 text-xs shadow-xl";
+  "rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs shadow-xl";
