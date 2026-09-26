@@ -12,6 +12,42 @@
   --positive: oklch(0.55 0.17 145);
   --negative: oklch(0.55 0.22 25);
   --accent: oklch(0.52 0.19 255);
+
+  /* Densidad de tablas — defaults = look de hoy exactamente (`p-2` = 0.5rem,
+     `h-10` = 2.5rem, `text-sm` = 0.875rem con su line-height emparejado, ver
+     `--text-sm--line-height` en tailwindcss/theme.css). La paleta Finanzas los
+     redefine para tablas más cómodas sin tocar el Default. */
+  --table-cell-px: 0.5rem;
+  --table-cell-py: 0.5rem;
+  --table-head-h: 2.5rem;
+  --table-font-size: 0.875rem;
+  --table-line-height: calc(1.25 / 0.875);
+
+  /* Mismo criterio para las tablas "crudas" (no `ui/table.tsx`) — cada una
+     conserva su propio default de hoy; ver los componentes que las consumen. */
+  --positions-table-cell-px: 0.75rem;
+  --positions-table-cell-py: 0.5rem;
+  --positions-table-font-size: 0.875rem;
+  --positions-table-line-height: calc(1.25 / 0.875);
+  --positions-table-head-font-size: 0.6875rem;
+
+  --monthly-table-cell-px: 0.75rem;
+  --monthly-table-cell-py: 0.5rem;
+  --monthly-table-font-size: 0.875rem;
+  --monthly-table-line-height: calc(1.25 / 0.875);
+  --monthly-table-head-font-size: 0.6875rem;
+  --monthly-detail-font-size: 0.75rem;
+  --monthly-detail-line-height: calc(1 / 0.75);
+  --monthly-detail-head-font-size: 0.625rem;
+
+  --events-table-cell-px: 1rem;
+  --events-table-cell-py: 0.75rem;
+  --events-table-font-size: 0.875rem;
+  --events-table-line-height: calc(1.25 / 0.875);
+
+  --bonds-table-cell-px: 0.5rem;
+  --bonds-table-cell-py: 0.25rem;
+  --bonds-table-font-size: 0.6875rem;
 }
 .dark {
   color-scheme: dark;
@@ -24,6 +60,97 @@
   --positive: oklch(0.72 0.17 145);
   --negative: oklch(0.63 0.22 25);
   --accent: oklch(0.62 0.19 255);
+}
+
+/*
+ * Paleta Finanzas — activada con `data-palette="finanzas"` en `<html>` (ver
+ * `src/lib/theme/palettes.ts` y `palette-provider.tsx`). Nunca toca el look
+ * Default: sin el atributo, cero cambios.
+ *
+ * Redefine la escala `--color-zinc-*` (que Tailwind expone como variables reales
+ * en `:root` — ver `node_modules/tailwindcss/theme.css`, bloque `@theme default`,
+ * NO `inline`) para reskinear casi toda la app sin tocar los ~83 componentes que
+ * usan utilidades `zinc-*`. Menos negro puro (950 = navy profundo, no casi-negro),
+ * más separación entre fondo de página (950) y card (900), bordes (800/700) bien
+ * visibles, y texto secundario (500/400) más brillante — contraste verificado en
+ * `src/lib/theme/finanzas-contrast.test.ts` contra los dos fondos (950 y 900).
+ */
+html[data-palette="finanzas"] {
+  --color-zinc-50: oklch(0.97 0.004 255);
+  --color-zinc-100: oklch(0.95 0.008 255);
+  --color-zinc-200: oklch(0.91 0.012 255);
+  --color-zinc-300: oklch(0.86 0.015 255);
+  --color-zinc-400: oklch(0.81 0.02 255);
+  --color-zinc-500: oklch(0.74 0.025 255);
+  --color-zinc-600: oklch(0.64 0.03 255);
+  --color-zinc-700: oklch(0.47 0.045 255);
+  --color-zinc-800: oklch(0.4 0.045 255);
+  --color-zinc-900: oklch(0.31 0.04 255);
+  --color-zinc-950: oklch(0.22 0.035 255);
+
+  /* Densidad más cómoda (tablas + texto base) — ver T3 en odd/tasks/ui-palettes.md.
+     Independiente de light/dark: aplica siempre que la paleta esté activa. */
+  --table-cell-px: 0.875rem;
+  --table-cell-py: 0.75rem;
+  --table-head-h: 3rem;
+  --table-font-size: 0.9375rem;
+  --table-line-height: 1.5;
+
+  --positions-table-cell-px: 0.875rem;
+  --positions-table-cell-py: 0.75rem;
+  --positions-table-font-size: 0.9375rem;
+  --positions-table-line-height: 1.5;
+  --positions-table-head-font-size: 0.75rem;
+
+  --monthly-table-cell-px: 0.875rem;
+  --monthly-table-cell-py: 0.75rem;
+  --monthly-table-font-size: 0.9375rem;
+  --monthly-table-line-height: 1.5;
+  --monthly-table-head-font-size: 0.75rem;
+  --monthly-detail-font-size: 0.8125rem;
+  --monthly-detail-line-height: 1.5;
+  --monthly-detail-head-font-size: 0.6875rem;
+
+  --events-table-cell-px: 1.125rem;
+  --events-table-cell-py: 0.875rem;
+  --events-table-font-size: 0.9375rem;
+  --events-table-line-height: 1.5;
+
+  --bonds-table-cell-px: 0.75rem;
+  --bonds-table-cell-py: 0.5rem;
+  --bonds-table-font-size: 0.75rem;
+
+  /* rem-based spacing/text escala junto con esto (106.25% ≈ 17px). Los charts
+     usan alturas fijas en px (no rem), así que no se ven afectados. */
+  font-size: 106.25%;
+}
+
+/* Tokens semánticos en dark — el target principal (la app es dark-first). */
+html[data-palette="finanzas"].dark {
+  --background: oklch(0.22 0.035 255);
+  --foreground: oklch(0.97 0.004 255);
+  --muted: oklch(0.74 0.025 255);
+  --border: oklch(0.4 0.045 255);
+  --card: oklch(0.31 0.04 255);
+  --positive: oklch(0.72 0.17 145);
+  /* Un poco más clara que el --negative de dark por defecto (oklch 0.63) para
+     llegar a AA (4.5:1) contra el nuevo fondo navy: en default no hace falta
+     porque el fondo original es más oscuro (oklch 0.14). */
+  --negative: oklch(0.66 0.22 25);
+  --accent: oklch(0.62 0.19 255);
+}
+
+/* Variante clara: razonable aunque no sea el foco (el toggle de tema sigue
+   siendo independiente de la paleta). */
+html[data-palette="finanzas"]:not(.dark) {
+  --background: oklch(0.97 0.005 255);
+  --foreground: oklch(0.22 0.02 255);
+  --muted: oklch(0.48 0.02 255);
+  --border: oklch(0.82 0.015 255);
+  --card: oklch(0.99 0.003 255);
+  --positive: oklch(0.55 0.17 145);
+  --negative: oklch(0.55 0.22 25);
+  --accent: oklch(0.52 0.19 255);
 }
 
 @theme inline {
