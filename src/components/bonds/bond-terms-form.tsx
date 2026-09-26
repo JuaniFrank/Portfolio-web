@@ -284,20 +284,20 @@ export function BondTermsForm({
           {proposal && proposal.cashflowSchedule.length > 0 && (
             <div className="rounded border border-teal-900/40 bg-black/20">
               <div className="max-h-56 overflow-y-auto">
-                <table className="w-full text-left text-[11px]">
+                <table className="w-full text-left text-(length:--bonds-table-font-size)">
                   <thead className="sticky top-0 bg-teal-950/80 text-teal-300">
                     <tr>
-                      <th className="px-2 py-1 font-medium">Fecha</th>
-                      <th className="px-2 py-1 font-medium">Interés</th>
-                      <th className="px-2 py-1 font-medium">Amortización</th>
+                      <th className="px-(--bonds-table-cell-px) py-(--bonds-table-cell-py) font-medium">Fecha</th>
+                      <th className="px-(--bonds-table-cell-px) py-(--bonds-table-cell-py) font-medium">Interés</th>
+                      <th className="px-(--bonds-table-cell-px) py-(--bonds-table-cell-py) font-medium">Amortización</th>
                     </tr>
                   </thead>
                   <tbody>
                     {proposal.cashflowSchedule.map((row) => (
                       <tr key={row.date} className="border-t border-teal-900/30">
-                        <td className="px-2 py-1">{row.date}</td>
-                        <td className="px-2 py-1">{row.interestPct}%</td>
-                        <td className="px-2 py-1">
+                        <td className="px-(--bonds-table-cell-px) py-(--bonds-table-cell-py)">{row.date}</td>
+                        <td className="px-(--bonds-table-cell-px) py-(--bonds-table-cell-py)">{row.interestPct}%</td>
+                        <td className="px-(--bonds-table-cell-px) py-(--bonds-table-cell-py)">
                           {row.principalPct > 0 ? `${row.principalPct}%` : "—"}
                         </td>
                       </tr>

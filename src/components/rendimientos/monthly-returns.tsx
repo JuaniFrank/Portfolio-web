@@ -5,6 +5,7 @@ import {
   EMPTY_VALUE,
   formatSignedPercentValue,
 } from "@/components/rendimientos/chart-utils";
+import { cn } from "@/lib/utils";
 import type { ViewCurrency } from "@/lib/rendimientos/types";
 import type { MonthlyChartRow } from "@/lib/rendimientos/view";
 
@@ -76,11 +77,14 @@ export function MonthlyReturns({
 function ReturnCell({ value }: { value: number | null | undefined }) {
   const hasValue = typeof value === "number";
   const intensity = hasValue ? Math.min(Math.abs(value) / SATURATION_AT, 1) : 0;
-  const backgroundColor = !hasValue
-    ? "#18181b"
-    : value >= 0
+  // Sin dato: clase Tailwind (sigue la paleta activa sola). Con dato: intensidad
+  // variable por rendimiento, no hay una utilidad Tailwind para eso — se queda en
+  // rgba() literal (emerald/rose ya pasan contraste contra los nuevos fondos).
+  const backgroundColor = hasValue
+    ? value >= 0
       ? `rgba(16, 185, 129, ${0.12 + intensity * 0.55})`
-      : `rgba(244, 63, 94, ${0.12 + intensity * 0.55})`;
+      : `rgba(244, 63, 94, ${0.12 + intensity * 0.55})`
+    : undefined;
 
   const title = hasValue
     ? formatSignedPercentValue(value)
@@ -91,8 +95,11 @@ function ReturnCell({ value }: { value: number | null | undefined }) {
   return (
     <span
       title={title}
-      className="flex min-h-9 items-center justify-center rounded-md border border-zinc-800/70 px-1 tabular-nums text-[11px] text-zinc-200"
-      style={{ backgroundColor }}
+      className={cn(
+        "flex min-h-9 items-center justify-center rounded-md border border-zinc-800/70 px-1 tabular-nums text-[11px] text-zinc-200",
+        !hasValue && "bg-zinc-900"
+      )}
+      style={backgroundColor ? { backgroundColor } : undefined}
     >
       {hasValue ? formatSignedPercentValue(value) : EMPTY_VALUE}
     </span>
