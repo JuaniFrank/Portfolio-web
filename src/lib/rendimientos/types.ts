@@ -86,6 +86,13 @@ export type PositionDetail = {
    * de `priceIsStale`, que marca un arrastre del pasado.
    */
   priceIsLive: boolean;
+  /**
+   * `true` cuando el precio no es un cierre (real ni en vivo) sino el valor técnico
+   * estimado del dashboard para ONs sin cotización ese día (residual × CCL, ver
+   * `@/lib/dashboard/bond-price-series`). Opcional: solo lo puebla el replay del
+   * dashboard — `/rendimientos` nunca valúa ONs, así que ahí siempre queda `undefined`.
+   */
+  priceEstimated?: boolean;
 };
 
 /**

@@ -44,6 +44,13 @@ export type ReplayInputs = {
    * un cierre `yahoo-eod` medido. Opcional: sin overlay, ningún precio es "en vivo".
    */
   liveInstrumentIds?: Set<string>;
+  /**
+   * Días (día UTC en ms) marcados como valor técnico estimado por instrumento —
+   * hoy solo lo puebla el dashboard para ONs sin cotización (ver
+   * `@/lib/dashboard/bond-price-series`). Opcional: `/rendimientos` nunca lo pasa, así
+   * que ningún precio se marca `priceEstimated` ahí.
+   */
+  estimatedPriceDays?: Map<string, Set<number>>;
 };
 
 export type PortfolioValuation = {
@@ -85,7 +92,8 @@ export function valuatePortfolioAt(
   valuationDate: Date,
   windowStart: Date
 ): PortfolioValuation {
-  const { trades, prices, ccl, eventsByInstrument, incomeArsByDate, liveInstrumentIds } = inputs;
+  const { trades, prices, ccl, eventsByInstrument, incomeArsByDate, liveInstrumentIds, estimatedPriceDays } =
+    inputs;
   const cutoff = valuationDate.getTime();
 
   // Comparación por DÍA, no por instante: `tradeDate` se guarda con hora (mediodía
@@ -99,6 +107,7 @@ export function valuatePortfolioAt(
   const priceMap = new Map<string, string>();
   const staleTickers: string[] = [];
   const livePricedIds = new Set<string>();
+  const estimatedPricedIds = new Set<string>();
   let anyPriced = false;
 
   for (const trade of tradesToDate) {
@@ -121,6 +130,13 @@ export function valuatePortfolioAt(
       hit.date.getTime() === prices.latestDateOf(trade.instrumentId)?.getTime()
     ) {
       livePricedIds.add(trade.instrumentId);
+    }
+    // Mismo criterio que `livePricedIds`, pero para el valor técnico estimado del
+    // dashboard: se marca el instrumento solo si el punto efectivamente usado
+    // (`hit.date`, que puede venir arrastrado) es uno de los días que el productor
+    // marcó como estimado.
+    if (estimatedPriceDays?.get(trade.instrumentId)?.has(hit.date.getTime())) {
+      estimatedPricedIds.add(trade.instrumentId);
     }
   }
 
@@ -183,6 +199,7 @@ export function valuatePortfolioAt(
           : unrealizedReturn(valueUsdNumber, holdingCostUsd),
       priceIsStale: staleTickers.includes(holding.ticker),
       priceIsLive: livePricedIds.has(holding.instrumentId),
+      priceEstimated: estimatedPricedIds.has(holding.instrumentId),
     };
   });
 
