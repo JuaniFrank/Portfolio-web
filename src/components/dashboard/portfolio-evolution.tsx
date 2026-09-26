@@ -53,6 +53,7 @@ import { TimeRangeSelector } from "./time-range-selector";
 import { TickerSelector } from "./evolution/ticker-selector";
 import { SummaryStrip } from "./evolution/summary-strip";
 import { cn } from "@/lib/utils";
+import { useChartColors } from "@/components/providers/use-chart-colors";
 import { formatMoney, type ViewCurrency } from "./format";
 
 const HEIGHT = 340;
@@ -322,6 +323,16 @@ function ZoomableAreaChart({
   const contributionsSeriesRef = React.useRef<ISeriesApi<"Line"> | null>(null);
   const markersPluginRef = React.useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
+  // Colores resueltos de la paleta activa: lightweight-charts dibuja en canvas con
+  // valores literales, así que no puede leer `var(--color-…)` directo. El chart se
+  // crea una sola vez (efecto de deps `[]` más abajo) usando el valor de montaje;
+  // el efecto separado más abajo lo mantiene al día si la paleta cambia después.
+  const chartColors = useChartColors();
+  const chartColorsRef = React.useRef(chartColors);
+  React.useEffect(() => {
+    chartColorsRef.current = chartColors;
+  }, [chartColors]);
+
   const [hovered, setHovered] = React.useState<Hovered | null>(null);
   const [isZoomed, setIsZoomed] = React.useState(false);
 
@@ -350,23 +361,23 @@ function ZoomableAreaChart({
       height: HEIGHT,
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "#a1a1aa",
+        textColor: chartColorsRef.current.zinc400,
         fontSize: 11,
         fontFamily: "inherit",
       },
       grid: {
-        vertLines: { color: "#27272a", style: LineStyle.Dotted },
-        horzLines: { color: "#27272a", style: LineStyle.Dotted },
+        vertLines: { color: chartColorsRef.current.zinc800, style: LineStyle.Dotted },
+        horzLines: { color: chartColorsRef.current.zinc800, style: LineStyle.Dotted },
       },
       rightPriceScale: {
-        borderColor: "#27272a",
+        borderColor: chartColorsRef.current.zinc800,
         // Es lo que hace que el eje Y siga al zoom: reescala al tramo visible en vez de
         // quedarse con el mínimo y máximo de toda la serie.
         autoScale: true,
         scaleMargins: { top: 0.12, bottom: 0.08 },
       },
       timeScale: {
-        borderColor: "#27272a",
+        borderColor: chartColorsRef.current.zinc800,
         // Sin esto se puede arrastrar la serie hacia el vacío y perderla de vista.
         fixLeftEdge: true,
         fixRightEdge: true,
@@ -374,8 +385,18 @@ function ZoomableAreaChart({
         minBarSpacing: 0.5,
       },
       crosshair: {
-        vertLine: { color: "#52525b", width: 1, style: LineStyle.Dashed, labelVisible: true },
-        horzLine: { color: "#52525b", width: 1, style: LineStyle.Dashed, labelVisible: true },
+        vertLine: {
+          color: chartColorsRef.current.zinc600,
+          width: 1,
+          style: LineStyle.Dashed,
+          labelVisible: true,
+        },
+        horzLine: {
+          color: chartColorsRef.current.zinc600,
+          width: 1,
+          style: LineStyle.Dashed,
+          labelVisible: true,
+        },
       },
       // Rueda para zoom, arrastre para desplazar, pinch en touch: el gesto de TradingView.
       handleScroll: {
@@ -401,7 +422,7 @@ function ZoomableAreaChart({
       lineWidth: 2,
       crosshairMarkerVisible: true,
       crosshairMarkerRadius: 4,
-      crosshairMarkerBorderColor: "#09090b",
+      crosshairMarkerBorderColor: chartColorsRef.current.zinc950,
       crosshairMarkerBackgroundColor: SERIES_COLORS.portfolio,
       priceLineVisible: false,
       lastValueVisible: false,
@@ -461,6 +482,30 @@ function ZoomableAreaChart({
       markersPluginRef.current = null;
     };
   }, []);
+
+  // --- Paleta: reaplica colores sin recrear el chart (mismo motivo que los datos:
+  // no perder zoom/estado). También corre tras el montaje, pero ahí reaplica los mismos
+  // colores con los que ya nació el chart (`chartColorsRef.current`), así que es inocuo. ---
+  React.useEffect(() => {
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series) return;
+
+    chart.applyOptions({
+      layout: { textColor: chartColors.zinc400 },
+      grid: {
+        vertLines: { color: chartColors.zinc800 },
+        horzLines: { color: chartColors.zinc800 },
+      },
+      rightPriceScale: { borderColor: chartColors.zinc800 },
+      timeScale: { borderColor: chartColors.zinc800 },
+      crosshair: {
+        vertLine: { color: chartColors.zinc600 },
+        horzLine: { color: chartColors.zinc600 },
+      },
+    });
+    series.applyOptions({ crosshairMarkerBorderColor: chartColors.zinc950 });
+  }, [chartColors]);
 
   // --- Datos: se reemplazan sin recrear el chart, para no perder el zoom ---
   const previousResetKey = React.useRef(resetKey);

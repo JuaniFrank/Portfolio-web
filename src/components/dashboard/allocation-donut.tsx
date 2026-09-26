@@ -5,6 +5,7 @@ import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { REST_SLICE_KEY, groupAllocationSlices } from "@/lib/dashboard/allocation-grouping";
 import type { AllocationSlice, AllocationSliceDetail } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
+import { useChartColors } from "@/components/providers/use-chart-colors";
 import { CHART_COLORS, formatMoney, formatPercent, type ViewCurrency } from "./format";
 
 const REST_COLOR = "#52525b";
@@ -51,6 +52,7 @@ export function AllocationDonut({
     [slices]
   );
 
+  const chartColors = useChartColors();
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [tooltip, setTooltip] = useState<TooltipAnchor | null>(null);
   const chartRef = useRef<HTMLDivElement>(null);
@@ -122,7 +124,7 @@ export function AllocationDonut({
               outerRadius={110}
               innerRadius={68}
               paddingAngle={1.5}
-              stroke="#09090b"
+              stroke={chartColors.zinc950}
               strokeWidth={2}
               onMouseEnter={(_, idx, event) => showTooltip(idx, event)}
               onMouseLeave={() => {
@@ -195,17 +197,13 @@ function DonutTooltipContent({
   slice: SliceWithColor;
   currency: ViewCurrency;
 }) {
-  const boxStyle = {
-    background: "#09090b",
-    border: "1px solid #27272a",
-    borderRadius: 8,
-    fontSize: 12,
-    padding: "8px 10px",
-  } as const;
+  // Div propio (no el tooltip de recharts): clases Tailwind en vez de estilo
+  // inline, así sigue la paleta activa solo con CSS.
+  const boxClassName = "rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-2 text-xs";
 
   if (slice.key === REST_SLICE_KEY && slice.details?.length) {
     return (
-      <div style={boxStyle} className="space-y-1.5">
+      <div className={cn(boxClassName, "space-y-1.5")}>
         <p className="font-medium text-zinc-100">
           {slice.label} · {formatPercent(slice.percent)}
         </p>
@@ -222,7 +220,7 @@ function DonutTooltipContent({
 
   if (slice.details?.length) {
     return (
-      <div style={boxStyle} className="space-y-1.5">
+      <div className={cn(boxClassName, "space-y-1.5")}>
         <p className="font-medium text-zinc-100">{slice.label}</p>
         <ul className={DETAIL_LIST_CLASS}>
           {slice.details.map((d) => (
@@ -236,7 +234,7 @@ function DonutTooltipContent({
   }
 
   return (
-    <div style={boxStyle}>
+    <div className={boxClassName}>
       <p className="font-medium text-zinc-100">{slice.label}</p>
       <p className="mt-0.5 tabular-nums text-zinc-300">
         {formatMoney(slice.value, currency)} · {formatPercent(slice.percent)}
