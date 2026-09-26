@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { auth } from "@/lib/auth";
 import { AppProviders } from "@/components/providers/app-providers";
+import { noFlashScript } from "@/lib/theme/palettes";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -35,6 +36,9 @@ export default async function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} min-h-dvh bg-background font-sans text-foreground antialiased`}
       >
+        {/* Setea `data-palette` antes del primer paint (mismo patrón que next-themes
+            para el modo claro/oscuro): evita el flash del look Default al hidratar. */}
+        <script suppressHydrationWarning dangerouslySetInnerHTML={{ __html: noFlashScript() }} />
         <AppProviders session={session}>{children}</AppProviders>
       </body>
     </html>
