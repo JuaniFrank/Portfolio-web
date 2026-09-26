@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { REST_SLICE_KEY, groupAllocationSlices } from "@/lib/dashboard/allocation-grouping";
 import type { AllocationSlice, AllocationSliceDetail } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
@@ -9,8 +9,14 @@ import { CHART_COLORS, formatMoney, formatPercent, type ViewCurrency } from "./f
 
 const REST_COLOR = "#52525b";
 
-/** Max rows in the "Otros" tooltip; the rest collapse into a "+N más" line. */
-const REST_TOOLTIP_LIMIT = 10;
+/**
+ * Grace period before hiding the tooltip once the pointer leaves a slice. Long enough to
+ * cross the gap into the tooltip, so its list can be scrolled.
+ */
+const TOOLTIP_HIDE_DELAY_MS = 250;
+const TOOLTIP_OFFSET = 12;
+
+type TooltipAnchor = { index: number; x: number; y: number; flip: boolean };
 
 type Props = {
   data: AllocationSlice[];
@@ -46,6 +52,48 @@ export function AllocationDonut({
   );
 
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [tooltip, setTooltip] = useState<TooltipAnchor | null>(null);
+  const chartRef = useRef<HTMLDivElement>(null);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The tooltip follows the pointer only while it is over a slice. Once it leaves, the
+  // tooltip stays put so the pointer can reach it instead of chasing it.
+  const overSlice = useRef(false);
+
+  const cancelHide = () => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = null;
+  };
+
+  const scheduleHide = () => {
+    cancelHide();
+    hideTimer.current = setTimeout(() => {
+      setTooltip(null);
+      setActiveIndex(null);
+    }, TOOLTIP_HIDE_DELAY_MS);
+  };
+
+  useEffect(() => cancelHide, []);
+
+  const anchorAt = (index: number, clientX: number, clientY: number): TooltipAnchor | null => {
+    const rect = chartRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    const x = clientX - rect.left;
+    return { index, x, y: clientY - rect.top, flip: x > rect.width / 2 };
+  };
+
+  const showTooltip = (index: number, event: React.MouseEvent) => {
+    overSlice.current = true;
+    cancelHide();
+    setActiveIndex(index);
+    setTooltip(anchorAt(index, event.clientX, event.clientY));
+  };
+
+  const followPointer = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!overSlice.current || !tooltip) return;
+    setTooltip(anchorAt(tooltip.index, event.clientX, event.clientY));
+  };
+
+  const hoveredSlice = tooltip ? slices[tooltip.index] : undefined;
 
   if (slices.length === 0) {
     return (
@@ -62,10 +110,9 @@ export function AllocationDonut({
         labelPosition === "side" ? "lg:grid-cols-[1fr_220px]" : "lg:grid-cols-1"
       )}
     >
-      <div className="relative h-72">
+      <div ref={chartRef} className="relative h-72" onMouseMove={followPointer}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
-            <Tooltip content={(props) => <DonutTooltipContent {...props} currency={currency} />} />
             <Pie
               data={slices}
               dataKey="value"
@@ -77,8 +124,11 @@ export function AllocationDonut({
               paddingAngle={1.5}
               stroke="#09090b"
               strokeWidth={2}
-              onMouseEnter={(_, idx) => setActiveIndex(idx)}
-              onMouseLeave={() => setActiveIndex(null)}
+              onMouseEnter={(_, idx, event) => showTooltip(idx, event)}
+              onMouseLeave={() => {
+                overSlice.current = false;
+                scheduleHide();
+              }}
             >
               {slices.map((s, i) => (
                 <Cell
@@ -101,6 +151,20 @@ export function AllocationDonut({
             <p className="mt-0.5 text-[10px] text-zinc-500">{centerSubtitle}</p>
           ) : null}
         </div>
+        {tooltip && hoveredSlice ? (
+          <div
+            className="absolute z-20"
+            style={{
+              left: tooltip.flip ? tooltip.x - TOOLTIP_OFFSET : tooltip.x + TOOLTIP_OFFSET,
+              top: tooltip.y + TOOLTIP_OFFSET,
+              transform: tooltip.flip ? "translateX(-100%)" : undefined,
+            }}
+            onMouseEnter={cancelHide}
+            onMouseLeave={scheduleHide}
+          >
+            <DonutTooltipContent slice={hoveredSlice} currency={currency} />
+          </div>
+        ) : null}
       </div>
 
       <Legend
@@ -121,20 +185,16 @@ function pickColor(slice: AllocationSlice, i: number, map?: Record<string, strin
 
 type SliceWithColor = AllocationSlice & { value: number; color: string };
 
+/** Scrollable detail list; `overscroll-contain` keeps the wheel from scrolling the page. */
+const DETAIL_LIST_CLASS = "max-h-48 space-y-1 overflow-y-auto overscroll-contain pr-1";
+
 function DonutTooltipContent({
-  active,
-  payload,
+  slice,
   currency,
 }: {
-  active?: boolean;
-  payload?: ReadonlyArray<{ payload?: SliceWithColor }>;
+  slice: SliceWithColor;
   currency: ViewCurrency;
 }) {
-  if (!active || !payload?.length) return null;
-
-  const slice = payload[0]?.payload;
-  if (!slice) return null;
-
   const boxStyle = {
     background: "#09090b",
     border: "1px solid #27272a",
@@ -144,21 +204,18 @@ function DonutTooltipContent({
   } as const;
 
   if (slice.key === REST_SLICE_KEY && slice.details?.length) {
-    const shown = slice.details.slice(0, REST_TOOLTIP_LIMIT);
-    const hidden = slice.details.length - shown.length;
     return (
       <div style={boxStyle} className="space-y-1.5">
         <p className="font-medium text-zinc-100">
           {slice.label} · {formatPercent(slice.percent)}
         </p>
-        <ul className="space-y-1">
-          {shown.map((d) => (
-            <li key={d.key} className="tabular-nums text-zinc-300">
+        <ul className={DETAIL_LIST_CLASS}>
+          {slice.details.map((d) => (
+            <li key={d.key} className="whitespace-nowrap tabular-nums text-zinc-300">
               <DetailLine detail={d} currency={currency} />
             </li>
           ))}
         </ul>
-        {hidden > 0 ? <p className="text-zinc-500">+{hidden} más</p> : null}
       </div>
     );
   }
@@ -167,9 +224,9 @@ function DonutTooltipContent({
     return (
       <div style={boxStyle} className="space-y-1.5">
         <p className="font-medium text-zinc-100">{slice.label}</p>
-        <ul className="space-y-1">
+        <ul className={DETAIL_LIST_CLASS}>
           {slice.details.map((d) => (
-            <li key={d.key} className="tabular-nums text-zinc-300">
+            <li key={d.key} className="whitespace-nowrap tabular-nums text-zinc-300">
               <DetailLine detail={d} />
             </li>
           ))}
