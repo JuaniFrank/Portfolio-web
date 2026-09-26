@@ -502,7 +502,7 @@ export function PositionsTable({
         >
           <div className="overflow-x-auto rounded-lg border border-zinc-800">
             <table
-              className="border-collapse text-sm"
+              className="border-collapse text-(length:--positions-table-font-size) leading-(--positions-table-line-height)"
               style={{ width: table.getTotalSize(), tableLayout: "fixed" }}
             >
               <thead>
@@ -554,7 +554,7 @@ export function PositionsTable({
                             key={cell.id}
                             style={{ width: cell.column.getSize() }}
                             className={cn(
-                              "overflow-hidden px-3 py-2 tabular-nums",
+                              "overflow-hidden px-(--positions-table-cell-px) py-(--positions-table-cell-py) tabular-nums",
                               config?.align === "right" ? "text-right" : "text-left",
                               sticky && "sticky left-0 z-10 bg-zinc-950"
                             )}
@@ -607,7 +607,7 @@ function SortableHeaderCell({
         // Sticky en el propio `<th>`, no en `<thead>`: pegar el `<thead>` entero es
         // menos confiable entre navegadores que pegar cada celda de encabezado.
         "sticky top-0 z-20 bg-zinc-950",
-        "relative select-none whitespace-nowrap px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500",
+        "relative select-none whitespace-nowrap px-(--positions-table-cell-px) py-(--positions-table-cell-py) text-(length:--positions-table-head-font-size) font-medium uppercase tracking-wide text-zinc-500",
         align === "right" ? "text-right" : "text-left",
         sticky && "left-0 z-30",
         isDragging && "z-40"
