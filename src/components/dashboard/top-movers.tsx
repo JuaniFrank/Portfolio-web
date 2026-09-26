@@ -1,10 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import { TrendingDown, TrendingUp } from "lucide-react";
 import { TickerAvatar } from "@/components/transactions/ticker-avatar";
 import type { TopMover } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
 import { formatMoney, formatSignedPercent, type ViewCurrency } from "./format";
+
+/** Rows visible before "Ver todos". */
+const COLLAPSED_COUNT = 5;
 
 type Props = {
   gainers: TopMover[];
@@ -51,6 +55,9 @@ function MoverList({
   emptyText: string;
 }) {
   const accentClass = accent === "emerald" ? "text-emerald-400" : "text-rose-400";
+  const [expanded, setExpanded] = useState(false);
+  const canExpand = rows.length > COLLAPSED_COUNT;
+  const visibleRows = expanded ? rows : rows.slice(0, COLLAPSED_COUNT);
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
@@ -59,13 +66,22 @@ function MoverList({
           {icon}
         </span>
         <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
+        {canExpand ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="ml-auto text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-100"
+          >
+            {expanded ? "Ver menos" : `Ver todos (${rows.length})`}
+          </button>
+        ) : null}
       </div>
 
       {rows.length === 0 ? (
         <p className="py-6 text-center text-xs text-zinc-500">{emptyText}</p>
       ) : (
         <ul className="space-y-2">
-          {rows.map((r) => {
+          {visibleRows.map((r) => {
             const pnlValue = currency === "ARS" ? r.pnlArs : r.pnlUsd;
             const pnlPercent = currency === "ARS" ? r.pnlPercent : r.pnlPercentUsd;
             return (

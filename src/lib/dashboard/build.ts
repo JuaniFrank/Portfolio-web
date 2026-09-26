@@ -316,12 +316,13 @@ export function buildDashboardData(args: {
    * No es el mismo orden reordenado: dos posiciones compradas a distinto CCL pueden
    * cambiar de puesto —y hasta de signo— al pasar a dólares. Rankear por el porcentaje
    * en pesos y mostrar el importe en dólares daría una lista que no es de nadie.
+   *
+   * La lista va completa: la UI muestra los primeros y el resto detrás de "Ver todos".
    */
   const rank = (pick: (m: TopMover) => number, direction: "gainers" | "losers") =>
     [...moversBase]
       .filter((m) => (direction === "gainers" ? pick(m) > 0 : pick(m) < 0))
-      .sort((a, b) => (direction === "gainers" ? pick(b) - pick(a) : pick(a) - pick(b)))
-      .slice(0, 5);
+      .sort((a, b) => (direction === "gainers" ? pick(b) - pick(a) : pick(a) - pick(b)));
 
   const byArs = (m: TopMover) => Number(m.pnlPercent);
   const byUsd = (m: TopMover) => Number(m.pnlPercentUsd);
