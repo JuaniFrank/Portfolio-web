@@ -1,5 +1,7 @@
+import Decimal from "decimal.js";
 import { describe, expect, it } from "vitest";
 import { PriceIndex, TimeSeries } from "@/lib/rendimientos/price-series";
+import type { DatedAmount } from "@/lib/rendimientos/valuation";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
 import {
   buildEvolutionSeries,
@@ -44,6 +46,11 @@ function flow(
   return { instrumentId, time: utc(date).getTime(), amountArs, amountUsd };
 }
 
+/** Renta ya expresada en ARS (como devuelve `accumulateInArs`), fechada al día UTC. */
+function income(date: string, amountArs: number): DatedAmount {
+  return { time: utc(date).getTime(), amount: new Decimal(amountArs) };
+}
+
 function inputs(overrides: Partial<EvolutionInputs> = {}): EvolutionInputs {
   return {
     trades: [],
@@ -57,6 +64,7 @@ function inputs(overrides: Partial<EvolutionInputs> = {}): EvolutionInputs {
     // Vacío por defecto: la serie cae al calendario completo, que es lo que la
     // mayoría de estos casos quiere afirmar. Los casos de ruedas lo pasan explícito.
     tradingDays: [],
+    instruments: [],
     ...overrides,
   };
 }
@@ -567,5 +575,289 @@ describe("buildEvolutionSeries — precio en vivo", () => {
 
     const mover = result.series.daily.at(-1)!.gainers.find((m) => m.ticker === "AAPL");
     expect(mover?.priceIsLive).toBe(true);
+  });
+});
+
+describe("buildEvolutionSeries — detalle por posición", () => {
+  it("arma `positions` por ticker y es consistente con el flujo neto del punto", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [
+          trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100),
+          trade(GGAL, "GGAL", "BUY", "2026-01-01", 5, 50),
+        ],
+        flows: [flow(AAPL, "2026-01-01", 1000), flow(GGAL, "2026-01-01", 250)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: GGAL, date: utc("2026-01-01"), close: 50 },
+        ]),
+      })
+    );
+
+    const point = result.series.daily[0]!;
+    expect(point.positions).toHaveLength(2);
+
+    const aapl = point.positions.find((p) => p.ticker === "AAPL")!;
+    expect(aapl.valueArs).toBe(1000);
+    expect(aapl.netFlowArs).toBe(1000);
+    expect(aapl.priceEstimated).toBe(false);
+
+    // La suma por posición tiene que coincidir con el agregado del punto: es la misma
+    // plata mirada de dos maneras.
+    const sumNetFlowArs = point.positions.reduce((acc, p) => acc + p.netFlowArs, 0);
+    expect(sumNetFlowArs).toBe(point.netFlowArs);
+    const sumValueArs = point.positions.reduce((acc, p) => acc + p.valueArs, 0);
+    expect(sumValueArs).toBe(point.valueArs);
+  });
+
+  it("omite tickers sin valor ni flujo en el punto (posición cerrada, sin actividad)", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [
+          trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100),
+          trade(AAPL, "AAPL", "SELL", "2026-01-02", 10, 110),
+        ],
+        flows: [flow(AAPL, "2026-01-01", 1000), flow(AAPL, "2026-01-02", -1100)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-02"), close: 110 },
+          { instrumentId: AAPL, date: utc("2026-01-03"), close: 110 },
+        ]),
+        from: utc("2026-01-01"),
+        to: utc("2026-01-03"),
+      })
+    );
+
+    // Día 1: posición abierta, tiene valor y flujo — aparece.
+    expect(result.series.daily[0]!.positions.find((p) => p.ticker === "AAPL")).toBeDefined();
+    // Día 2: se vendió todo — sin valor, pero el flujo de la venta es del período.
+    const closedPoint = result.series.daily[1]!.positions.find((p) => p.ticker === "AAPL");
+    expect(closedPoint?.valueArs).toBe(0);
+    expect(closedPoint?.netFlowArs).toBe(-1100);
+    // Día 3: nada pasó — ni valor ni flujo, no se lista.
+    expect(result.series.daily[2]!.positions.find((p) => p.ticker === "AAPL")).toBeUndefined();
+  });
+
+  it("marca `priceEstimated`/`hasEstimatedPrices` cuando el precio del punto es una estimación", () => {
+    const day = utc("2026-01-01");
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+        flows: [flow(AAPL, "2026-01-01", 1000)],
+        prices: new PriceIndex([{ instrumentId: AAPL, date: day, close: 100 }]),
+        estimatedPriceDays: new Map([[AAPL, new Set([day.getTime()])]]),
+        from: day,
+        to: day,
+      })
+    );
+
+    const point = result.series.daily[0]!;
+    expect(point.positions[0]!.priceEstimated).toBe(true);
+    expect(point.hasEstimatedPrices).toBe(true);
+  });
+
+  it("no marca `priceEstimated` cuando el instrumento no está en `estimatedPriceDays`", () => {
+    const day = utc("2026-01-01");
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+        flows: [flow(AAPL, "2026-01-01", 1000)],
+        prices: new PriceIndex([{ instrumentId: AAPL, date: day, close: 100 }]),
+        from: day,
+        to: day,
+      })
+    );
+
+    const point = result.series.daily[0]!;
+    expect(point.positions[0]!.priceEstimated).toBe(false);
+    expect(point.hasEstimatedPrices).toBe(false);
+  });
+});
+
+describe("buildEvolutionSeries — renta atribuida por posición", () => {
+  // Regresión: `valuatePortfolioAt` suma `accumulatedIncomeArs` (dividendos, cupones,
+  // amortizaciones de ON) al agregado, pero `PositionDetail` solo trae holdings. Sin
+  // atribución por instrumento, el chart filtrado por ticker (o incluso "Todo", antes de
+  // este fix) perdía la renta.
+  it("atribuye la renta acumulada hasta el cierre a la posición del instrumento", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+        flows: [flow(AAPL, "2026-01-01", 1000)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-02"), close: 100 },
+        ]),
+        incomeArsByDate: [income("2026-01-02", 50)],
+        incomeArsByInstrument: new Map([[AAPL, [income("2026-01-02", 50)]]]),
+        to: utc("2026-01-02"),
+      })
+    );
+
+    const second = result.series.daily[1]!;
+    const aapl = second.positions.find((p) => p.ticker === "AAPL")!;
+    // Holdings (1000, sin cambio de precio) + renta cobrada (50).
+    expect(aapl.valueArs).toBe(1000);
+    expect(aapl.incomeArs).toBe(50);
+    // El agregado (`valuatePortfolioAt`) también suma la renta: 1000 + 50.
+    expect(second.valueArs).toBe(1050);
+  });
+
+  it("solo acumula la renta hasta el cutoff del punto (sumUpTo), no la futura", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+        flows: [flow(AAPL, "2026-01-01", 1000)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-02"), close: 100 },
+        ]),
+        incomeArsByDate: [income("2026-01-01", 20), income("2026-01-03", 30)],
+        incomeArsByInstrument: new Map([
+          [AAPL, [income("2026-01-01", 20), income("2026-01-03", 30)]],
+        ]),
+        to: utc("2026-01-02"),
+      })
+    );
+
+    const first = result.series.daily[0]!;
+    const second = result.series.daily[1]!;
+    expect(first.positions.find((p) => p.ticker === "AAPL")!.incomeArs).toBe(20);
+    // El del 03 todavía no pasó al cierre del 02.
+    expect(second.positions.find((p) => p.ticker === "AAPL")!.incomeArs).toBe(20);
+  });
+
+  it("mantiene una posición cerrada que solo cobró renta después de venderse", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [
+          trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100),
+          trade(AAPL, "AAPL", "SELL", "2026-01-02", 10, 100),
+        ],
+        flows: [flow(AAPL, "2026-01-01", 1000), flow(AAPL, "2026-01-02", -1000)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-02"), close: 100 },
+        ]),
+        // Un cupón cobrado después de vender toda la posición: sin valor ni flujo en el
+        // punto del 03, pero la renta sigue siendo del instrumento.
+        incomeArsByDate: [income("2026-01-03", 15)],
+        incomeArsByInstrument: new Map([[AAPL, [income("2026-01-03", 15)]]]),
+        from: utc("2026-01-01"),
+        to: utc("2026-01-03"),
+      })
+    );
+
+    const closedPoint = result.series.daily[2]!;
+    const aapl = closedPoint.positions.find((p) => p.ticker === "AAPL");
+    expect(aapl).toBeDefined();
+    expect(aapl!.valueArs).toBe(0);
+    expect(aapl!.netFlowArs).toBe(0);
+    expect(aapl!.incomeArs).toBe(15);
+  });
+
+  it("la suma de posiciones (valor + renta) más la renta sin atribuir reconstruye el agregado", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [
+          trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100),
+          trade(GGAL, "GGAL", "BUY", "2026-01-01", 5, 50),
+        ],
+        flows: [flow(AAPL, "2026-01-01", 1000), flow(GGAL, "2026-01-01", 250)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: GGAL, date: utc("2026-01-01"), close: 50 },
+        ]),
+        incomeArsByDate: [income("2026-01-01", 30), income("2026-01-01", 5)],
+        incomeArsByInstrument: new Map([
+          [AAPL, [income("2026-01-01", 30)]],
+          [GGAL, [income("2026-01-01", 5)]],
+        ]),
+      })
+    );
+
+    const point = result.series.daily[0]!;
+    const attributed = point.positions.reduce((sum, p) => sum + p.valueArs + p.incomeArs, 0);
+    expect(attributed).toBe(point.valueArs);
+    // Ambas instancias de renta quedaron atribuidas: nada sin explicar.
+    expect(point.unattributedIncomeArs).toBe(0);
+  });
+
+  it("sin `incomeArsByInstrument` (compatibilidad), `incomeArs` es 0 y no rompe el agregado", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+        flows: [flow(AAPL, "2026-01-01", 1000)],
+        prices: new PriceIndex([{ instrumentId: AAPL, date: utc("2026-01-01"), close: 100 }]),
+      })
+    );
+
+    const point = result.series.daily[0]!;
+    expect(point.positions[0]!.incomeArs).toBe(0);
+    expect(point.unattributedIncomeArs).toBe(0);
+  });
+});
+
+describe("buildEvolutionSeries — flujo neto acumulado", () => {
+  it("acumula netFlowArs/Usd desde el primer punto de la serie", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+        flows: [flow(AAPL, "2026-01-01", 1000, 1), flow(AAPL, "2026-01-03", 500, 0.5)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-02"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-03"), close: 100 },
+        ]),
+        to: utc("2026-01-03"),
+      })
+    );
+
+    expect(result.series.daily.map((p) => p.cumulativeNetFlowArs)).toEqual([1000, 1000, 1500]);
+    expect(result.series.daily.map((p) => p.cumulativeNetFlowUsd)).toEqual([1, 1, 1.5]);
+  });
+});
+
+describe("buildEvolutionSeries — instruments y trades", () => {
+  it("expone `instruments` tal como los pasa el loader", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+        flows: [flow(AAPL, "2026-01-01", 1000)],
+        prices: new PriceIndex([{ instrumentId: AAPL, date: utc("2026-01-01"), close: 100 }]),
+        instruments: [{ ticker: "AAPL", name: "Apple Inc.", type: "CEDEAR" }],
+      })
+    );
+
+    expect(result.instruments).toEqual([{ ticker: "AAPL", name: "Apple Inc.", type: "CEDEAR" }]);
+  });
+
+  it("`instruments` y `trades` quedan vacíos en `EMPTY_EVOLUTION`", () => {
+    const result = buildEvolutionSeries(inputs());
+    expect(result.instruments).toEqual([]);
+    expect(result.trades).toEqual([]);
+  });
+
+  it("arma una marca por operación BUY/SELL, con el monto en USD al CCL del día", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [
+          trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100),
+          trade(AAPL, "AAPL", "SELL", "2026-01-02", 4, 110),
+        ],
+        flows: [flow(AAPL, "2026-01-01", 1000), flow(AAPL, "2026-01-02", -440)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-02"), close: 110 },
+        ]),
+        ccl: new TimeSeries([{ date: utc("2026-01-01"), value: 1000 }]),
+        to: utc("2026-01-02"),
+      })
+    );
+
+    expect(result.trades).toEqual([
+      { date: "2026-01-01", ticker: "AAPL", side: "buy", quantity: 10, amountArs: 1000, amountUsd: 1 },
+      { date: "2026-01-02", ticker: "AAPL", side: "sell", quantity: 4, amountArs: 440, amountUsd: 0.44 },
+    ]);
   });
 });

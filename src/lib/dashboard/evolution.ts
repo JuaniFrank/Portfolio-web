@@ -30,8 +30,10 @@
  * cancelar y la atribución daría cualquier cosa. Todas las operaciones de instrumentos
  * elegibles están en ARS.
  *
- * El perímetro es el de `/rendimientos`: solo `PERFORMANCE_INSTRUMENT_TYPES`. Renta fija
- * y letras no tienen serie de precios, así que quedan afuera y se avisan.
+ * El perímetro es el de `/rendimientos` (`PERFORMANCE_INSTRUMENT_TYPES`) más ONs — este
+ * loader ensancha el perímetro localmente (ver `EVOLUTION_INSTRUMENT_TYPES` en
+ * `evolution-data.ts`); `/rendimientos` no se toca. El resto de renta fija y las letras
+ * no tienen serie de precios, así que quedan afuera y se avisan.
  */
 
 import {
@@ -43,8 +45,10 @@ import type { PriceIndex, TimeSeries } from "@/lib/rendimientos/price-series";
 import { subPeriodReturn } from "@/lib/rendimientos/returns";
 import type { MonthCoverage, PositionDetail } from "@/lib/rendimientos/types";
 import {
+  type DatedAmount,
   type PortfolioValuation,
   type ReplayInputs,
+  sumUpTo,
   valuatePortfolioAt,
 } from "@/lib/rendimientos/valuation";
 
@@ -90,6 +94,16 @@ export type EvolutionInputs = ReplayInputs & {
    * que es poco, pero es mejor que no mostrar nada.
    */
   tradingDays: Date[];
+  /** Instrumentos elegibles que participaron: pasa directo a `PortfolioEvolution.instruments`. */
+  instruments: EvolutionInstrument[];
+  /**
+   * Renta en ARS por fecha, ascendente, agrupada por instrumento (mismo formato que
+   * `incomeArsByDate`, ver `accumulateInArs`). Permite atribuir la renta acumulada
+   * (`valuatePortfolioAt` la suma solo al agregado) a la posición que la generó.
+   * Opcional: sin ella, `incomeArs` queda en 0 en todas las posiciones — no rompe nada,
+   * solo dice "no hay de dónde atribuir".
+   */
+  incomeArsByInstrument?: Map<string, DatedAmount[]>;
 };
 
 export type EvolutionMover = {
@@ -114,6 +128,30 @@ export type EvolutionMover = {
   hadFlow: boolean;
 };
 
+/** Detalle de una posición en un punto de la serie: solo lo que hace falta para el
+ * filtro por ticker y el footnote de precios estimados de la UI. */
+export type EvolutionPositionBreakdown = {
+  ticker: string;
+  valueArs: number;
+  valueUsd: number;
+  netFlowArs: number;
+  netFlowUsd: number;
+  /**
+   * Renta acumulada (dividendos, cupones, amortizaciones de ON) del instrumento hasta el
+   * cierre de este punto — el mismo `accumulatedIncomeArs` que `valuatePortfolioAt` suma
+   * al agregado, pero atribuido al instrumento que la generó. `incomeUsd` sale de
+   * dividir por el `cclMid` del punto, igual que `valueUsd`; 0 sin CCL.
+   *
+   * No es un flujo: es renta generada por la posición, así que el TWR la mide como
+   * retorno (ver `buildViewRows` en `evolution-view.ts`).
+   */
+  incomeArs: number;
+  incomeUsd: number;
+  /** `true` cuando el precio de este cierre es el valor técnico estimado de una ON
+   * sin cotización ese día (ver `@/lib/dashboard/bond-price-series`). */
+  priceEstimated: boolean;
+};
+
 export type EvolutionPoint = {
   /** Cierre del bucket, `YYYY-MM-DD`. */
   date: string;
@@ -134,11 +172,43 @@ export type EvolutionPoint = {
   returnPercentUsd: number | null;
   netFlowArs: number;
   netFlowUsd: number;
+  /** Suma acumulada de `netFlowArs`/`netFlowUsd` desde el primer punto de la serie. */
+  cumulativeNetFlowArs: number;
+  cumulativeNetFlowUsd: number;
   coverage: MonthCoverage;
   /** Tickers cuyo precio vino arrastrado de antes del período. */
   staleTickers: string[];
   gainers: EvolutionMover[];
   losers: EvolutionMover[];
+  /** Detalle por posición: solo tickers con valor, movimiento o renta en este punto. */
+  positions: EvolutionPositionBreakdown[];
+  /** `true` cuando alguna posición de este punto usó un precio estimado (ver `positions`). */
+  hasEstimatedPrices: boolean;
+  /**
+   * `valueArs`/`valueUsd` del agregado menos la suma de `positions` (`value + income`).
+   * Cubre renta sin `instrumentId` y ruido de redondeo — en la práctica, ~0. Ver
+   * `buildViewRows`: se suma a la selección solo cuando cubre todos los `instruments`.
+   */
+  unattributedIncomeArs: number;
+  unattributedIncomeUsd: number;
+};
+
+/** Instrumento elegible que participó de la serie, para poblar filtros de la UI. */
+export type EvolutionInstrument = {
+  ticker: string;
+  name: string;
+  type: "STOCK_AR" | "CEDEAR" | "ON";
+};
+
+/** Marca de compra/venta para el chart, una fila por operación. */
+export type EvolutionTrade = {
+  /** Fecha de la operación, `YYYY-MM-DD`. */
+  date: string;
+  ticker: string;
+  side: "buy" | "sell";
+  quantity: number;
+  amountArs: number;
+  amountUsd: number;
 };
 
 export type PortfolioEvolution = {
@@ -150,6 +220,8 @@ export type PortfolioEvolution = {
   series: Record<Granularity, EvolutionPoint[]>;
   firstDate: string | null;
   lastDate: string | null;
+  instruments: EvolutionInstrument[];
+  trades: EvolutionTrade[];
 };
 
 export const EMPTY_EVOLUTION: PortfolioEvolution = {
@@ -157,6 +229,8 @@ export const EMPTY_EVOLUTION: PortfolioEvolution = {
   series: { daily: [], weekly: [], monthly: [] },
   firstDate: null,
   lastDate: null,
+  instruments: [],
+  trades: [],
 };
 
 function isoDay(date: Date): string {
@@ -283,6 +357,102 @@ function computeMovers(
 }
 
 /**
+ * Detalle por posición de un punto: valor a este cierre + movimiento neto en la
+ * ventana, en las dos monedas.
+ *
+ * Recorre la unión de tres fuentes — posiciones del cierre actual, del anterior (para
+ * el ticker de una posición cerrada dentro de la ventana) y de los flujos de la
+ * ventana — porque una posición puede tener movimiento sin tener valor al cierre (se
+ * vendió toda) o viceversa. `tickerById` es el último recurso: cubre el caso borde de
+ * una posición que se abrió y cerró *dentro* de la misma ventana, así que nunca
+ * aparece ni en el cierre anterior ni en el actual.
+ */
+function buildPositionBreakdown(
+  previous: PositionDetail[],
+  current: PositionDetail[],
+  flowsByInstrument: Map<string, WindowFlow>,
+  tickerById: Map<string, string>,
+  incomeArsByInstrument: Map<string, DatedAmount[]>,
+  cutoff: number,
+  cclMid: number | null
+): EvolutionPositionBreakdown[] {
+  const previousById = indexPositions(previous);
+  const currentById = indexPositions(current);
+  const instrumentIds = new Set([
+    ...previousById.keys(),
+    ...currentById.keys(),
+    ...flowsByInstrument.keys(),
+    // Una posición cerrada puede seguir cobrando renta (un cupón después de vender
+    // todo): sin esto, su ticker no entraría nunca más a `positions`.
+    ...incomeArsByInstrument.keys(),
+  ]);
+
+  const positions: EvolutionPositionBreakdown[] = [];
+
+  for (const instrumentId of instrumentIds) {
+    const after = currentById.get(instrumentId);
+    const before = previousById.get(instrumentId);
+    const flow = flowsByInstrument.get(instrumentId);
+
+    const valueArs = after?.valueArs ?? 0;
+    const valueUsd = after?.valueUsd ?? 0;
+    const netFlowArs = flow?.ars ?? 0;
+    const netFlowUsd = flow?.usd ?? 0;
+
+    // Mismo `sumUpTo` que usa `valuatePortfolioAt` para el agregado, con el cutoff del
+    // mismo cierre: es la renta acumulada de ESTE instrumento, no la del período.
+    const incomeArsDecimal = sumUpTo(incomeArsByInstrument.get(instrumentId) ?? [], cutoff);
+    const incomeArs = incomeArsDecimal.toNumber();
+    const incomeUsd = cclMid && cclMid > 0 ? incomeArs / cclMid : 0;
+
+    // Solo tickers con algo que mostrar en este punto: valor a este cierre, movimiento
+    // en la ventana, o renta acumulada. Sin ninguno de los tres no aporta nada al filtro.
+    if (valueArs === 0 && valueUsd === 0 && netFlowArs === 0 && netFlowUsd === 0 && incomeArs === 0) {
+      continue;
+    }
+
+    const ticker = after?.ticker ?? before?.ticker ?? tickerById.get(instrumentId) ?? instrumentId;
+
+    positions.push({
+      ticker,
+      valueArs: round2(valueArs),
+      valueUsd: round2(valueUsd),
+      netFlowArs: round2(netFlowArs),
+      netFlowUsd: round2(netFlowUsd),
+      incomeArs: round2(incomeArs),
+      incomeUsd: round2(incomeUsd),
+      priceEstimated: after?.priceEstimated ?? false,
+    });
+  }
+
+  return positions;
+}
+
+/**
+ * Una marca por operación BUY/SELL, para los trade markers del chart.
+ *
+ * `amountArs` sale directo de `netAmount` (ya convertido a ARS por el loader para
+ * operaciones en dólares, ver `evolution-data.ts`). `amountUsd` se deriva del CCL del
+ * día de la operación — mismo criterio que el resto del motor: sin CCL para esa fecha,
+ * 0 en vez de `null`, porque el tipo de esta fila no admite ausencia.
+ */
+function buildTradeMarkers(trades: ReplayInputs["trades"], ccl: TimeSeries): EvolutionTrade[] {
+  return trades.map((trade) => {
+    const tradeDate = new Date(trade.tradeDate);
+    const amountArs = Math.abs(Number(trade.netAmount));
+    const rate = ccl.asOf(tradeDate)?.value ?? null;
+    return {
+      date: isoDay(tradeDate),
+      ticker: trade.ticker,
+      side: trade.type === "BUY" ? "buy" : "sell",
+      quantity: Number(trade.quantity),
+      amountArs,
+      amountUsd: rate && rate > 0 ? amountArs / rate : 0,
+    };
+  });
+}
+
+/**
  * Cierres de bucket de la serie: las ruedas del rango, agrupadas.
  *
  * La serie termina en la última rueda con dato, no en "hoy". Si hoy no cerró todavía,
@@ -304,9 +474,17 @@ function buildSeries(inputs: EvolutionInputs, granularity: Granularity): Evoluti
   const closes = closesFor(inputs, granularity);
   if (closes.length === 0) return [];
 
+  // Último recurso de `buildPositionBreakdown` para una posición abierta y cerrada
+  // dentro de una misma ventana: no aparece en ningún cierre, así que el ticker sale
+  // de acá en vez de las posiciones valuadas.
+  const tickerById = new Map(inputs.trades.map((trade) => [trade.instrumentId, trade.ticker]));
+  const incomeArsByInstrument = inputs.incomeArsByInstrument ?? new Map<string, DatedAmount[]>();
+
   const points: EvolutionPoint[] = [];
   let previousValuation: PortfolioValuation | null = null;
   let previousClose: Date | null = null;
+  let cumulativeNetFlowArs = 0;
+  let cumulativeNetFlowUsd = 0;
 
   for (const close of closes) {
     // Un precio anterior al inicio del bucket es arrastre: sirve para valuar, pero no
@@ -349,6 +527,27 @@ function buildSeries(inputs: EvolutionInputs, granularity: Granularity): Evoluti
         ? subPeriodReturn(previousValueUsd, valuation.valueUsd, netFlowUsd)
         : null;
 
+    const cutoff = close.getTime();
+    const positions = buildPositionBreakdown(
+      previousValuation?.positions ?? [],
+      valuation.positions,
+      flowsByInstrument,
+      tickerById,
+      incomeArsByInstrument,
+      cutoff,
+      valuation.cclMid
+    );
+
+    // Lo que no quedó explicado por ninguna posición: renta sin `instrumentId` y ruido
+    // de redondeo. En la práctica, ~0 — ver el test de reconciliación.
+    const attributedValueArs = positions.reduce((sum, p) => sum + p.valueArs + p.incomeArs, 0);
+    const attributedValueUsd = positions.reduce((sum, p) => sum + p.valueUsd + p.incomeUsd, 0);
+    const unattributedIncomeArs = round2(valuation.valueArs - attributedValueArs);
+    const unattributedIncomeUsd = round2(valuation.valueUsd - attributedValueUsd);
+
+    cumulativeNetFlowArs += netFlowArs;
+    cumulativeNetFlowUsd += netFlowUsd;
+
     points.push({
       date: isoDay(close),
       valueArs: round2(valuation.valueArs),
@@ -363,10 +562,16 @@ function buildSeries(inputs: EvolutionInputs, granularity: Granularity): Evoluti
       returnPercentUsd: returnPercentUsd === null ? null : round4(returnPercentUsd),
       netFlowArs: round2(netFlowArs),
       netFlowUsd: round2(netFlowUsd),
+      cumulativeNetFlowArs: round2(cumulativeNetFlowArs),
+      cumulativeNetFlowUsd: round2(cumulativeNetFlowUsd),
       coverage: valuation.coverage,
       staleTickers: valuation.staleTickers,
       gainers,
       losers,
+      positions,
+      hasEstimatedPrices: positions.some((position) => position.priceEstimated),
+      unattributedIncomeArs,
+      unattributedIncomeUsd,
     });
 
     previousValuation = valuation;
@@ -393,6 +598,8 @@ export function buildEvolutionSeries(inputs: EvolutionInputs): PortfolioEvolutio
     series,
     firstDate: series.daily[0]!.date,
     lastDate: series.daily.at(-1)!.date,
+    instruments: inputs.instruments,
+    trades: buildTradeMarkers(inputs.trades, inputs.ccl),
   };
 }
 
