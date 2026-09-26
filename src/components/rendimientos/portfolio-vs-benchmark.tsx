@@ -20,6 +20,7 @@ import {
   formatSignedPercentValue,
 } from "@/components/rendimientos/chart-utils";
 import { LegendRow, LegendToggle } from "@/components/rendimientos/legend-toggle";
+import { useChartColors } from "@/components/providers/use-chart-colors";
 import { formatMonthLabel } from "@/lib/rendimientos/months";
 import type { BenchmarkKey, BenchmarkSeries, ViewCurrency } from "@/lib/rendimientos/types";
 import { benchmarkCumulativeKey, type MonthlyChartRow } from "@/lib/rendimientos/view";
@@ -48,6 +49,7 @@ export function PortfolioVsBenchmark({
 }) {
   const [hiddenPortfolio, setHiddenPortfolio] = useState(false);
   const [hidden, setHidden] = useState<Set<BenchmarkKey>>(new Set());
+  const chartColors = useChartColors();
 
   const toggle = (key: BenchmarkKey) =>
     setHidden((current) => {
@@ -97,26 +99,26 @@ export function PortfolioVsBenchmark({
         <div className="w-full" style={{ height: HEIGHT }}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data} margin={{ top: 12, right: 8, left: 4, bottom: 0 }}>
-              <CartesianGrid stroke="#27272a" strokeDasharray="3 3" vertical={false} />
+              <CartesianGrid stroke={chartColors.zinc800} strokeDasharray="3 3" vertical={false} />
               <XAxis
                 dataKey="month"
                 tickFormatter={formatMonthTick}
-                tick={{ fill: "#a1a1aa", fontSize: 11 }}
-                axisLine={{ stroke: "#71717a" }}
+                tick={{ fill: chartColors.zinc400, fontSize: 11 }}
+                axisLine={{ stroke: chartColors.zinc500 }}
                 tickLine={false}
                 minTickGap={24}
               />
               <YAxis
                 tickFormatter={(value: number) => formatSignedPercentValue(value)}
-                tick={{ fill: "#a1a1aa", fontSize: 11 }}
+                tick={{ fill: chartColors.zinc400, fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
                 width={58}
                 domain={["auto", "auto"]}
               />
-              <ReferenceLine y={0} stroke="#52525b" strokeDasharray="4 4" />
+              <ReferenceLine y={0} stroke={chartColors.zinc600} strokeDasharray="4 4" />
               <Tooltip
-                cursor={{ stroke: "#52525b" }}
+                cursor={{ stroke: chartColors.zinc600 }}
                 content={({ active, payload, label }) => {
                   if (!active || !payload?.length) return null;
                   const row = payload[0]?.payload as MonthlyChartRow | undefined;

@@ -21,6 +21,7 @@ import {
   formatSignedPercentValue,
 } from "@/components/rendimientos/chart-utils";
 import { LegendRow, LegendToggle } from "@/components/rendimientos/legend-toggle";
+import { useChartColors } from "@/components/providers/use-chart-colors";
 import type { BenchmarkKey, BenchmarkSeries, ViewCurrency } from "@/lib/rendimientos/types";
 import { benchmarkMonthlyKey, type MonthlyChartRow } from "@/lib/rendimientos/view";
 import { formatMonthLabel } from "@/lib/rendimientos/months";
@@ -44,6 +45,7 @@ export function MonthlyReturnChart({
   currency: ViewCurrency;
 }) {
   const [hidden, setHidden] = useState<Set<BenchmarkKey>>(new Set());
+  const chartColors = useChartColors();
 
   const toggle = (key: BenchmarkKey) =>
     setHidden((current) => {
@@ -82,25 +84,25 @@ export function MonthlyReturnChart({
         <div className="w-full" style={{ height: HEIGHT }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={data} margin={{ top: 12, right: 8, left: 4, bottom: 0 }}>
-              <CartesianGrid stroke="#27272a" strokeDasharray="3 3" vertical={false} />
+              <CartesianGrid stroke={chartColors.zinc800} strokeDasharray="3 3" vertical={false} />
               <XAxis
                 dataKey="month"
                 tickFormatter={formatMonthTick}
-                tick={{ fill: "#a1a1aa", fontSize: 11 }}
-                axisLine={{ stroke: "#71717a" }}
+                tick={{ fill: chartColors.zinc400, fontSize: 11 }}
+                axisLine={{ stroke: chartColors.zinc500 }}
                 tickLine={false}
                 minTickGap={16}
               />
               <YAxis
                 tickFormatter={(value: number) => formatSignedPercentValue(value)}
-                tick={{ fill: "#a1a1aa", fontSize: 11 }}
+                tick={{ fill: chartColors.zinc400, fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
                 width={58}
               />
-              <ReferenceLine y={0} stroke="#52525b" />
+              <ReferenceLine y={0} stroke={chartColors.zinc600} />
               <Tooltip
-                cursor={{ fill: "#27272a", fillOpacity: 0.35 }}
+                cursor={{ fill: chartColors.zinc800, fillOpacity: 0.35 }}
                 content={({ active, payload, label }) => {
                   if (!active || !payload?.length) return null;
                   const row = payload[0]?.payload as MonthlyChartRow | undefined;
