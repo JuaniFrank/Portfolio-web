@@ -16,6 +16,7 @@ import {
   formatMonthTick,
   formatSignedPercentValue,
 } from "@/components/rendimientos/chart-utils";
+import { useChartColors } from "@/components/providers/use-chart-colors";
 import type { MonthlyChartRow } from "@/lib/rendimientos/view";
 
 const HEIGHT = 220;
@@ -30,6 +31,7 @@ const HEIGHT = 220;
  * neutraliza los flujos) mide lo que dice medir.
  */
 export function DrawdownChart({ data }: { data: MonthlyChartRow[] }) {
+  const chartColors = useChartColors();
   return (
     <ChartCard
       title="Drawdown"
@@ -51,25 +53,25 @@ export function DrawdownChart({ data }: { data: MonthlyChartRow[] }) {
                   <stop offset="100%" stopColor={SERIES_COLORS.drawdown} stopOpacity={0.45} />
                 </linearGradient>
               </defs>
-              <CartesianGrid stroke="#27272a" strokeDasharray="3 3" vertical={false} />
+              <CartesianGrid stroke={chartColors.zinc800} strokeDasharray="3 3" vertical={false} />
               <XAxis
                 dataKey="month"
                 tickFormatter={formatMonthTick}
-                tick={{ fill: "#a1a1aa", fontSize: 11 }}
-                axisLine={{ stroke: "#71717a" }}
+                tick={{ fill: chartColors.zinc400, fontSize: 11 }}
+                axisLine={{ stroke: chartColors.zinc500 }}
                 tickLine={false}
                 minTickGap={24}
               />
               <YAxis
                 tickFormatter={(value: number) => formatSignedPercentValue(value)}
-                tick={{ fill: "#a1a1aa", fontSize: 11 }}
+                tick={{ fill: chartColors.zinc400, fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
                 width={58}
                 domain={["auto", 0]}
               />
               <Tooltip
-                cursor={{ stroke: "#52525b" }}
+                cursor={{ stroke: chartColors.zinc600 }}
                 content={({ active, payload, label }) => {
                   if (!active || !payload?.length) return null;
                   const row = payload[0]?.payload as MonthlyChartRow | undefined;

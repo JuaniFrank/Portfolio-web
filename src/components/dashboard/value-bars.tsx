@@ -13,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import type { DashboardHolding } from "@/lib/dashboard/types";
+import { useChartColors } from "@/components/providers/use-chart-colors";
 import { CHART_COLORS, formatCompact, formatMoney, formatPercent, type ViewCurrency } from "./format";
 
 type Props = {
@@ -21,6 +22,7 @@ type Props = {
 };
 
 export function ValueByTickerBars({ holdings, currency }: Props) {
+  const chartColors = useChartColors();
   const data = useMemo(
     () =>
       holdings.map((h, i) => ({
@@ -45,36 +47,36 @@ export function ValueByTickerBars({ holdings, currency }: Props) {
     <div className="h-[360px] w-full">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 24, right: 8, left: -8, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke={chartColors.zinc800} vertical={false} />
           <XAxis
             dataKey="ticker"
-            stroke="#71717a"
-            tick={{ fontSize: 11, fill: "#a1a1aa" }}
+            stroke={chartColors.zinc500}
+            tick={{ fontSize: 11, fill: chartColors.zinc400 }}
             tickLine={false}
-            axisLine={{ stroke: "#27272a" }}
+            axisLine={{ stroke: chartColors.zinc800 }}
             interval={0}
             angle={data.length > 12 ? -30 : 0}
             height={data.length > 12 ? 50 : 28}
             textAnchor={data.length > 12 ? "end" : "middle"}
           />
           <YAxis
-            stroke="#71717a"
-            tick={{ fontSize: 11, fill: "#a1a1aa" }}
+            stroke={chartColors.zinc500}
+            tick={{ fontSize: 11, fill: chartColors.zinc400 }}
             tickLine={false}
-            axisLine={{ stroke: "#27272a" }}
+            axisLine={{ stroke: chartColors.zinc800 }}
             tickFormatter={(v: number) => formatCompact(v, currency)}
             width={72}
           />
           <Tooltip
-            cursor={{ fill: "#27272a44" }}
+            cursor={{ fill: chartColors.zinc800, fillOpacity: 0.27 }}
             contentStyle={{
-              background: "#09090b",
-              border: "1px solid #27272a",
+              background: chartColors.zinc950,
+              border: `1px solid ${chartColors.zinc800}`,
               borderRadius: 8,
               fontSize: 12,
               padding: "8px 10px",
             }}
-            labelStyle={{ color: "#fafafa", fontWeight: 600 }}
+            labelStyle={{ color: chartColors.zinc50, fontWeight: 600 }}
             formatter={(value, _name, item) => {
               const pct = item?.payload?.percent ?? "0";
               const pnl = item?.payload?.pnlPercent ?? "0";
@@ -89,7 +91,7 @@ export function ValueByTickerBars({ holdings, currency }: Props) {
               dataKey="value"
               position="top"
               formatter={(v: unknown) => formatCompact(Number(v ?? 0), currency)}
-              style={{ fill: "#a1a1aa", fontSize: 10, fontWeight: 600 }}
+              style={{ fill: chartColors.zinc400, fontSize: 10, fontWeight: 600 }}
             />
             {data.map((d, i) => (
               <Cell key={d.ticker + i} fill={d.color} />
