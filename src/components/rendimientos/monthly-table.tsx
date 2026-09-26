@@ -53,9 +53,9 @@ export function MonthlyTable({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] border-collapse text-sm">
+          <table className="w-full min-w-[900px] border-collapse text-(length:--monthly-table-font-size) leading-(--monthly-table-line-height)">
             <thead>
-              <tr className="border-b border-zinc-800 text-left text-[11px] uppercase tracking-wide text-zinc-500">
+              <tr className="border-b border-zinc-800 text-left text-(length:--monthly-table-head-font-size) uppercase tracking-wide text-zinc-500">
                 <Th>Mes</Th>
                 <Th align="right">CCL cierre</Th>
                 <Th
@@ -240,9 +240,9 @@ function PositionsDetail({
         </p>
       ) : null}
 
-      <table className="w-full border-collapse text-xs">
+      <table className="w-full border-collapse text-(length:--monthly-detail-font-size) leading-(--monthly-detail-line-height)">
         <thead>
-          <tr className="text-left text-[10px] uppercase tracking-wide text-zinc-500">
+          <tr className="text-left text-(length:--monthly-detail-head-font-size) uppercase tracking-wide text-zinc-500">
             <Th>Ticker</Th>
             <Th align="right">Cantidad</Th>
             <Th align="right">Precio</Th>
@@ -359,7 +359,10 @@ function Th({
 }) {
   return (
     <th
-      className={cn("px-3 py-2 font-medium", align === "right" ? "text-right" : "text-left")}
+      className={cn(
+        "px-(--monthly-table-cell-px) py-(--monthly-table-cell-py) font-medium",
+        align === "right" ? "text-right" : "text-left"
+      )}
     >
       <span
         className={cn(
@@ -390,7 +393,7 @@ function Td({
   return (
     <td
       className={cn(
-        "px-3 py-2 tabular-nums",
+        "px-(--monthly-table-cell-px) py-(--monthly-table-cell-py) tabular-nums",
         align === "right" ? "text-right" : "text-left",
         className
       )}
