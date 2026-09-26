@@ -16,6 +16,7 @@ import { formatCompact, formatMoney } from "@/components/dashboard/format";
 import { ChartPlaceholder, MonthTooltip } from "@/components/rendimientos/chart-tooltip";
 import { SERIES_COLORS, formatMonthTick } from "@/components/rendimientos/chart-utils";
 import { LegendRow, LegendToggle } from "@/components/rendimientos/legend-toggle";
+import { useChartColors } from "@/components/providers/use-chart-colors";
 import type { ViewCurrency } from "@/lib/rendimientos/types";
 import type { MonthlyChartRow } from "@/lib/rendimientos/view";
 
@@ -39,6 +40,7 @@ export function ValueEvolution({
   currency: ViewCurrency;
 }) {
   const [showFlows, setShowFlows] = useState(true);
+  const chartColors = useChartColors();
 
   return (
     <ChartCard
@@ -76,24 +78,24 @@ export function ValueEvolution({
                   <stop offset="100%" stopColor={SERIES_COLORS.portfolio} stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid stroke="#27272a" strokeDasharray="3 3" vertical={false} />
+              <CartesianGrid stroke={chartColors.zinc800} strokeDasharray="3 3" vertical={false} />
               <XAxis
                 dataKey="month"
                 tickFormatter={formatMonthTick}
-                tick={{ fill: "#a1a1aa", fontSize: 11 }}
-                axisLine={{ stroke: "#71717a" }}
+                tick={{ fill: chartColors.zinc400, fontSize: 11 }}
+                axisLine={{ stroke: chartColors.zinc500 }}
                 tickLine={false}
                 minTickGap={24}
               />
               <YAxis
                 tickFormatter={(value: number) => formatCompact(value, currency)}
-                tick={{ fill: "#a1a1aa", fontSize: 11 }}
+                tick={{ fill: chartColors.zinc400, fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
                 width={76}
               />
               <Tooltip
-                cursor={{ stroke: "#52525b" }}
+                cursor={{ stroke: chartColors.zinc600 }}
                 content={({ active, payload, label }) => {
                   if (!active || !payload?.length) return null;
                   const row = payload[0]?.payload as MonthlyChartRow | undefined;
