@@ -17,9 +17,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  getInstrumentTradeMarkersAction,
   getMonitoringSeriesAction,
   loadMonitoringHistoryAction,
 } from "@/app/actions/monitoreo";
+import { buildTradeMarkers, type TradeMarker, type TradeMarkerInput } from "@/lib/monitoreo/trade-markers";
 import type {
   MonitoringBootstrapData,
   MonitoringChartType,
@@ -30,7 +32,7 @@ import type {
 } from "@/lib/monitoreo/types";
 import { AssetSelector } from "./asset-selector";
 import { formatCurrency, formatPercent, formatTradingDate } from "./format";
-import { MonitoringChart } from "./monitoring-chart";
+import { KLineChart } from "./kline-chart";
 
 interface MonitoreoPageProps {
   initialData: MonitoringBootstrapData;
@@ -58,6 +60,49 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
 
   const [isPending, startTransition] = React.useTransition();
   const [isLoadingHistory, setIsLoadingHistory] = React.useState(false);
+
+  // Trades + corporate event dates for the selected instrument, feeding the chart's markers.
+  const [tradeData, setTradeData] = React.useState<{
+    trades: TradeMarkerInput[];
+    corporateEventDates: string[];
+  } | null>(null);
+
+  // Reset stale trade data synchronously when the instrument changes, before the fetch effect
+  // below resolves — "adjusting state during render" (see React docs), not a setState-in-effect,
+  // so a different instrument's markers never briefly render against the new one's bars.
+  const [tradeDataInstrumentId, setTradeDataInstrumentId] = React.useState(selectedId);
+  if (selectedId !== tradeDataInstrumentId) {
+    setTradeDataInstrumentId(selectedId);
+    setTradeData(null);
+  }
+
+  React.useEffect(() => {
+    if (!selectedId) return;
+
+    let cancelled = false;
+    getInstrumentTradeMarkersAction({ instrumentId: selectedId }).then((res) => {
+      if (cancelled) return;
+      if ("error" in res) {
+        setTradeData({ trades: [], corporateEventDates: [] });
+        return;
+      }
+      setTradeData(res);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
+  const tradeMarkers: TradeMarker[] = React.useMemo(() => {
+    if (!series || !tradeData) return [];
+    return buildTradeMarkers(
+      tradeData.trades,
+      series.bars,
+      { kind: series.kind, currency: series.currency },
+      tradeData.corporateEventDates
+    );
+  }, [series, tradeData]);
 
   // Fetch series on parameter changes
   const fetchSeries = React.useCallback(
@@ -368,12 +413,13 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
               </div>
             </div>
           ) : (
-            <MonitoringChart
+            <KLineChart
               bars={series?.bars ?? []}
               chartType={chartType}
               currency={currency}
               ticker={selectedInstrument?.ticker ?? "—"}
               height={440}
+              markers={tradeMarkers}
             />
           )}
 
