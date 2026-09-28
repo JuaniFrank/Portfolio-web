@@ -22,6 +22,7 @@ import {
   filterBarsByRange,
   mergeHistoryBars,
 } from "@/lib/monitoreo/series";
+import type { TradeMarkerInput } from "@/lib/monitoreo/trade-markers";
 import type {
   MonitoringBootstrapData,
   MonitoringHistoryStatus,
@@ -37,6 +38,12 @@ const getSeriesInputSchema = z.object({
 });
 
 export type GetMonitoringSeriesInput = z.infer<typeof getSeriesInputSchema>;
+
+const getTradeMarkerDataInputSchema = z.object({
+  instrumentId: z.string().min(1),
+});
+
+export type GetTradeMarkerDataInput = z.infer<typeof getTradeMarkerDataInputSchema>;
 
 export async function getMonitoringBootstrapAction(): Promise<
   MonitoringBootstrapData | { error: "unauthorized" }
@@ -147,6 +154,81 @@ export async function loadMonitoringHistoryAction(
     historyStatus,
     bars: filteredBars,
   });
+}
+
+/**
+ * Trades (BUY/SELL only) and corporate event dates for one instrument, scoped to the
+ * current user's default portfolio. Feeds `buildTradeMarkers` (src/lib/monitoreo/trade-markers.ts)
+ * on the client — Decimal/Date fields are serialized to plain number/string here since that
+ * module takes no Prisma types.
+ */
+export async function getInstrumentTradeMarkersAction(
+  input: GetTradeMarkerDataInput
+): Promise<
+  { trades: TradeMarkerInput[]; corporateEventDates: string[] } | { error: string }
+> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "unauthorized" };
+
+  const parsed = getTradeMarkerDataInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: "Parámetros de consulta no válidos" };
+  }
+
+  const portfolio = await prisma.portfolio.findFirst({
+    where: { userId: user.id, archivedAt: null },
+    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+    select: { id: true },
+  });
+
+  if (!portfolio) {
+    return { trades: [], corporateEventDates: [] };
+  }
+
+  const [tradeRows, eventRows] = await Promise.all([
+    prisma.transaction.findMany({
+      where: {
+        portfolioId: portfolio.id,
+        instrumentId: parsed.data.instrumentId,
+        type: { in: ["BUY", "SELL"] },
+      },
+      orderBy: { tradeDate: "asc" },
+      select: {
+        id: true,
+        tradeDate: true,
+        type: true,
+        quantity: true,
+        price: true,
+        currencyCode: true,
+        grossAmount: true,
+        fees: true,
+      },
+    }),
+    // Corporate events are global per instrument, but we only surface them for instruments
+    // the user actually holds/held — same ownership check as `listCorporateEvents` (events.ts).
+    prisma.corporateEvent.findMany({
+      where: {
+        instrumentId: parsed.data.instrumentId,
+        instrument: { transactions: { some: { portfolio: { userId: user.id } } } },
+      },
+      select: { effectiveDate: true },
+    }),
+  ]);
+
+  const trades: TradeMarkerInput[] = tradeRows.map((t) => ({
+    id: t.id,
+    tradeDate: t.tradeDate.toISOString().slice(0, 10),
+    type: t.type as "BUY" | "SELL",
+    quantity: Number(t.quantity.toString()),
+    price: Number(t.price.toString()),
+    currencyCode: t.currencyCode,
+    grossAmount: Number(t.grossAmount.toString()),
+    fees: Number(t.fees.toString()),
+  }));
+
+  const corporateEventDates = eventRows.map((e) => e.effectiveDate.toISOString().slice(0, 10));
+
+  return { trades, corporateEventDates };
 }
 
 async function fetchSeriesInternal(
