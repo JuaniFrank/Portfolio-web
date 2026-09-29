@@ -2,6 +2,7 @@
 
 import { CalendarDays, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
+import { AttributionCard } from "@/components/rendimientos/attribution-card";
 import { DataNotices } from "@/components/rendimientos/data-notices";
 import { DrawdownChart } from "@/components/rendimientos/drawdown-chart";
 import { MonthlyReturnChart } from "@/components/rendimientos/monthly-return-chart";
@@ -10,14 +11,21 @@ import { MonthlyTable } from "@/components/rendimientos/monthly-table";
 import { PerformanceKpis } from "@/components/rendimientos/performance-kpis";
 import { PortfolioVsBenchmark } from "@/components/rendimientos/portfolio-vs-benchmark";
 import { PositionsTable } from "@/components/rendimientos/positions-table";
-import { ValueEvolution } from "@/components/rendimientos/value-evolution";
+import { PortfolioEvolutionChart } from "@/components/dashboard/portfolio-evolution";
 import { formatDateLong } from "@/components/rendimientos/chart-utils";
 import { useCurrency } from "@/components/providers/currency-provider";
+import type { PortfolioEvolution } from "@/lib/dashboard/evolution";
 import type { PerformanceReport } from "@/lib/rendimientos/types";
-import { PERIODS, resolveView, summaryForCurrency, type Period } from "@/lib/rendimientos/view";
+import { PERIODS, resolveView, sliceMonths, summaryForCurrency, type Period } from "@/lib/rendimientos/view";
 import { cn } from "@/lib/utils";
 
-export function RendimientosPage({ report }: { report: PerformanceReport }) {
+export function RendimientosPage({
+  report,
+  evolution,
+}: {
+  report: PerformanceReport;
+  evolution: PortfolioEvolution;
+}) {
   const [period, setPeriod] = useState<Period>("ALL");
   const { currency: globalCurrency, setCurrency } = useCurrency();
 
@@ -38,6 +46,10 @@ export function RendimientosPage({ report }: { report: PerformanceReport }) {
   const monthsByKey = useMemo(
     () => new Map(report.months.map((row) => [row.month, row])),
     [report.months]
+  );
+  const monthsInPeriod = useMemo(
+    () => sliceMonths(report.months, period),
+    [report.months, period]
   );
 
   const hasData = report.months.length > 0;
@@ -104,10 +116,22 @@ export function RendimientosPage({ report }: { report: PerformanceReport }) {
 
           <PerformanceKpis summary={summary} currency={currency} />
 
+          <AttributionCard
+            months={monthsInPeriod}
+            sectorByTicker={report.sectorByTicker}
+            currency={currency}
+          />
+
           <PositionsTable positions={report.positions} currency={currency} />
 
           <div className="space-y-4">
-            <ValueEvolution data={view.rows} currency={currency} />
+            <div className="space-y-2">
+              <PortfolioEvolutionChart evolution={evolution} currency={currency} />
+              <p className="text-[11px] text-zinc-500">
+                Este gráfico incluye Obligaciones Negociables (ONs); las tablas mensuales de
+                abajo, por ahora, no.
+              </p>
+            </div>
             <MonthlyReturnChart
               data={view.rows}
               benchmarks={view.benchmarks}
