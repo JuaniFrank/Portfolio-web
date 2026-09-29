@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { RendimientosPage } from "@/components/rendimientos/rendimientos-page";
 import { getCurrentUser } from "@/lib/auth";
+import { EMPTY_EVOLUTION, type PortfolioEvolution } from "@/lib/dashboard/evolution";
+import { loadPortfolioEvolution } from "@/lib/dashboard/evolution-data";
 import { prisma } from "@/lib/prisma";
 import { buildPerformanceReport } from "@/lib/rendimientos/series";
 import type { PerformanceReport } from "@/lib/rendimientos/types";
@@ -32,10 +34,20 @@ export default async function RendimientosRoutePage() {
   });
 
   const portfolio = portfolios[0];
-  if (!portfolio) return <RendimientosPage report={emptyReport("Sin portfolio")} />;
+  if (!portfolio) {
+    return <RendimientosPage report={emptyReport("Sin portfolio")} evolution={EMPTY_EVOLUTION} />;
+  }
 
-  const report = await safeBuildReport(portfolio.id, portfolio.name);
-  return <RendimientosPage report={report} />;
+  // El reporte mensual y la serie diaria de evolución son dos motores
+  // independientes (el segundo SÍ incluye ONs, ver diseño phase-2) — se piden
+  // en paralelo, no uno reusando la carga de CCL del otro: `buildPerformanceReport`
+  // no expone su serie de CCL para inyectarla, y forzar esa reutilización
+  // encadenaría ambas cargas en vez de dejarlas concurrentes.
+  const [report, evolution] = await Promise.all([
+    safeBuildReport(portfolio.id, portfolio.name),
+    safeLoadEvolution(portfolio.id),
+  ]);
+  return <RendimientosPage report={report} evolution={evolution} />;
 }
 
 /**
@@ -55,6 +67,17 @@ async function safeBuildReport(
   } catch (error) {
     console.error("Rendimientos report error", error);
     return emptyReport(portfolioName);
+  }
+}
+
+/** Mismo criterio que `safeBuildReport`: si la serie diaria falla, el gráfico muestra su
+ * placeholder y el resto de la página (el reporte mensual) sigue en pie. */
+async function safeLoadEvolution(portfolioId: string): Promise<PortfolioEvolution> {
+  try {
+    return await loadPortfolioEvolution([portfolioId]);
+  } catch (error) {
+    console.error("Rendimientos evolution error", error);
+    return EMPTY_EVOLUTION;
   }
 }
 
@@ -82,6 +105,7 @@ function emptyReport(portfolioName: string): PerformanceReport {
     },
     excludedHoldings: [],
     positions: [],
+    sectorByTicker: {},
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],
