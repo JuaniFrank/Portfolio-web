@@ -315,8 +315,12 @@ export type BondCashflowOutlook = {
  * Convert a native-currency flow amount to its ARS and USD equivalents.
  * When cclRate is unavailable, the foreign-currency side is left null rather
  * than guessed — matches the safe-skip convention used by computeCouponsYtd.
+ *
+ * Exported so other forward-looking cash-flow views (e.g. the dashboard's
+ * "Próximos cobros" panel, `upcoming-income.ts`) can reuse the exact same
+ * conversion instead of re-deriving it.
  */
-function toArsAndUsd(
+export function toArsAndUsd(
   amount: number,
   currencyCode: string,
   cclRate: number | null
