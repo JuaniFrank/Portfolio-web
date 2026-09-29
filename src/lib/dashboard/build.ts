@@ -1,5 +1,6 @@
 import Decimal from "decimal.js";
 import type { InstrumentType } from "@/lib/generated/prisma";
+import { translateSector } from "@/lib/sector";
 import { EMPTY_EVOLUTION, type PortfolioEvolution } from "./evolution";
 import type {
   AllocationSlice,
@@ -36,49 +37,6 @@ export type HoldingForDashboard = {
   pnlPercentUsd: string | null;
   sector: string | null;
 };
-
-const SECTOR_ES: Record<string, string> = {
-  // Yahoo Finance — 11 sectores actuales
-  Technology: "Tecnología",
-  "Financial Services": "Servicios financieros",
-  Industrials: "Industria",
-  Healthcare: "Salud",
-  "Communication Services": "Comunicación",
-  "Consumer Cyclical": "Consumo cíclico",
-  Energy: "Energía",
-  "Consumer Defensive": "Consumo defensivo",
-  "Basic Materials": "Materiales básicos",
-  "Real Estate": "Inmobiliario",
-  Utilities: "Servicios públicos",
-
-  // Variantes / nombres históricos / aliases
-  Financials: "Servicios financieros",
-  Finance: "Servicios financieros",
-
-  "Consumer Discretionary": "Consumo cíclico",
-  "Consumer Staples": "Consumo defensivo",
-
-  "Health Care": "Salud",
-  "Health Care Services": "Salud",
-
-  Communications: "Comunicación",
-
-  Materials: "Materiales básicos",
-
-  "Real Estate Investment Trusts": "Inmobiliario",
-};
-
-function translateSector(raw: string | null, instrumentType: InstrumentType): string {
-  if (raw && SECTOR_ES[raw]) return SECTOR_ES[raw]!;
-  if (raw && raw.trim().length > 0) return raw;
-  if (instrumentType === "ETF") return "ETF";
-  if (instrumentType === "BOND_AR" || instrumentType === "LETRA" || instrumentType === "ON") {
-    return "Renta fija";
-  }
-  if (instrumentType === "FCI") return "Fondos comunes";
-  if (instrumentType === "CRYPTO" || instrumentType === "STABLECOIN") return "Cripto";
-  return "Sin clasificar";
-}
 
 function marketSegmentFor(type: InstrumentType): MarketSegment {
   switch (type) {

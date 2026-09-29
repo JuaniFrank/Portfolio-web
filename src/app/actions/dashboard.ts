@@ -18,6 +18,7 @@ import { resolveCclRate } from "@/lib/market/ccl-rate";
 import { cclLookupFrom, loadCclSeries } from "@/lib/market/ccl-history";
 import { refreshLatestQuotes, type InstrumentForQuote } from "@/lib/market/quotes";
 import { prisma } from "@/lib/prisma";
+import { resolveRawSector } from "@/lib/sector";
 import {
   buildHoldings,
   type TradeForHoldings,
@@ -126,15 +127,14 @@ export async function getDashboardPageDataAction(): Promise<
       tradeDate: r.tradeDate.toISOString(),
     };
 
-    // AD-3 3-step sector fallback (design §2.3): instrument.sector ??
-    // baseInstrument.sector ?? underlyingAsset.sector ?? null. Applied on
+    // AD-3 3-step sector fallback (design §2.3, `@/lib/sector`). Applied on
     // BOTH branches — the fixed-income branch used to `continue` before this
     // line and therefore never recorded a sector for a bond/ON at all.
-    const sector =
-      r.instrument.sector ??
-      r.instrument.baseInstrument?.sector ??
-      r.instrument.underlyingAsset?.sector ??
-      null;
+    const sector = resolveRawSector({
+      instrumentSector: r.instrument.sector,
+      baseInstrumentSector: r.instrument.baseInstrument?.sector,
+      underlyingAssetSector: r.instrument.underlyingAsset?.sector,
+    });
     sectorByInstrument.set(r.instrument.id, sector);
 
     if (FIXED_INCOME_TYPES.includes(r.instrument.type)) {
