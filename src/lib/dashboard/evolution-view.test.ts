@@ -75,6 +75,7 @@ function point(
     losers: [],
     positions,
     hasEstimatedPrices: positions.some((p) => p.priceEstimated),
+    isLive: false,
     unattributedIncomeArs,
     unattributedIncomeUsd,
   };
