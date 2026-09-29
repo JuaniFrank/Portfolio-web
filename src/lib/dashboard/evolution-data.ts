@@ -39,6 +39,7 @@ import {
   type BondRealSnapshot,
   type BondResidualRow,
 } from "./bond-price-series";
+import { isEchoLiveSnapshot } from "./echo-live-snapshot";
 import {
   buildEvolutionSeries,
   type EvolutionInstrument,
@@ -164,20 +165,44 @@ export async function loadPortfolioEvolution(
   // "Hoy" para el overlay: un solo corte para precios y CCL.
   const today = marketDayOf(new Date(), marketTimeZone);
 
+  // El cierre real inmediatamente anterior de cada instrumento, para poder detectar si
+  // la cotización "en vivo" en realidad lo está repitiendo (ver `isEchoLiveSnapshot`).
+  const priceIndexBeforeLive = new PriceIndex(
+    priceRows.map((row) => ({ instrumentId: row.instrumentId, date: row.datetime, close: Number(row.close) }))
+  );
+  const lastCloseByInstrument = new Map<string, number>();
+  for (const instrument of equityInstruments) {
+    const hit = priceIndexBeforeLive.previousClose(instrument.id, today);
+    if (hit) lastCloseByInstrument.set(instrument.id, hit.value);
+  }
+
+  // Consultado antes de la apertura (o el broker sin book actualizado), data912 puede
+  // devolver el cierre de ayer disfrazado de "ahora": mismo precio, instrumento por
+  // instrumento. Agregar ESE punto como "hoy" duplicaría la última rueda con cambio
+  // exactamente cero en todos los instrumentos a la vez — no es un cierre nuevo, es un
+  // eco. Se lo trata como si el feed en vivo no hubiera respondido nada: ni precios ni
+  // CCL de hoy (ver más abajo), para no inventar una rueda que no pasó.
+  const isEchoSnapshot = isEchoLiveSnapshot(liveOverlay.priceQuotes, lastCloseByInstrument);
+
   const { rows: overlaidPriceRows, liveInstrumentIds } = overlayLivePrices(
     priceRows.map((row) => ({
       instrumentId: row.instrumentId,
       date: row.datetime,
       close: Number(row.close),
     })),
-    liveOverlay.priceQuotes,
+    isEchoSnapshot ? [] : liveOverlay.priceQuotes,
     today
   );
 
   // Sea la compartida por el dashboard o la que se leyó acá, de acá en más es una sola.
   // El overlay es idempotente: si ya tiene un punto de hoy (por ejemplo porque
   // `resolveCclRate` ya lo persistió), no agrega nada.
-  const cclOverlay = overlayLiveCcl(cclLoaded.all(), liveOverlay.cclMid, today);
+  //
+  // El CCL de hoy también se omite si el snapshot de precios fue un eco: si ningún
+  // instrumento cerró de verdad hoy, no tiene sentido que el CCL sí "cierre" — dejaría
+  // un punto de CCL sin ninguna rueda de precios detrás, y `tradingDays` (que se arma
+  // solo de `overlaidPriceRows`, más abajo) ya no va a incluir hoy de todos modos.
+  const cclOverlay = overlayLiveCcl(cclLoaded.all(), isEchoSnapshot ? null : liveOverlay.cclMid, today);
   const cclSeries = cclOverlay.isLive ? new TimeSeries(cclOverlay.points) : cclLoaded;
 
   // Las ruedas: los días en que al menos un instrumento de renta variable cerró
