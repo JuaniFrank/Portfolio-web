@@ -1,23 +1,22 @@
 "use client";
 
-import { useState } from "react";
-import {
-  AlertTriangle,
-  BarChart3,
-  Building2,
-  Factory,
-  Globe2,
-  PieChart as PieChartIcon,
-  TrendingUp,
-} from "lucide-react";
+import { useMemo, useState } from "react";
+import { BarChart3, Building2, Factory, Globe2, PieChart as PieChartIcon, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { buildDashboardNotices } from "@/lib/dashboard/dashboard-notices";
+import { buildPeriodKpis } from "@/lib/dashboard/period-kpis";
+import type { TimeRange } from "@/lib/dashboard/time-range";
 import type { DashboardData } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
 import { AllocationDonut } from "./allocation-donut";
 import { ChartCard } from "./chart-card";
 import { ConcentrationCard } from "./concentration-card";
 import { DashboardKpiCards } from "./dashboard-kpis";
+import { DayMovers } from "./day-movers";
 import { MARKET_COLORS, type ViewCurrency } from "./format";
+import { NoticesPanel } from "./notices-panel";
+import { PeriodKpisPanel } from "./period-kpis-panel";
 import { PortfolioEvolutionChart } from "./portfolio-evolution";
 import { SectorBars } from "./sector-bars";
 import { TopMovers } from "./top-movers";
@@ -27,9 +26,36 @@ type Props = {
   data: DashboardData;
 };
 
+/** El gráfico de evolución arranca en 3M en el dashboard: acá se mira el corto plazo,
+ * el histórico completo es cosa de `/rendimientos`. */
+const EVOLUTION_INITIAL_RANGE: TimeRange = { preset: "3M", from: null, to: null };
+
+type DashboardTab = "hoy" | "composicion";
+
 export function DashboardPage({ data }: Props) {
   const [currency, setCurrency] = useState<ViewCurrency>("ARS");
+  // Estado local, no en la URL: no hay ningún patrón de `useSearchParams` en el resto
+  // del repo (solo `useRouter`/`usePathname`), y esta pestaña no se comparte ni se
+  // deep-linkea — persistirla en la query hubiera sido una capa nueva para un
+  // beneficio marginal. Mismo criterio que ya usa el toggle de moneda de al lado.
+  const [tab, setTab] = useState<DashboardTab>("hoy");
   const cclMissing = !data.cclRate;
+  const lastPoint = data.evolution.series.daily.at(-1) ?? null;
+
+  const periodKpis = useMemo(
+    () => buildPeriodKpis(data.evolution.series.daily, data.evolution.instruments, currency),
+    [data.evolution.series.daily, data.evolution.instruments, currency]
+  );
+
+  const notices = useMemo(
+    () =>
+      buildDashboardNotices({
+        cclMissing,
+        lastPoint,
+        concentration: data.concentration,
+      }),
+    [cclMissing, lastPoint, data.concentration]
+  );
 
   if (!data.hasData) {
     return (
@@ -44,106 +70,119 @@ export function DashboardPage({ data }: Props) {
     <div className="space-y-6">
       <Header portfolioName={data.portfolioName} />
 
-      {cclMissing ? (
-        <div className="flex items-start gap-3 rounded-md border border-amber-900/50 bg-amber-950/20 p-3 text-xs text-amber-200">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>
-            No hay cotización CCL cargada. Las métricas en USD aparecen en cero. Importá o
-            registrá un <code className="rounded bg-amber-950/40 px-1">FxRate</code> USD/ARS
-            para habilitar la vista en dólares.
-          </div>
-        </div>
-      ) : null}
-
-      <section className="space-y-3">
-        <SectionTitle
-          title="Vista Detallada"
-          description="Snapshot rápido de la salud actual de tus inversiones."
-        />
-        <DashboardKpiCards kpis={data.kpis} />
-      </section>
-
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <SectionTitle
-          title="Análisis Gráfico"
-          description="Distribución y composición visual del portfolio."
-        />
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <Tabs value={tab} onValueChange={(value) => setTab(value as DashboardTab)}>
+          <TabsList>
+            <TabsTrigger value="hoy">Hoy</TabsTrigger>
+            <TabsTrigger value="composicion">Composición</TabsTrigger>
+          </TabsList>
+        </Tabs>
         <CurrencyToggle value={currency} onChange={setCurrency} disabledUsd={cclMissing} />
       </div>
 
-      <ChartCard
-        title="Evolución del Portfolio"
-        description="Valor reconstruido cierre a cierre. Pasá el mouse por un punto para ver qué posiciones lo movieron."
-        icon={<TrendingUp className="h-4 w-4" />}
-      >
-        <PortfolioEvolutionChart evolution={data.evolution} currency={currency} />
-      </ChartCard>
+      {tab === "hoy" ? (
+        <div className="space-y-6">
+          <NoticesPanel notices={notices} />
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <ChartCard
-          title="Resumen de Portfolio"
-          description="Distribución general de tus inversiones por instrumento."
-          icon={<PieChartIcon className="h-4 w-4" />}
-        >
-          <AllocationDonut
-            data={data.allocationByTicker}
-            currency={currency}
-            topN={12}
-            centerSubtitle={`${data.kpis.totalInstruments} instrumentos`}
-            colorMap={{ ON: "#6366f1" }}
-          />
-        </ChartCard>
+          <section className="space-y-3">
+            <SectionTitle
+              title="¿Qué pasó hoy?"
+              description="Resultado de corto plazo: hoy, últimos 7 y 30 días, y en lo que va del año."
+            />
+            <PeriodKpisPanel kpis={periodKpis} currency={currency} />
+          </section>
 
-        <ChartCard
-          title="Distribución por Mercado"
-          description="Exposición por tipo de mercado financiero."
-          icon={<Globe2 className="h-4 w-4" />}
-        >
-          <AllocationDonut
-            data={data.allocationByMarket}
-            currency={currency}
-            colorMap={MARKET_COLORS}
-            labelPosition="below"
-            centerSubtitle="por mercado"
-          />
-        </ChartCard>
-      </div>
+          <section className="space-y-3">
+            <SectionTitle
+              title="Vista Detallada"
+              description="Snapshot rápido de la salud actual de tus inversiones."
+            />
+            <DashboardKpiCards kpis={data.kpis} />
+          </section>
 
-      <ChartCard
-        title="Distribución por Sector"
-        description="Diversificación sectorial de tu portfolio."
-        icon={<Factory className="h-4 w-4" />}
-      >
-        <SectorBars
-          data={data.allocationBySector}
-          currency={currency}
-          holdings={data.holdings}
-        />
-      </ChartCard>
+          <ChartCard
+            title="Evolución del Portfolio"
+            description="Valor reconstruido cierre a cierre. Pasá el mouse por un punto para ver qué posiciones lo movieron."
+            icon={<TrendingUp className="h-4 w-4" />}
+          >
+            <PortfolioEvolutionChart
+              evolution={data.evolution}
+              currency={currency}
+              initialRange={EVOLUTION_INITIAL_RANGE}
+            />
+          </ChartCard>
 
-      <ChartCard
-        title="Valor por Acción"
-        description="Comparación del valor monetario de cada instrumento."
-        icon={<BarChart3 className="h-4 w-4" />}
-      >
-        <ValueByTickerBars holdings={data.holdings} currency={currency} />
-      </ChartCard>
-
-      <section className="space-y-3">
-        <SectionTitle
-          title="Salud del Portfolio"
-          description="Quiénes empujan y qué tan diversificado estás."
-          icon={<Building2 className="h-4 w-4" />}
-        />
-        <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
-          <TopMovers
-            gainers={currency === "ARS" ? data.topGainers : data.topGainersUsd}
-            losers={currency === "ARS" ? data.topLosers : data.topLosersUsd}
+          <DayMovers
+            gainers={lastPoint?.gainers ?? []}
+            losers={lastPoint?.losers ?? []}
             currency={currency}
           />
-          <ConcentrationCard stats={data.concentration} />
         </div>
-      </section>
+      ) : (
+        <div className="space-y-6">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <ChartCard
+              title="Resumen de Portfolio"
+              description="Distribución general de tus inversiones por instrumento."
+              icon={<PieChartIcon className="h-4 w-4" />}
+            >
+              <AllocationDonut
+                data={data.allocationByTicker}
+                currency={currency}
+                topN={12}
+                centerSubtitle={`${data.kpis.totalInstruments} instrumentos`}
+                colorMap={{ ON: "#6366f1" }}
+              />
+            </ChartCard>
+
+            <ChartCard
+              title="Distribución por Mercado"
+              description="Exposición por tipo de mercado financiero."
+              icon={<Globe2 className="h-4 w-4" />}
+            >
+              <AllocationDonut
+                data={data.allocationByMarket}
+                currency={currency}
+                colorMap={MARKET_COLORS}
+                labelPosition="below"
+                centerSubtitle="por mercado"
+              />
+            </ChartCard>
+          </div>
+
+          <ChartCard
+            title="Distribución por Sector"
+            description="Diversificación sectorial de tu portfolio."
+            icon={<Factory className="h-4 w-4" />}
+          >
+            <SectorBars data={data.allocationBySector} currency={currency} holdings={data.holdings} />
+          </ChartCard>
+
+          <ChartCard
+            title="Valor por Acción"
+            description="Comparación del valor monetario de cada instrumento."
+            icon={<BarChart3 className="h-4 w-4" />}
+          >
+            <ValueByTickerBars holdings={data.holdings} currency={currency} />
+          </ChartCard>
+
+          <section className="space-y-3">
+            <SectionTitle
+              title="Salud del Portfolio"
+              description="Quiénes empujan y qué tan diversificado estás."
+              icon={<Building2 className="h-4 w-4" />}
+            />
+            <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
+              <TopMovers
+                gainers={currency === "ARS" ? data.topGainers : data.topGainersUsd}
+                losers={currency === "ARS" ? data.topLosers : data.topLosersUsd}
+                currency={currency}
+              />
+              <ConcentrationCard stats={data.concentration} />
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

@@ -80,6 +80,9 @@ const MODE_OPTIONS: Array<{ id: ViewMode; label: string }> = [
 type Props = {
   evolution: PortfolioEvolution;
   currency: ViewCurrency;
+  /** Rango inicial del selector. Por defecto `DEFAULT_TIME_RANGE` (Todo); el dashboard
+   * lo arranca en 3M para enfocar el corto plazo sin perder el resto de la UI. */
+  initialRange?: TimeRange;
 };
 
 /** Fila del chart: el valor a graficar según el modo, más todo lo que necesita el
@@ -99,9 +102,9 @@ type ChartRow = {
 
 type Hovered = { row: ChartRow; x: number; y: number };
 
-export function PortfolioEvolutionChart({ evolution, currency }: Props) {
+export function PortfolioEvolutionChart({ evolution, currency, initialRange }: Props) {
   const [granularity, setGranularity] = React.useState<Granularity>("daily");
-  const [range, setRange] = React.useState<TimeRange>(DEFAULT_TIME_RANGE);
+  const [range, setRange] = React.useState<TimeRange>(initialRange ?? DEFAULT_TIME_RANGE);
   const [typeFilter, setTypeFilter] = React.useState<InstrumentTypeSet>("all");
   const [tickerFilter, setTickerFilter] = React.useState<TickerSet>("all");
   const [mode, setMode] = React.useState<ViewMode>("value");
