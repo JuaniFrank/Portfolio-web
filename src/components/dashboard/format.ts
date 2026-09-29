@@ -30,6 +30,22 @@ export function formatSignedPercent(value: string | number, digits = 2): string 
   return `${sign}${n.toLocaleString("es-AR", { maximumFractionDigits: digits })}%`;
 }
 
+/** Importe con signo explícito: en un resultado el signo es la información principal. */
+export function formatSignedMoney(
+  value: string | number,
+  currency: ViewCurrency,
+  { compact = false }: { compact?: boolean } = {}
+): string {
+  const n = typeof value === "number" ? value : Number(value);
+  // Compacto = pesos sin centavos: en listas angostas (movers, KPIs) los centavos no
+  // aportan y son justo lo que hace que la fila no entre.
+  const formatted =
+    compact && currency === "ARS"
+      ? n.toLocaleString("es-AR", { style: "currency", currency, maximumFractionDigits: 0 })
+      : formatMoney(n, currency);
+  return `${n > 0 ? "+" : ""}${formatted}`;
+}
+
 export const CHART_COLORS = [
   "#3b82f6",
   "#ef4444",
