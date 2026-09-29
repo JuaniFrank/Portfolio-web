@@ -20,6 +20,7 @@ import { PeriodKpisPanel } from "./period-kpis-panel";
 import { PortfolioEvolutionChart } from "./portfolio-evolution";
 import { SectorBars } from "./sector-bars";
 import { TopMovers } from "./top-movers";
+import { UpcomingIncomePanel } from "./upcoming-income-panel";
 import { ValueByTickerBars } from "./value-bars";
 
 type Props = {
@@ -117,6 +118,8 @@ export function DashboardPage({ data }: Props) {
             losers={lastPoint?.losers ?? []}
             currency={currency}
           />
+
+          <UpcomingIncomePanel currency={currency} />
         </div>
       ) : (
         <div className="space-y-6">
