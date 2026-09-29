@@ -185,6 +185,13 @@ export type EvolutionPoint = {
   /** `true` cuando alguna posición de este punto usó un precio estimado (ver `positions`). */
   hasEstimatedPrices: boolean;
   /**
+   * `true` cuando el cierre de este punto vino (al menos en parte) del overlay en vivo
+   * (`liveInstrumentIds`) y no de un cierre `yahoo-eod` medido. Un punto en vivo es de
+   * hoy, pero todavía no es un cierre real — la UI lo etiqueta distinto (ver
+   * `buildPeriodKpis`, que usa esto para no llamarle "Hoy" a una rueda que no cerró).
+   */
+  isLive: boolean;
+  /**
    * `valueArs`/`valueUsd` del agregado menos la suma de `positions` (`value + income`).
    * Cubre renta sin `instrumentId` y ruido de redondeo — en la práctica, ~0. Ver
    * `buildViewRows`: se suma a la selección solo cuando cubre todos los `instruments`.
@@ -548,6 +555,10 @@ function buildSeries(inputs: EvolutionInputs, granularity: Granularity): Evoluti
     cumulativeNetFlowArs += netFlowArs;
     cumulativeNetFlowUsd += netFlowUsd;
 
+    // Alguna posición de este cierre vino del overlay en vivo: mismo criterio que
+    // `hasEstimatedPrices`, a nivel punto en vez de a nivel instrumento.
+    const isLive = valuation.positions.some((position) => position.priceIsLive);
+
     points.push({
       date: isoDay(close),
       valueArs: round2(valuation.valueArs),
@@ -570,6 +581,7 @@ function buildSeries(inputs: EvolutionInputs, granularity: Granularity): Evoluti
       losers,
       positions,
       hasEstimatedPrices: positions.some((position) => position.priceEstimated),
+      isLive,
       unattributedIncomeArs,
       unattributedIncomeUsd,
     });

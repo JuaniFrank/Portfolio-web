@@ -576,6 +576,40 @@ describe("buildEvolutionSeries — precio en vivo", () => {
     const mover = result.series.daily.at(-1)!.gainers.find((m) => m.ticker === "AAPL");
     expect(mover?.priceIsLive).toBe(true);
   });
+
+  it("marca `isLive` en el punto cuyo cierre usó el overlay en vivo, no en los anteriores", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+        flows: [flow(AAPL, "2026-01-01", 1000)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-02"), close: 120 },
+        ]),
+        liveInstrumentIds: new Set([AAPL]),
+        to: utc("2026-01-02"),
+      })
+    );
+
+    expect(result.series.daily[0]!.isLive).toBe(false);
+    expect(result.series.daily.at(-1)!.isLive).toBe(true);
+  });
+
+  it("sin overlay en vivo, ningún punto queda marcado `isLive`", () => {
+    const result = buildEvolutionSeries(
+      inputs({
+        trades: [trade(AAPL, "AAPL", "BUY", "2026-01-01", 10, 100)],
+        flows: [flow(AAPL, "2026-01-01", 1000)],
+        prices: new PriceIndex([
+          { instrumentId: AAPL, date: utc("2026-01-01"), close: 100 },
+          { instrumentId: AAPL, date: utc("2026-01-02"), close: 120 },
+        ]),
+        to: utc("2026-01-02"),
+      })
+    );
+
+    expect(result.series.daily.every((p) => p.isLive === false)).toBe(true);
+  });
 });
 
 describe("buildEvolutionSeries — detalle por posición", () => {
