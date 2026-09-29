@@ -15,10 +15,10 @@ import { TransactionType } from "@/lib/generated/prisma";
 import {
   buildBondCashflowOutlook,
   scaleFlowsToHolding,
-  type BondCashflowEntry,
   type BondTermsForProjection,
   type ProjectedFlow,
 } from "@/lib/bonds/cashflows";
+import { loadBondCashflowEntries } from "@/lib/bonds/cashflow-entries";
 import { computeBondAnalytics, type CashFlow } from "@/lib/bonds/analytics";
 import { resolveBondSchedule, type BondScheduleRow } from "@/lib/bonds/schedule-source";
 
@@ -89,9 +89,19 @@ export async function getBondsPageDataAction(): Promise<
     )
   );
 
-  const [priceResult, cclQuote] = await Promise.all([
+  const today = new Date();
+
+  const [priceResult, cclQuote, cashflowEntries] = await Promise.all([
     fetchOnPrices(tickers),
     fetchCclQuote(),
+    // Extracted shared loader (src/lib/bonds/cashflow-entries.ts): same
+    // holdings → schedule → scaled-flows pipeline as the per-holding
+    // analytics below, reused by the dashboard's "Próximos cobros" panel.
+    // Re-queries the same ON transactions independently — the analytics
+    // walk below needs its own resolveBondSchedule call anyway (YTM/duration
+    // need the unscaled, per-lámina flows), so sharing rows here would not
+    // avoid a second computation, only a second (cheap) query.
+    loadBondCashflowEntries({ userId: user.id }, today),
   ]);
 
   const cclMid = cclQuote?.mid ?? null;
@@ -146,8 +156,6 @@ export async function getBondsPageDataAction(): Promise<
   const v1Data = buildBondsPageData(trades, priceResult, cclMid);
 
   // Augment each holding with analytics and projected flows (v2)
-  const cashflowEntries: BondCashflowEntry[] = [];
-  const today = new Date();
   const holdingsV2: BondHoldingV2[] = v1Data.holdings.map((holding) => {
     const terms = bondTermsMap.get(holding.instrumentId);
     const storedSchedule = bondScheduleMap.get(holding.instrumentId);
@@ -164,10 +172,6 @@ export async function getBondsPageDataAction(): Promise<
       const scaledFlows = terms
         ? scaleFlowsToHolding(scheduleFlows, holding.nominalHeld, "100")
         : scheduleFlows;
-
-      if (terms) {
-        cashflowEntries.push({ ticker: holding.ticker, currencyCode: terms.currencyCode, flows: scaledFlows });
-      }
 
       const upcomingFlows: UpcomingFlow[] = scaledFlows.map((f) => ({
         date: f.date,
@@ -255,11 +259,6 @@ export async function getBondsPageDataAction(): Promise<
     // Display flows must reflect the actual position size, not the one-lámina
     // basis projectCashFlows() uses for YTM/duration — scale by nominalHeld.
     const scaledFlows = scaleFlowsToHolding(projectedFlows, holding.nominalHeld, terms.faceValue);
-    cashflowEntries.push({
-      ticker: holding.ticker,
-      currencyCode: terms.currencyCode,
-      flows: scaledFlows,
-    });
 
     const upcomingFlows: UpcomingFlow[] = scaledFlows.map((f) => ({
       date: f.date,
