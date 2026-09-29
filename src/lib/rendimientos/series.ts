@@ -23,6 +23,7 @@ import { prisma } from "@/lib/prisma";
 import type { InstrumentType } from "@/lib/generated/prisma";
 import { EOD_PRICE_SOURCE } from "@/lib/market/history-sync";
 import { fetchLiveOverlayInputs } from "@/lib/market/live-quotes";
+import { resolveSector } from "@/lib/sector";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { buildIndexBenchmark, buildInflationBenchmark } from "./benchmarks";
@@ -103,7 +104,15 @@ export async function buildPerformanceReport(
       netAmount: true,
       currencyCode: true,
       instrument: {
-        select: { id: true, ticker: true, name: true, type: true },
+        select: {
+          id: true,
+          ticker: true,
+          name: true,
+          type: true,
+          sector: true,
+          baseInstrument: { select: { sector: true } },
+          underlyingAsset: { select: { sector: true } },
+        },
       },
     },
   });
@@ -134,6 +143,23 @@ export async function buildPerformanceReport(
         ])
     ).values(),
   ];
+
+  // Sector por ticker (AD-3 fallback + `translateSector`, `@/lib/sector`) — no
+  // varía mes a mes, se resuelve una sola vez por instrumento elegible.
+  // Additive: no participa de la valuación ni de ningún número existente.
+  const sectorByTicker: Record<string, string> = {};
+  for (const tx of transactions) {
+    if (!tx.instrument || !ELIGIBLE_TYPES.has(tx.instrument.type)) continue;
+    if (sectorByTicker[tx.instrument.ticker]) continue;
+    sectorByTicker[tx.instrument.ticker] = resolveSector(
+      {
+        instrumentSector: tx.instrument.sector,
+        baseInstrumentSector: tx.instrument.baseInstrument?.sector,
+        underlyingAssetSector: tx.instrument.underlyingAsset?.sector,
+      },
+      tx.instrument.type
+    );
+  }
   const eligibleInstrumentIds = eligibleInstruments.map((instrument) => instrument.id);
 
   const [priceRows, cclRows, inflationRows, mervalRows, sp500Rows, eventRows, liveOverlay] =
@@ -450,6 +476,7 @@ export async function buildPerformanceReport(
     summary: buildSummary(rows),
     excludedHoldings: findExcludedHoldings(transactions),
     positions,
+    sectorByTicker,
     dataQuality: {
       partialMonths: rows.filter((row) => row.coverage === "partial").map((row) => row.month),
       missingCclMonths: rows.filter((row) => row.cclMonthEnd === null).map((row) => row.month),
@@ -697,6 +724,7 @@ function emptyReport(portfolioName: string): PerformanceReport {
     summary: emptySummary(),
     excludedHoldings: [],
     positions: [],
+    sectorByTicker: {},
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],

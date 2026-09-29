@@ -273,4 +273,10 @@ export type PerformanceReport = {
    * este es siempre el estado actual de la cartera.
    */
   positions: PositionTableRow[];
+  /**
+   * Sector traducido (fallback + `translateSector`, ver `@/lib/sector`) por
+   * ticker. No varía mes a mes — un mapa por ticker alcanza para agrupar la
+   * atribución "Por sector" sin duplicar el dato en cada posición mensual.
+   */
+  sectorByTicker: Record<string, string>;
 };
