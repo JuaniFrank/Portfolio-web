@@ -11,6 +11,7 @@ import {
   type HoldingForDashboard,
 } from "@/lib/dashboard/build";
 import { loadPortfolioEvolution } from "@/lib/dashboard/evolution-data";
+import { EMPTY_EVOLUTION, type PortfolioEvolution } from "@/lib/dashboard/evolution";
 import type { DashboardData } from "@/lib/dashboard/types";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { fetchOnPrices } from "@/lib/market/data912";
@@ -29,8 +30,19 @@ import {
   TRADE_TYPES,
 } from "@/lib/transactions/types";
 
+/**
+ * La serie histórica es la parte lenta del loader y solo la consumen el gráfico, los KPIs
+ * de período y los movimientos del día. Va aparte, como promesa sin esperar, para que la
+ * página pinte el resto (KPIs, composición, tablas) mientras la serie se sigue calculando.
+ * `data` es exactamente lo que antes devolvía el loader, menos `evolution`.
+ */
+export type DashboardPageData = {
+  data: Omit<DashboardData, "evolution">;
+  evolution: Promise<PortfolioEvolution>;
+};
+
 export async function getDashboardPageDataAction(): Promise<
-  DashboardData | { error: "unauthorized" }
+  DashboardPageData | { error: "unauthorized" }
 > {
   const user = await getCurrentUser();
   if (!user) return { error: "unauthorized" };
@@ -42,12 +54,24 @@ export async function getDashboardPageDataAction(): Promise<
   });
 
   if (!portfolio) {
-    return buildDashboardData({
-      portfolioName: "Sin portfolio",
-      rawHoldings: [],
-      cclRate: null,
-    });
+    return {
+      data: withoutEvolution(
+        buildDashboardData({ portfolioName: "Sin portfolio", rawHoldings: [], cclRate: null })
+      ),
+      evolution: Promise.resolve(EMPTY_EVOLUTION),
+    };
   }
+
+  // La serie de CCL se comparte entre la valuación de posiciones y la serie histórica
+  // para no leer dos veces la misma tabla. La serie arranca apenas hay CCL y corre en
+  // paralelo con el resto del loader; nadie la espera acá.
+  const cclSeriesPromise = loadCclSeries();
+  const evolution = cclSeriesPromise.then((series) =>
+    loadPortfolioEvolution([portfolio.id], series)
+  );
+  // Si el loader principal falla antes de consumirla, que no quede un rechazo sin
+  // manejar; quien sí la consuma (`use`) igual recibe el error.
+  evolution.catch(() => undefined);
 
   const [rows, cclRate, cclSeries, eventRows] = await Promise.all([
     prisma.transaction.findMany({
@@ -75,7 +99,7 @@ export async function getDashboardPageDataAction(): Promise<
       },
     }),
     resolveCclRate(),
-    loadCclSeries(),
+    cclSeriesPromise,
     prisma.corporateEvent.findMany({
       where: {
         instrument: {
@@ -158,12 +182,9 @@ export async function getDashboardPageDataAction(): Promise<
 
   const onTickers = Array.from(new Set(onBondTrades.map((t) => t.ticker.toUpperCase())));
 
-  // La serie histórica se reconstruye en paralelo con el refresco de cotizaciones:
-  // una es I/O de base y el otro de red, así que el costo se solapa en vez de sumarse.
-  const [{ prices }, onPriceResult, evolution] = await Promise.all([
+  const [{ prices }, onPriceResult] = await Promise.all([
     refreshLatestQuotes([...uniqueInstruments.values()]),
     onTickers.length > 0 ? fetchOnPrices(onTickers) : Promise.resolve({ quotes: new Map(), stale: false }),
-    loadPortfolioEvolution([portfolio.id], cclSeries),
   ]);
 
   // El costo de cada posición se replaya contra el CCL del día de cada compra; el valor
@@ -199,10 +220,18 @@ export async function getDashboardPageDataAction(): Promise<
     ...onPositions.map((p) => toDashboardHolding(p, sectorByInstrument.get(p.instrumentId) ?? null)),
   ];
 
-  return buildDashboardData({
-    portfolioName: portfolio.name,
-    rawHoldings,
-    cclRate,
+  return {
+    data: withoutEvolution(
+      buildDashboardData({ portfolioName: portfolio.name, rawHoldings, cclRate })
+    ),
     evolution,
-  });
+  };
+}
+
+/** `buildDashboardData` rellena `evolution` con la serie vacía; acá se descarta porque la
+ * real viaja aparte. */
+function withoutEvolution(data: DashboardData): Omit<DashboardData, "evolution"> {
+  const { evolution: _placeholder, ...rest } = data;
+  void _placeholder;
+  return rest;
 }
