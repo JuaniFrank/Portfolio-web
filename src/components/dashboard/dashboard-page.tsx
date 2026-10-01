@@ -1,11 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { BarChart3, Building2, Factory, Globe2, PieChart as PieChartIcon, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { buildDashboardNotices } from "@/lib/dashboard/dashboard-notices";
-import { buildPeriodKpis } from "@/lib/dashboard/period-kpis";
+import type { PortfolioEvolution } from "@/lib/dashboard/evolution";
 import type { TimeRange } from "@/lib/dashboard/time-range";
 import type { DashboardData } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
@@ -13,18 +12,22 @@ import { AllocationDonut } from "./allocation-donut";
 import { ChartCard } from "./chart-card";
 import { ConcentrationCard } from "./concentration-card";
 import { DashboardKpiCards } from "./dashboard-kpis";
-import { DayMovers } from "./day-movers";
 import { MARKET_COLORS, type ViewCurrency } from "./format";
-import { NoticesPanel } from "./notices-panel";
-import { PeriodKpisPanel } from "./period-kpis-panel";
-import { PortfolioEvolutionChart } from "./portfolio-evolution";
+import {
+  EvolutionChart,
+  EvolutionDayMovers,
+  EvolutionNotices,
+  EvolutionPeriodKpis,
+} from "./evolution-sections";
 import { SectorBars } from "./sector-bars";
 import { TopMovers } from "./top-movers";
 import { UpcomingIncomePanel } from "./upcoming-income-panel";
 import { ValueByTickerBars } from "./value-bars";
 
 type Props = {
-  data: DashboardData;
+  /** Todo lo que no depende de la serie histórica; esa llega aparte, como promesa. */
+  data: Omit<DashboardData, "evolution">;
+  evolution: Promise<PortfolioEvolution>;
 };
 
 /** El gráfico de evolución arranca en 3M en el dashboard: acá se mira el corto plazo,
@@ -33,7 +36,7 @@ const EVOLUTION_INITIAL_RANGE: TimeRange = { preset: "3M", from: null, to: null 
 
 type DashboardTab = "hoy" | "composicion";
 
-export function DashboardPage({ data }: Props) {
+export function DashboardPage({ data, evolution }: Props) {
   const [currency, setCurrency] = useState<ViewCurrency>("ARS");
   // Estado local, no en la URL: no hay ningún patrón de `useSearchParams` en el resto
   // del repo (solo `useRouter`/`usePathname`), y esta pestaña no se comparte ni se
@@ -41,22 +44,6 @@ export function DashboardPage({ data }: Props) {
   // beneficio marginal. Mismo criterio que ya usa el toggle de moneda de al lado.
   const [tab, setTab] = useState<DashboardTab>("hoy");
   const cclMissing = !data.cclRate;
-  const lastPoint = data.evolution.series.daily.at(-1) ?? null;
-
-  const periodKpis = useMemo(
-    () => buildPeriodKpis(data.evolution.series.daily, data.evolution.instruments, currency),
-    [data.evolution.series.daily, data.evolution.instruments, currency]
-  );
-
-  const notices = useMemo(
-    () =>
-      buildDashboardNotices({
-        cclMissing,
-        lastPoint,
-        concentration: data.concentration,
-      }),
-    [cclMissing, lastPoint, data.concentration]
-  );
 
   if (!data.hasData) {
     return (
@@ -83,14 +70,18 @@ export function DashboardPage({ data }: Props) {
 
       {tab === "hoy" ? (
         <div className="space-y-6">
-          <NoticesPanel notices={notices} />
+          <EvolutionNotices
+            evolution={evolution}
+            cclMissing={cclMissing}
+            concentration={data.concentration}
+          />
 
           <section className="space-y-3">
             <SectionTitle
               title="¿Qué pasó hoy?"
               description="Resultado de corto plazo: hoy, últimos 7 y 30 días, y en lo que va del año."
             />
-            <PeriodKpisPanel kpis={periodKpis} currency={currency} />
+            <EvolutionPeriodKpis evolution={evolution} currency={currency} />
           </section>
 
           <section className="space-y-3">
@@ -106,18 +97,14 @@ export function DashboardPage({ data }: Props) {
             description="Valor reconstruido cierre a cierre. Pasá el mouse por un punto para ver qué posiciones lo movieron."
             icon={<TrendingUp className="h-4 w-4" />}
           >
-            <PortfolioEvolutionChart
-              evolution={data.evolution}
+            <EvolutionChart
+              evolution={evolution}
               currency={currency}
               initialRange={EVOLUTION_INITIAL_RANGE}
             />
           </ChartCard>
 
-          <DayMovers
-            gainers={lastPoint?.gainers ?? []}
-            losers={lastPoint?.losers ?? []}
-            currency={currency}
-          />
+          <EvolutionDayMovers evolution={evolution} currency={currency} />
 
           <UpcomingIncomePanel currency={currency} />
         </div>
