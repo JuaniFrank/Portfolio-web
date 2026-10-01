@@ -1,7 +1,7 @@
 "use client";
 
 import { CalendarDays, RefreshCw } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Suspense, use, useMemo, useState } from "react";
 import { AttributionCard } from "@/components/rendimientos/attribution-card";
 import { DataNotices } from "@/components/rendimientos/data-notices";
 import { DrawdownChart } from "@/components/rendimientos/drawdown-chart";
@@ -13,18 +13,23 @@ import { PortfolioVsBenchmark } from "@/components/rendimientos/portfolio-vs-ben
 import { PositionsTable } from "@/components/rendimientos/positions-table";
 import { PortfolioEvolutionChart } from "@/components/dashboard/portfolio-evolution";
 import { formatDateLong } from "@/components/rendimientos/chart-utils";
+import { ChartBlockSkeleton } from "@/components/layout/page-skeletons";
 import { useCurrency } from "@/components/providers/currency-provider";
 import type { PortfolioEvolution } from "@/lib/dashboard/evolution";
 import type { PerformanceReport } from "@/lib/rendimientos/types";
 import { PERIODS, resolveView, sliceMonths, summaryForCurrency, type Period } from "@/lib/rendimientos/view";
 import { cn } from "@/lib/utils";
 
+/**
+ * `evolution` llega como promesa (se resuelve en el server, ver `rendimientos/page.tsx`)
+ * para que el reporte pinte sin esperar la serie diaria: el gráfico se suspende solo.
+ */
 export function RendimientosPage({
   report,
   evolution,
 }: {
   report: PerformanceReport;
-  evolution: PortfolioEvolution;
+  evolution: Promise<PortfolioEvolution>;
 }) {
   const [period, setPeriod] = useState<Period>("ALL");
   const { currency: globalCurrency, setCurrency } = useCurrency();
@@ -126,7 +131,9 @@ export function RendimientosPage({
 
           <div className="space-y-4">
             <div className="space-y-2">
-              <PortfolioEvolutionChart evolution={evolution} currency={currency} />
+              <Suspense fallback={<ChartBlockSkeleton heightClass="h-80" />}>
+                <EvolutionChart evolution={evolution} currency={currency} />
+              </Suspense>
               <p className="text-[11px] text-zinc-500">
                 Este gráfico incluye Obligaciones Negociables (ONs); las tablas mensuales de
                 abajo, por ahora, no.
@@ -150,6 +157,16 @@ export function RendimientosPage({
       )}
     </div>
   );
+}
+
+function EvolutionChart({
+  evolution,
+  currency,
+}: {
+  evolution: Promise<PortfolioEvolution>;
+  currency: "ARS" | "USD";
+}) {
+  return <PortfolioEvolutionChart evolution={use(evolution)} currency={currency} />;
 }
 
 function Header({ report }: { report: PerformanceReport }) {

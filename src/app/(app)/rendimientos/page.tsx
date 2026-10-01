@@ -1,4 +1,6 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
+import { KpiCardRowSkeleton, TableSkeleton } from "@/components/layout/page-skeletons";
 import { RendimientosPage } from "@/components/rendimientos/rendimientos-page";
 import { getCurrentUser } from "@/lib/auth";
 import { EMPTY_EVOLUTION, type PortfolioEvolution } from "@/lib/dashboard/evolution";
@@ -35,7 +37,12 @@ export default async function RendimientosRoutePage() {
 
   const portfolio = portfolios[0];
   if (!portfolio) {
-    return <RendimientosPage report={emptyReport("Sin portfolio")} evolution={EMPTY_EVOLUTION} />;
+    return (
+      <RendimientosPage
+        report={emptyReport("Sin portfolio")}
+        evolution={Promise.resolve(EMPTY_EVOLUTION)}
+      />
+    );
   }
 
   // El reporte mensual y la serie diaria de evolución son dos motores
@@ -43,11 +50,45 @@ export default async function RendimientosRoutePage() {
   // en paralelo, no uno reusando la carga de CCL del otro: `buildPerformanceReport`
   // no expone su serie de CCL para inyectarla, y forzar esa reutilización
   // encadenaría ambas cargas en vez de dejarlas concurrentes.
-  const [report, evolution] = await Promise.all([
-    safeBuildReport(portfolio.id, portfolio.name),
-    safeLoadEvolution(portfolio.id),
-  ]);
-  return <RendimientosPage report={report} evolution={evolution} />;
+  //
+  // Ninguna se espera acá: ambas arrancan ya y la página se streamea. El reporte vive
+  // detrás de un `<Suspense>` y la evolución viaja como promesa hasta el gráfico, que se
+  // suspende por su cuenta. Los `safe*` nunca rechazan, así que no hay promesa suelta
+  // que pueda tirar abajo el render.
+  const reportPromise = safeBuildReport(portfolio.id, portfolio.name);
+  const evolutionPromise = safeLoadEvolution(portfolio.id);
+
+  return (
+    <Suspense fallback={<ReportFallback portfolioName={portfolio.name} />}>
+      <ReportSection reportPromise={reportPromise} evolution={evolutionPromise} />
+    </Suspense>
+  );
+}
+
+async function ReportSection({
+  reportPromise,
+  evolution,
+}: {
+  reportPromise: Promise<PerformanceReport>;
+  evolution: Promise<PortfolioEvolution>;
+}) {
+  return <RendimientosPage report={await reportPromise} evolution={evolution} />;
+}
+
+/** Cabecera real (el nombre del portfolio ya se conoce) + esqueleto del cuerpo. */
+function ReportFallback({ portfolioName }: { portfolioName: string }) {
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center gap-2">
+        <h1 className="text-3xl font-semibold tracking-tight text-zinc-50">Rendimientos</h1>
+        <span className="rounded-md bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-300">
+          {portfolioName}
+        </span>
+      </div>
+      <KpiCardRowSkeleton count={4} />
+      <TableSkeleton rows={6} columns={6} />
+    </div>
+  );
 }
 
 /**
