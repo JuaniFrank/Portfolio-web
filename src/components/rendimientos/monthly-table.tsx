@@ -205,6 +205,8 @@ function PositionsDetail({
   netInvested: number | undefined;
   currency: ViewCurrency;
 }) {
+  // Las vendidas durante el mes van después de las abiertas: son parte del resultado del
+  // mes pero ya no son tenencia. El vacío solo aplica si no hay ni unas ni otras.
   if (positions.length === 0) {
     return (
       <p className="text-xs text-zinc-500">
@@ -212,6 +214,11 @@ function PositionsDetail({
       </p>
     );
   }
+
+  const ordered = [
+    ...positions.filter((p) => !p.closed).sort((a, b) => b.valueArs - a.valueArs),
+    ...positions.filter((p) => p.closed).sort((a, b) => a.ticker.localeCompare(b.ticker)),
+  ];
 
   return (
     <div className="space-y-2">
@@ -266,7 +273,7 @@ function PositionsDetail({
             </Th>
             <Th
               align="right"
-              hint="Ganancia/pérdida de ESTE ticker durante ESTE mes: precio de cierre vs. precio de cierre del mes anterior (o precio de compra si es nueva), neto de compras/ventas del ticker en el mes. Sumando esta columna en todas las filas da “Ganancia mes”, menos la renta cobrada."
+              hint="Ganancia/pérdida de ESTE ticker durante ESTE mes: precio de cierre vs. precio de cierre del mes anterior (o precio de compra si es nueva), neto de compras/ventas del ticker en el mes. En una posición vendida es lo cobrado menos lo que valía al empezar el mes. Sumando esta columna en todas las filas da “Ganancia mes”, menos la renta cobrada."
             >
               Result. mes
             </Th>
@@ -276,9 +283,7 @@ function PositionsDetail({
           </tr>
         </thead>
         <tbody>
-          {[...positions]
-            .sort((a, b) => b.valueArs - a.valueArs)
-            .map((position) => {
+          {ordered.map((position) => {
               const figures = positionFigures(position, currency);
               return (
               <tr key={position.instrumentId} className="border-t border-zinc-800/50">
@@ -291,13 +296,16 @@ function PositionsDetail({
                       </span>
                     ) : null}
                     {position.priceIsLive ? <LiveBadge /> : null}
+                    {position.closed ? <SoldBadge /> : null}
                   </span>
                   <span className="block truncate text-[10px] text-zinc-500">
                     {position.instrumentName}
                   </span>
                 </Td>
                 <Td align="right" className="text-zinc-400">
-                  {position.quantity.toLocaleString("es-AR", { maximumFractionDigits: 4 })}
+                  {position.closed
+                    ? EMPTY_VALUE
+                    : position.quantity.toLocaleString("es-AR", { maximumFractionDigits: 4 })}
                 </Td>
                 <Td align="right" className="text-zinc-400">
                   {formatMoneyOrEmpty(figures.price, currency)}
@@ -334,6 +342,18 @@ function PositionsDetail({
   );
 }
 
+/** Posición vendida por completo durante el mes: ya no es tenencia, solo resultado. */
+function SoldBadge() {
+  return (
+    <span
+      title="Vendiste toda la posición durante este mes"
+      className="inline-flex items-center rounded-full border border-zinc-600/40 bg-zinc-700/30 px-1.5 text-[9px] font-medium uppercase tracking-wide text-zinc-400"
+    >
+      Vendida
+    </span>
+  );
+}
+
 /** Precio intradiario de data912: el cierre medido lo reemplaza cuando corre el backfill. */
 export function LiveBadge() {
   return (
@@ -347,7 +367,7 @@ export function LiveBadge() {
   );
 }
 
-function Th({
+export function Th({
   children,
   align = "left",
   hint,
@@ -381,7 +401,7 @@ function Th({
   );
 }
 
-function Td({
+export function Td({
   children,
   align = "left",
   className,
