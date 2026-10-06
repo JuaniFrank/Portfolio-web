@@ -43,7 +43,7 @@ import {
 } from "@/lib/rendimientos/timeline";
 import type { PriceIndex, TimeSeries } from "@/lib/rendimientos/price-series";
 import { subPeriodReturn } from "@/lib/rendimientos/returns";
-import type { MonthCoverage, PositionDetail } from "@/lib/rendimientos/types";
+import type { MonthCoverage, PositionDetail, ViewCurrency } from "@/lib/rendimientos/types";
 import {
   type DatedAmount,
   type PortfolioValuation,
@@ -127,6 +127,47 @@ export type EvolutionMover = {
    */
   hadFlow: boolean;
 };
+
+export type MoverSortMode = "nominal" | "percent";
+
+/**
+ * Ordena los movers del período por monto nominal (ARS o USD según la moneda activa)
+ * o por variación porcentual de precio (`pricePercent`).
+ *
+ * En ganadores:
+ * - Nominal: mayor ganancia monetaria primero.
+ * - Porcentual: mayor suba porcentual primero.
+ *
+ * En perdedores:
+ * - Nominal: mayor pérdida monetaria primero (el valor más negativo primero).
+ * - Porcentual: mayor caída porcentual primero (el porcentaje más negativo primero).
+ *
+ * Si `pricePercent` es null (no hay cierre previo con qué comparar), se ubica al final.
+ * Empates se resuelven por ticker alfabético.
+ */
+export function sortEvolutionMovers(
+  movers: EvolutionMover[],
+  side: "gainers" | "losers",
+  mode: MoverSortMode,
+  currency: ViewCurrency
+): EvolutionMover[] {
+  return [...movers].sort((a, b) => {
+    if (mode === "nominal") {
+      const aVal = currency === "ARS" ? a.pnlArs : a.pnlUsd;
+      const bVal = currency === "ARS" ? b.pnlArs : b.pnlUsd;
+      if (aVal === bVal) return a.ticker.localeCompare(b.ticker);
+      return side === "gainers" ? bVal - aVal : aVal - bVal;
+    }
+
+    const aPct = a.pricePercent;
+    const bPct = b.pricePercent;
+    if (aPct === null && bPct === null) return a.ticker.localeCompare(b.ticker);
+    if (aPct === null) return 1;
+    if (bPct === null) return -1;
+    if (aPct === bPct) return a.ticker.localeCompare(b.ticker);
+    return side === "gainers" ? bPct - aPct : aPct - bPct;
+  });
+}
 
 /** Detalle de una posición en un punto de la serie: solo lo que hace falta para el
  * filtro por ticker y el footnote de precios estimados de la UI. */
