@@ -1,5 +1,6 @@
 import type { InstrumentType } from "@/lib/generated/prisma";
 import type { PositionTableRow } from "./position-rows";
+import type { RealizedSale } from "./realized-sales";
 
 export type ViewCurrency = "ARS" | "USD";
 
@@ -105,6 +106,11 @@ export type PositionDetail = {
  * que no se atribuye por ticker); sumar `unrealizedPnlArs` nunca coincide.
  */
 export type MonthlyPositionDetail = PositionDetail & {
+  /**
+   * `true` cuando la posición se vendió por completo durante el mes: cantidad y valor en
+   * cero al cierre. Existe para que `monthGainArs` siga sumando a la ganancia del mes.
+   */
+  closed: boolean;
   /** Ganancia/pérdida en ARS de este ticker durante el mes. */
   monthGainArs: number;
   /**
@@ -279,4 +285,9 @@ export type PerformanceReport = {
    * atribución "Por sector" sin duplicar el dato en cada posición mensual.
    */
   sectorByTicker: Record<string, string>;
+  /**
+   * Todas las ventas de instrumentos elegibles, contra costo promedio, ascendentes por
+   * fecha. La UI las recorta al período visible. Ver `realized-sales.ts`.
+   */
+  realizedSales: RealizedSale[];
 };

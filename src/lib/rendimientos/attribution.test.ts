@@ -29,6 +29,7 @@ function position(overrides: Partial<MonthlyPositionDetail>): MonthlyPositionDet
     unrealizedReturnPctUsd: null,
     priceIsStale: false,
     priceIsLive: false,
+    closed: false,
     monthGainArs: 0,
     monthReturnPct: null,
     monthGainUsd: null,
