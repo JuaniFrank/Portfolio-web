@@ -74,6 +74,7 @@ function report(months: MonthlyPerformanceRow[], benchmarks: BenchmarkSeries[] =
     excludedHoldings: [],
     positions: [],
     sectorByTicker: {},
+    realizedSales: [],
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],
@@ -304,6 +305,7 @@ describe("positionFigures", () => {
       unrealizedReturnPctUsd: 0,
       priceIsStale: false,
       priceIsLive: false,
+      closed: false,
       monthGainArs: 500,
       monthReturnPct: 50,
       monthGainUsd: 0,
@@ -311,6 +313,33 @@ describe("positionFigures", () => {
       ...overrides,
     };
   }
+
+  it("una posición cerrada no tiene precio, costo ni no realizado, pero conserva el resultado del mes", () => {
+    const closed = position({
+      closed: true,
+      quantity: 0,
+      priceArs: 0,
+      valueArs: 0,
+      valueUsd: 0,
+      costBasisArs: 0,
+      costBasisUsd: 0,
+      unrealizedPnlArs: 0,
+      unrealizedPnlUsd: 0,
+      monthGainArs: 200,
+      monthGainUsd: 3,
+    });
+
+    for (const currency of ["ARS", "USD"] as const) {
+      const figures = positionFigures(closed, currency);
+      expect(figures.price).toBeNull();
+      expect(figures.costBasis).toBeNull();
+      expect(figures.unrealizedPnl).toBeNull();
+      expect(figures.unrealizedReturnPct).toBeNull();
+      expect(figures.value).toBe(0);
+    }
+    expect(positionFigures(closed, "ARS").monthGain).toBe(200);
+    expect(positionFigures(closed, "USD").monthGain).toBe(3);
+  });
 
   it("devuelve las cifras en pesos tal cual", () => {
     const figures = positionFigures(position(), "ARS");

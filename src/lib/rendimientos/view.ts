@@ -274,6 +274,12 @@ export function positionFigures(
   position: MonthlyPositionDetail,
   currency: ViewCurrency
 ): PositionFigures {
+  // Una posición vendida por completo no tiene precio, costo ni no realizado que mostrar:
+  // solo su resultado del mes. Se resuelve acá para que la UI no decida qué es "vacío".
+  const closedOverrides = position.closed
+    ? { price: null, costBasis: null, unrealizedPnl: null, unrealizedReturnPct: null }
+    : {};
+
   if (currency === "ARS") {
     return {
       price: position.priceArs,
@@ -283,6 +289,7 @@ export function positionFigures(
       unrealizedReturnPct: position.unrealizedReturnPct,
       monthGain: position.monthGainArs,
       monthReturnPct: position.monthReturnPct,
+      ...closedOverrides,
     };
   }
 
@@ -294,5 +301,6 @@ export function positionFigures(
     unrealizedReturnPct: position.unrealizedReturnPctUsd,
     monthGain: position.monthGainUsd,
     monthReturnPct: position.monthReturnPctUsd,
+    ...closedOverrides,
   };
 }
