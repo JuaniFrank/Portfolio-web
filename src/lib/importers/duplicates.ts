@@ -167,6 +167,16 @@ function contentKey(c: Comparable): string {
   ].join("|");
 }
 
+/**
+ * The incoming row as the commit would persist it. The commit only links an
+ * instrument when the row has both a ticker and an instrument type, so a row
+ * whose ticker comes from the description alone (e.g. "Ret IIGG y BBPP - GGAL")
+ * is stored with no ticker at all.
+ */
+function asStored(parsed: ParsedImportRowData): Comparable {
+  return { ...parsed, ticker: parsed.instrumentType ? parsed.ticker : null };
+}
+
 function toMatch(e: ExistingTransactionForMatch): DuplicateRow["existing"] {
   return {
     transactionId: e.transactionId,
@@ -218,7 +228,7 @@ export function matchImportDuplicates(
   for (const row of rows) {
     if (matches.has(row.rowNumber)) continue;
     const { externalId } = row.parsed;
-    const candidate = byContent.get(contentKey(row.parsed))?.find(
+    const candidate = byContent.get(contentKey(asStored(row.parsed)))?.find(
       (e) =>
         !consumed.has(e.transactionId) &&
         (!externalId || !e.externalId || externalId === e.externalId)

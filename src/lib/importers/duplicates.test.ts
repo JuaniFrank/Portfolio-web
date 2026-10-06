@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TransactionType } from "@/lib/generated/prisma";
+import { InstrumentType, TransactionType } from "@/lib/generated/prisma";
 import {
   matchImportDuplicates,
   type ExistingTransactionForMatch,
@@ -13,7 +13,7 @@ function parsed(overrides: Partial<ParsedImportRowData> = {}): ParsedImportRowDa
     tradeDate: "2026-03-10T00:00:00.000Z",
     settlementDate: "",
     ticker: "AAPL",
-    instrumentType: null,
+    instrumentType: InstrumentType.CEDEAR,
     quantity: "10",
     price: "100",
     currencyCode: "ARS",
@@ -141,5 +141,27 @@ describe("matchImportDuplicates", () => {
       [existing("a", { externalId: null })]
     );
     expect(result).toHaveLength(1);
+  });
+
+  it("matches a withholding whose ticker only comes from the description", () => {
+    // Without an instrument type the commit links no instrument, so the stored ticker is null.
+    const withholding = {
+      type: TransactionType.TAX_WITHHOLDING,
+      ticker: "GGAL",
+      instrumentType: null,
+      quantity: "0",
+      netAmount: "-15.92",
+    };
+    const result = matchImportDuplicates(
+      [incoming(127, withholding)],
+      [existing("a", { ...withholding, ticker: null, quantity: "0", netAmount: "-15.92" })]
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]?.matchedBy).toBe("content");
+  });
+
+  it("does not flag a different ticker when the instrument is linked", () => {
+    const result = matchImportDuplicates([incoming(2)], [existing("a", { ticker: "MSFT" })]);
+    expect(result).toHaveLength(0);
   });
 });
