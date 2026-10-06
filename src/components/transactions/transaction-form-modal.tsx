@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
@@ -8,7 +8,9 @@ import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import {
   createTransactionAction,
+  getTransactionForEditAction,
   searchInstrumentsAction,
+  updateTransactionAction,
   type TransactionInstrumentOption,
 } from "@/app/actions/transactions";
 import {
@@ -56,11 +58,51 @@ function formatAmount(value: number, currency: string) {
   return value.toLocaleString("es-AR", { style: "currency", currency });
 }
 
+const EMPTY_FORM = {
+  ticker: "",
+  side: "BUY",
+  currencyCode: "ARS",
+  quantity: "",
+  price: "",
+  fees: "0",
+  taxes: "0",
+} as const;
+
 export function NewTransactionDialog() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <Button onClick={() => setOpen(true)} variant="outline" className="shrink-0">
+        <Plus className="mr-2 h-4 w-4" />
+        Nueva operación
+      </Button>
+      <TransactionFormDialog open={open} onOpenChange={setOpen} />
+    </>
+  );
+}
+
+type TransactionFormDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** When set, the dialog edits this transaction instead of creating one. */
+  transactionId?: string;
+};
+
+export function TransactionFormDialog({
+  open,
+  onOpenChange,
+  transactionId,
+}: TransactionFormDialogProps) {
   const router = useRouter();
   const listId = useId();
-  const [open, setOpen] = useState(false);
+  const isEdit = transactionId != null;
+  const setOpen = onOpenChange;
   const [pending, setPending] = useState(false);
+  const [loading, setLoading] = useState(false);
+  // Ticker the transaction was loaded with: while it is unchanged the catalog
+  // search must not overwrite the stored instrument type / currency.
+  const loadedTicker = useRef<string | null>(null);
   const [instruments, setInstruments] = useState<TransactionInstrumentOption[]>([]);
 
   const {
@@ -72,16 +114,7 @@ export function NewTransactionDialog() {
     formState: { errors },
   } = useForm<NewTransactionInput>({
     resolver: zodResolver(newTransactionInputSchema),
-    defaultValues: {
-      ticker: "",
-      side: "BUY",
-      currencyCode: "ARS",
-      tradeDate: todayIso(),
-      quantity: "",
-      price: "",
-      fees: "0",
-      taxes: "0",
-    },
+    defaultValues: { ...EMPTY_FORM, tradeDate: todayIso() },
   });
 
   const side = watch("side");
@@ -105,7 +138,7 @@ export function NewTransactionDialog() {
       const results = await searchInstrumentsAction(q);
       setInstruments(results);
       const exact = results.find((i) => i.ticker.toUpperCase() === q.toUpperCase());
-      if (exact) {
+      if (exact && q.toUpperCase() !== loadedTicker.current) {
         setValue("instrumentType", exact.type, { shouldValidate: true });
         if (exact.currencyCode === "ARS" || exact.currencyCode === "USD") {
           setValue("currencyCode", exact.currencyCode, { shouldValidate: true });
@@ -123,31 +156,46 @@ export function NewTransactionDialog() {
     return side === "BUY" ? gross + costs : gross - costs;
   }, [quantity, price, fees, taxes, side]);
 
-  function handleOpenChange(next: boolean) {
-    if (next) {
-      reset({
-        ticker: "",
-        side: "BUY",
-        currencyCode: "ARS",
-        tradeDate: todayIso(),
-        quantity: "",
-        price: "",
-        fees: "0",
-        taxes: "0",
-      });
+  // Reset on every open: blank for create, prefilled from the DB for edit.
+  useEffect(() => {
+    if (!open) return;
+    loadedTicker.current = null;
+    if (transactionId == null) {
+      reset({ ...EMPTY_FORM, tradeDate: todayIso() });
+      return;
     }
-    setOpen(next);
-  }
+    let cancelled = false;
+    setLoading(true);
+    void getTransactionForEditAction(transactionId)
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.ok) {
+          toast.error(result.error);
+          setOpen(false);
+          return;
+        }
+        loadedTicker.current = result.input.ticker.toUpperCase();
+        reset(result.input);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, transactionId, reset, setOpen]);
 
   async function onSubmit(data: NewTransactionInput) {
     setPending(true);
     try {
-      const result = await createTransactionAction(data);
+      const result = isEdit
+        ? await updateTransactionAction(transactionId, data)
+        : await createTransactionAction(data);
       if (!result.ok) {
         toast.error(result.error);
         return;
       }
-      toast.success("Operación registrada");
+      toast.success(isEdit ? "Operación actualizada" : "Operación registrada");
       setOpen(false);
       router.refresh();
     } finally {
@@ -157,16 +205,11 @@ export function NewTransactionDialog() {
 
   return (
     <>
-      <Button onClick={() => handleOpenChange(true)} variant="outline" className="shrink-0">
-        <Plus className="mr-2 h-4 w-4" />
-        Nueva operación
-      </Button>
-
-      <Dialog open={open} onOpenChange={handleOpenChange}>
+      <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-lg">
           <form onSubmit={handleSubmit(onSubmit)}>
             <DialogHeader>
-              <DialogTitle>Nueva operación</DialogTitle>
+              <DialogTitle>{isEdit ? "Editar operación" : "Nueva operación"}</DialogTitle>
             </DialogHeader>
 
             <div className="mt-4 space-y-4">
@@ -365,8 +408,8 @@ export function NewTransactionDialog() {
               >
                 Cancelar
               </Button>
-              <Button type="submit" disabled={pending}>
-                {pending ? "Guardando…" : "Registrar operación"}
+              <Button type="submit" disabled={pending || loading}>
+                {pending ? "Guardando…" : isEdit ? "Guardar cambios" : "Registrar operación"}
               </Button>
             </DialogFooter>
           </form>
