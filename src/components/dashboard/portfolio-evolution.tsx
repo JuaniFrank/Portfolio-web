@@ -25,11 +25,12 @@ import {
   returnToneClass,
 } from "@/components/rendimientos/chart-utils";
 import { ChartPlaceholder } from "@/components/rendimientos/chart-tooltip";
-import type {
-  EvolutionInstrument,
-  EvolutionMover,
-  EvolutionPoint,
-  PortfolioEvolution,
+import {
+  type EvolutionInstrument,
+  type EvolutionMover,
+  type EvolutionPoint,
+  type PortfolioEvolution,
+  MOVERS_PER_SIDE,
 } from "@/lib/dashboard/evolution";
 import {
   buildViewRows,
@@ -828,8 +829,16 @@ function EvolutionTooltip({
 
       {row.gainers.length > 0 || row.losers.length > 0 ? (
         <div className="mt-2 grid grid-cols-2 gap-x-4 border-t border-zinc-800 pt-2">
-          <MoverColumn title="Ganaron" movers={row.gainers} currency={currency} />
-          <MoverColumn title="Perdieron" movers={row.losers} currency={currency} />
+          <MoverColumn
+            title="Ganaron"
+            movers={row.gainers.slice(0, MOVERS_PER_SIDE)}
+            currency={currency}
+          />
+          <MoverColumn
+            title="Perdieron"
+            movers={row.losers.slice(0, MOVERS_PER_SIDE)}
+            currency={currency}
+          />
         </div>
       ) : (
         <p className="mt-2 border-t border-zinc-800 pt-2 text-[11px] text-zinc-500">

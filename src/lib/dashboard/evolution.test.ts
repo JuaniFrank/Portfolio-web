@@ -5,7 +5,9 @@ import type { DatedAmount } from "@/lib/rendimientos/valuation";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
 import {
   buildEvolutionSeries,
+  sortEvolutionMovers,
   type EvolutionInputs,
+  type EvolutionMover,
   type InstrumentFlow,
 } from "./evolution";
 
@@ -271,7 +273,7 @@ describe("buildEvolutionSeries — ranking de movers", () => {
     expect(second.losers[0]!.pricePercent).toBeCloseTo(-20, 6);
   });
 
-  it("recorta cada lado a 4 posiciones", () => {
+  it("conserva todas las posiciones que suben y bajan sin truncar", () => {
     const many = Array.from({ length: 12 }, (_, i) => ({
       id: `inst-${i}`,
       ticker: `T${i}`,
@@ -294,8 +296,10 @@ describe("buildEvolutionSeries — ranking de movers", () => {
     );
 
     const point = wide.series.daily[1]!;
-    expect(point.gainers).toHaveLength(4);
-    expect(point.losers).toHaveLength(4);
+    expect(point.gainers).toHaveLength(6);
+    expect(point.losers).toHaveLength(6);
+    expect(point.gainers[0]!.ticker).toBe("T5");
+    expect(point.losers[0]!.ticker).toBe("T11");
   });
 });
 
@@ -895,3 +899,78 @@ describe("buildEvolutionSeries — instruments y trades", () => {
     ]);
   });
 });
+
+describe("sortEvolutionMovers", () => {
+  const mover = (
+    ticker: string,
+    pnlArs: number,
+    pnlUsd: number,
+    pricePercent: number | null
+  ): EvolutionMover => ({
+    ticker,
+    pnlArs,
+    pnlUsd,
+    pricePercent,
+    priceIsStale: false,
+    priceIsLive: false,
+    hadFlow: false,
+  });
+
+  const gainers: EvolutionMover[] = [
+    mover("AAPL", 1000, 1.0, 2.5),
+    mover("GGAL", 500, 0.5, 10.0),
+    mover("YPFD", 800, 1.2, 5.0),
+    mover("MELI", 1200, 0.8, null),
+  ];
+
+  const losers: EvolutionMover[] = [
+    mover("TSLA", -5000, -5.0, -2.0),
+    mover("BMA", -2000, -3.0, -15.0),
+    mover("CEPU", -1000, -1.0, -8.0),
+    mover("PAMP", -3000, -2.0, null),
+  ];
+
+  it("ordena ganadores por monto nominal en ARS de mayor a menor", () => {
+    const sorted = sortEvolutionMovers(gainers, "gainers", "nominal", "ARS");
+    expect(sorted.map((m) => m.ticker)).toEqual(["MELI", "AAPL", "YPFD", "GGAL"]);
+  });
+
+  it("ordena ganadores por monto nominal en USD de mayor a menor", () => {
+    const sorted = sortEvolutionMovers(gainers, "gainers", "nominal", "USD");
+    expect(sorted.map((m) => m.ticker)).toEqual(["YPFD", "AAPL", "MELI", "GGAL"]);
+  });
+
+  it("ordena ganadores por porcentaje de mayor a menor, dejando nulos al final", () => {
+    const sorted = sortEvolutionMovers(gainers, "gainers", "percent", "ARS");
+    expect(sorted.map((m) => m.ticker)).toEqual(["GGAL", "YPFD", "AAPL", "MELI"]);
+  });
+
+  it("ordena perdedores por monto nominal de mayor pérdida a menor (más negativo primero)", () => {
+    const sorted = sortEvolutionMovers(losers, "losers", "nominal", "ARS");
+    expect(sorted.map((m) => m.ticker)).toEqual(["TSLA", "PAMP", "BMA", "CEPU"]);
+  });
+
+  it("ordena perdedores por monto nominal en USD más negativo primero", () => {
+    const sorted = sortEvolutionMovers(losers, "losers", "nominal", "USD");
+    expect(sorted.map((m) => m.ticker)).toEqual(["TSLA", "BMA", "PAMP", "CEPU"]);
+  });
+
+  it("ordena perdedores por porcentaje de mayor caída a menor caída, dejando nulos al final", () => {
+    const sorted = sortEvolutionMovers(losers, "losers", "percent", "ARS");
+    expect(sorted.map((m) => m.ticker)).toEqual(["BMA", "CEPU", "TSLA", "PAMP"]);
+  });
+
+  it("desempata por ticker alfabético ante igualdad", () => {
+    const ties: EvolutionMover[] = [
+      mover("ZETA", 500, 0.5, 3.0),
+      mover("ALFA", 500, 0.5, 3.0),
+      mover("BETA", 500, 0.5, 3.0),
+    ];
+    const sortedNominal = sortEvolutionMovers(ties, "gainers", "nominal", "ARS");
+    expect(sortedNominal.map((m) => m.ticker)).toEqual(["ALFA", "BETA", "ZETA"]);
+
+    const sortedPercent = sortEvolutionMovers(ties, "gainers", "percent", "ARS");
+    expect(sortedPercent.map((m) => m.ticker)).toEqual(["ALFA", "BETA", "ZETA"]);
+  });
+});
+
