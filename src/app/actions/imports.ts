@@ -10,10 +10,10 @@ import {
 } from "@/lib/importers/commit-import";
 import { enrichUsedInstruments } from "@/lib/market/yahoo-catalog";
 import {
-  toDuplicateRow,
+  matchImportDuplicates,
   type DuplicateBatch,
   type DuplicateCheckResult,
-  type DuplicateRow,
+  type ExistingTransactionForMatch,
 } from "@/lib/importers/duplicates";
 import { buildImportIdempotencyHash } from "@/lib/importers/idempotency";
 import type { ImportedTransactionRow } from "@/lib/imports/filters";
@@ -149,48 +149,85 @@ export async function checkImportDuplicatesAction(
     }),
   }));
 
-  const existing = await prisma.transaction.findMany({
-    where: { idempotencyHash: { in: hashed.map((h) => h.idempotencyHash) } },
-    orderBy: { idempotencyVersion: "desc" },
+  // Candidates: anything registered in the account within the file's date range
+  // (imported or manual). Padded by a day so UTC-vs-local time of day never
+  // pushes a same-day movement outside the window.
+  const times = hashed.map((h) => new Date(h.parsed.tradeDate).getTime()).filter(Number.isFinite);
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const candidates =
+    times.length === 0
+      ? []
+      : await prisma.transaction.findMany({
+          where: {
+            brokerAccountId: accountId,
+            tradeDate: {
+              gte: new Date(Math.min(...times) - DAY_MS),
+              lte: new Date(Math.max(...times) + DAY_MS),
+            },
+          },
+          select: {
+            id: true,
+            idempotencyHash: true,
+            idempotencyVersion: true,
+            createdAt: true,
+            tradeDate: true,
+            type: true,
+            currencyCode: true,
+            quantity: true,
+            netAmount: true,
+            externalId: true,
+            instrument: { select: { ticker: true } },
+            importBatch: {
+              select: { fileName: true, broker: { select: { name: true } } },
+            },
+          },
+        });
+
+  // Hash collisions can also hit rows outside the date window (same hash, edited
+  // date) — those still violate the unique on commit, so include them too.
+  const seen = new Set(candidates.map((c) => c.id));
+  const byHashOnly = await prisma.transaction.findMany({
+    where: {
+      idempotencyHash: { in: hashed.map((h) => h.idempotencyHash) },
+      id: { notIn: [...seen] },
+    },
     select: {
       id: true,
       idempotencyHash: true,
       idempotencyVersion: true,
       createdAt: true,
+      tradeDate: true,
+      type: true,
+      currencyCode: true,
+      quantity: true,
+      netAmount: true,
+      externalId: true,
+      instrument: { select: { ticker: true } },
       importBatch: {
         select: { fileName: true, broker: { select: { name: true } } },
       },
     },
   });
 
-  // Un hash puede tener varias versiones (re-imports forzados previos). Nos
-  // quedamos con la más alta para poder calcular la próxima.
-  const byHash = new Map<string, DuplicateRow["existing"]>();
-  for (const e of existing) {
-    const prev = byHash.get(e.idempotencyHash);
-    if (prev && prev.maxVersion >= e.idempotencyVersion) continue;
-    byHash.set(e.idempotencyHash, {
-      transactionId: e.id,
-      createdAt: e.createdAt.toISOString(),
-      fileName: e.importBatch?.fileName ?? null,
-      brokerName: e.importBatch?.broker.name ?? null,
-      maxVersion: e.idempotencyVersion,
-    });
-  }
+  // Same shape as the parsed rows: commit stores quantity/netAmount/tradeDate
+  // as parsed (no sign flip), and the ticker lives on the instrument relation.
+  const existing: ExistingTransactionForMatch[] = [...candidates, ...byHashOnly].map((t) => ({
+    transactionId: t.id,
+    idempotencyHash: t.idempotencyHash,
+    idempotencyVersion: t.idempotencyVersion,
+    createdAt: t.createdAt.toISOString(),
+    fileName: t.importBatch?.fileName ?? null,
+    brokerName: t.importBatch?.broker.name ?? null,
+    tradeDate: t.tradeDate.toISOString(),
+    type: t.type,
+    ticker: t.instrument?.ticker ?? null,
+    currencyCode: t.currencyCode,
+    quantity: t.quantity.toString(),
+    netAmount: t.netAmount.toString(),
+    externalId: t.externalId,
+  }));
 
-  const duplicateRows: DuplicateRow[] = [];
-  for (const h of hashed) {
-    const match = byHash.get(h.idempotencyHash);
-    if (!match) continue;
-    duplicateRows.push(
-      toDuplicateRow({
-        rowNumber: h.rowNumber,
-        idempotencyHash: h.idempotencyHash,
-        parsed: h.parsed,
-        existing: match,
-      })
-    );
-  }
+  const duplicateRows = matchImportDuplicates(hashed, existing);
 
   return {
     sameFileBatches,
