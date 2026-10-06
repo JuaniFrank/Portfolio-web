@@ -69,4 +69,10 @@ Strict TDD on (global config). Runner: `pnpm test` (vitest). Matcher: RED → GR
   instead of `"import"` (otherwise a re-uploaded file would be double-inserted). `tsc` clean, eslint 0 errors.
 - Known minor: an edited flagged row keeps a possibly stale flag; quantities/amounts with >8 decimals never
   match the stored `Decimal(20,8)` (false negative); stale header comment in `duplicates.ts`.
-- Next: user browser check with an overlapping export.
+- Browser check (user, 2026-10-06): withholdings already registered were not flagged. Root cause (verified in DB):
+  "Movimiento Manual / N/D Ret IIGG y BBPP - GGAL" rows have a ticker from the description but no instrument
+  type, so the commit links no instrument (`commit-import.ts` `instrumentIdFor`) and the stored ticker is null;
+  the matcher compared the parsed "GGAL" against null. Fix: content key uses the row as stored
+  (`asStored`: ticker only when `instrumentType` is set). RED observed (new withholding test failed), GREEN:
+  `pnpm test` 606/606, `tsc` clean, eslint clean. Test fixture default now has an instrument type (realistic).
+- Next: user re-checks the same file in the browser.
