@@ -4,7 +4,9 @@ import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   CheckCircle2,
+  Copy,
   FileSpreadsheet,
   History,
   Layers,
@@ -22,7 +24,6 @@ import {
   type ImportContextData,
 } from "@/app/actions/imports";
 import { AutoClearCard } from "@/components/imports/auto-clear-card";
-import { DuplicateResolutionSection } from "@/components/imports/duplicate-resolution-section";
 import { ImportUploadStep } from "@/components/imports/import-upload-step";
 import { UnifiedReviewStep } from "@/components/imports/unified-review-step";
 import { Badge } from "@/components/ui/badge";
@@ -35,13 +36,12 @@ import {
   type AutoClearReason,
   type AutoClearSummary,
 } from "@/lib/importers/auto-clear";
-import { hasDuplicates, type DuplicateCheckResult } from "@/lib/importers/duplicates";
+import type { DuplicateBatch, DuplicateRow } from "@/lib/importers/duplicates";
 import { parseImportFile } from "@/lib/importers/parse-workbook";
 import { applyRowPatch, computeRowStats } from "@/lib/importers/row-validation";
 import type {
   BrokerImportCode,
   CommitImportRow,
-  DuplicateStrategy,
   ImportPreviewSummary,
   NormalizedImportRow,
   RowPatch,
@@ -89,9 +89,11 @@ export function ImportWizard({ context }: ImportWizardProps) {
   );
 
   // Duplicados
-  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
-  const [duplicates, setDuplicates] = useState<DuplicateCheckResult | null>(null);
-  const [duplicateStrategy, setDuplicateStrategy] = useState<DuplicateStrategy>("skip");
+  // Se calcula una vez al parsear; las filas marcadas arrancan excluidas pero el
+  // marcador persiste aunque el usuario las reincorpore.
+  const [duplicateByRow, setDuplicateByRow] = useState<Map<number, DuplicateRow>>(new Map());
+  const [sameFileBatches, setSameFileBatches] = useState<DuplicateBatch[]>([]);
+  const [duplicateCheckFailed, setDuplicateCheckFailed] = useState(false);
 
   // Commit
   const [committing, setCommitting] = useState(false);
@@ -108,12 +110,12 @@ export function ImportWizard({ context }: ImportWizardProps) {
     setExcluded(new Set());
     setAutoClearSummary(null);
     setActiveAutoClearCategories(new Set(ALL_AUTOCLEAR_REASONS));
-    setDuplicates(null);
-    setDuplicateStrategy("skip");
+    setDuplicateByRow(new Map());
+    setSameFileBatches([]);
+    setDuplicateCheckFailed(false);
     setResult(null);
     setError(null);
     setParsing(false);
-    setCheckingDuplicates(false);
     setCommitting(false);
   }, []);
 
@@ -152,12 +154,46 @@ export function ImportWizard({ context }: ImportWizardProps) {
           .filter((r) => r.status === "invalid")
           .map((r) => r.rowNumber);
 
-        const initialExcluded = new Set([...defaultExcluded, ...invalidRowNumbers]);
+        // Detección proactiva de duplicados contra lo ya registrado en la cuenta.
+        // Un fallo no bloquea el import: se avisa y se sigue sin marcas.
+        const duplicateMap = new Map<number, DuplicateRow>();
+        let batches: DuplicateBatch[] = [];
+        let checkFailed = false;
+        try {
+          const check = await checkImportDuplicatesAction({
+            brokerCode,
+            fileHash: parsed.fileHash,
+            brokerAccountId: brokerAccountId || undefined,
+            rows: parsed.rows.flatMap((r) =>
+              r.status !== "invalid" && r.parsed
+                ? [{ rowNumber: r.rowNumber, status: r.status, parsed: r.parsed }]
+                : []
+            ),
+          });
+          if ("error" in check) {
+            checkFailed = true;
+          } else {
+            batches = check.sameFileBatches;
+            for (const d of check.duplicateRows) duplicateMap.set(d.rowNumber, d);
+          }
+        } catch (err) {
+          console.error(err);
+          checkFailed = true;
+        }
+
+        const initialExcluded = new Set([
+          ...defaultExcluded,
+          ...invalidRowNumbers,
+          ...duplicateMap.keys(),
+        ]);
 
         setPreview(parsed);
         setRows(parsed.rows);
         setAutoClearSummary(summary);
         setExcluded(initialExcluded);
+        setDuplicateByRow(duplicateMap);
+        setSameFileBatches(batches);
+        setDuplicateCheckFailed(checkFailed);
 
         // Si el archivo tiene movimientos a limpiar, vamos a Auto-Clear; si no, directo a Revisión
         if (summary.totalExcluded > 0) {
@@ -177,7 +213,7 @@ export function ImportWizard({ context }: ImportWizardProps) {
         setParsing(false);
       }
     },
-    [brokerCode]
+    [brokerCode, brokerAccountId]
   );
 
   // ---------------------------------------------------------------------------
@@ -199,7 +235,7 @@ export function ImportWizard({ context }: ImportWizardProps) {
       const baseFromCategories = getExcludedRowNumbersForCategories(autoClearSummary, next);
       // Mantener filas inválidas excluidas por seguridad
       const invalidRowNumbers = rows.filter((r) => r.status === "invalid").map((r) => r.rowNumber);
-      setExcluded(new Set([...baseFromCategories, ...invalidRowNumbers]));
+      setExcluded(new Set([...baseFromCategories, ...invalidRowNumbers, ...duplicateByRow.keys()]));
 
       return next;
     });
@@ -211,14 +247,14 @@ export function ImportWizard({ context }: ImportWizardProps) {
     setActiveAutoClearCategories(all);
     const base = getExcludedRowNumbersForCategories(autoClearSummary, all);
     const invalidRowNumbers = rows.filter((r) => r.status === "invalid").map((r) => r.rowNumber);
-    setExcluded(new Set([...base, ...invalidRowNumbers]));
+    setExcluded(new Set([...base, ...invalidRowNumbers, ...duplicateByRow.keys()]));
   }
 
   function handleClearAllCategories() {
     setActiveAutoClearCategories(new Set());
-    // Solo dejar las que son inválidas
+    // Solo dejar las inválidas y las posibles duplicadas
     const invalidRowNumbers = rows.filter((r) => r.status === "invalid").map((r) => r.rowNumber);
-    setExcluded(new Set(invalidRowNumbers));
+    setExcluded(new Set([...invalidRowNumbers, ...duplicateByRow.keys()]));
   }
 
   // ---------------------------------------------------------------------------
@@ -278,46 +314,10 @@ export function ImportWizard({ context }: ImportWizardProps) {
 
   async function handleReviewCommitClick() {
     if (!preview || !canCommit) return;
-
-    // Si ya detectamos duplicados y el usuario ya eligió estrategia, vamos directo al commit
-    if (duplicates) {
-      await executeCommit(duplicateStrategy);
-      return;
-    }
-
-    // Primer clic: chequear duplicados
-    setCheckingDuplicates(true);
-    setError(null);
-    try {
-      const check = await checkImportDuplicatesAction({
-        brokerCode,
-        fileHash: preview.fileHash,
-        brokerAccountId: brokerAccountId || undefined,
-        rows: commitRows,
-      });
-
-      if ("error" in check) {
-        setError(check.error);
-        toast.error(check.error);
-        return;
-      }
-
-      if (hasDuplicates(check)) {
-        setDuplicates(check);
-        toast.warning(
-          `Se detectaron ${check.duplicateRows.length} movimientos que ya existen en tu cartera.`
-        );
-        return;
-      }
-
-      // Si no hay duplicados, guardado directo
-      await executeCommit("skip");
-    } finally {
-      setCheckingDuplicates(false);
-    }
+    await executeCommit();
   }
 
-  async function executeCommit(strategy: DuplicateStrategy) {
+  async function executeCommit() {
     if (!preview) return;
 
     setCommitting(true);
@@ -331,7 +331,10 @@ export function ImportWizard({ context }: ImportWizardProps) {
         portfolioId: portfolioId || undefined,
         brokerAccountId: brokerAccountId || undefined,
         rows: commitRows,
-        duplicateStrategy: strategy,
+        // Todo choque de hash ya viene marcado y excluido: si una fila sigue
+        // incluida, fue decisión del usuario, así que se inserta igual. Si el
+        // chequeo falló no hubo marcas, y "skip" es la única red contra re-imports.
+        duplicateStrategy: duplicateCheckFailed ? "skip" : "import",
       });
 
       if (!commit.ok) {
@@ -362,6 +365,11 @@ export function ImportWizard({ context }: ImportWizardProps) {
   // ---------------------------------------------------------------------------
 
   const stats = useMemo(() => computeRowStats(rows, excluded), [rows, excluded]);
+  // Omitidas por ser posible duplicado (no las limpió el Auto-Clear).
+  const duplicatesLeftOut = useMemo(
+    () => [...duplicateByRow.keys()].filter((n) => excluded.has(n)).length,
+    [duplicateByRow, excluded]
+  );
 
   return (
     <div className="space-y-8">
@@ -428,14 +436,41 @@ export function ImportWizard({ context }: ImportWizardProps) {
       {/* Pantalla 3: Revisión + Duplicados Inline */}
       {step === "review" && preview && (
         <div className="space-y-6">
-          {/* Sección de Duplicados Inline si se detectaron */}
-          {duplicates && (
-            <div className="mx-auto max-w-5xl">
-              <DuplicateResolutionSection
-                result={duplicates}
-                strategy={duplicateStrategy}
-                onStrategyChange={setDuplicateStrategy}
-              />
+          {(duplicateByRow.size > 0 || sameFileBatches.length > 0 || duplicateCheckFailed) && (
+            <div className="mx-auto max-w-6xl space-y-2">
+              {duplicateByRow.size > 0 && (
+                <div className="flex items-start gap-2.5 rounded-lg border border-amber-900/40 bg-amber-950/20 p-3 text-xs text-amber-300">
+                  <Copy className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                  <span>
+                    <strong>
+                      {duplicateByRow.size}{" "}
+                      {duplicateByRow.size === 1 ? "movimiento parece" : "movimientos parecen"}{" "}
+                      ya registrados.
+                    </strong>{" "}
+                    Los omitimos por vos; podés reincorporar cualquiera desde la tabla si
+                    corresponde importarlo.
+                  </span>
+                </div>
+              )}
+              {sameFileBatches.length > 0 && (
+                <div className="flex items-start gap-2.5 rounded-lg border border-amber-900/40 bg-amber-950/20 p-3 text-xs text-amber-300">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                  <span>
+                    <strong>Este mismo archivo ya se importó antes</strong> (
+                    {sameFileBatches[0]?.fileName}
+                    {sameFileBatches.length > 1 ? ` y ${sameFileBatches.length - 1} más` : ""}).
+                  </span>
+                </div>
+              )}
+              {duplicateCheckFailed && (
+                <div className="flex items-start gap-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-400">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
+                  <span>
+                    No pudimos verificar duplicados contra tu cartera. Revisá las filas antes de
+                    importar.
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -449,8 +484,9 @@ export function ImportWizard({ context }: ImportWizardProps) {
             onResetRow={handleResetRow}
             onConfirmImport={handleReviewCommitClick}
             onBackToAutoClear={() => setStep("autoclear")}
-            checkingDuplicates={checkingDuplicates || committing}
+            committing={committing}
             canCommit={canCommit}
+            duplicateByRow={duplicateByRow}
           />
         </div>
       )}
@@ -488,7 +524,7 @@ export function ImportWizard({ context }: ImportWizardProps) {
                 Auto-Cleared
               </p>
               <p className="text-2xl font-semibold tabular-nums text-zinc-300">
-                {stats.excluded}
+                {stats.excluded - duplicatesLeftOut}
               </p>
               <p className="text-[11px] text-zinc-400">omitidas limpiamente</p>
             </div>
@@ -498,7 +534,7 @@ export function ImportWizard({ context }: ImportWizardProps) {
                 Duplicados
               </p>
               <p className="text-2xl font-semibold tabular-nums text-amber-400">
-                {result.skipped}
+                {duplicatesLeftOut + result.skipped}
               </p>
               <p className="text-[11px] text-zinc-400">repetidas ignoradas</p>
             </div>

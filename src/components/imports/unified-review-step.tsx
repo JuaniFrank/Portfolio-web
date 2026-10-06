@@ -6,6 +6,7 @@ import { es } from "date-fns/locale";
 import {
   AlertTriangle,
   Check,
+  Copy,
   EyeOff,
   Filter,
   Pencil,
@@ -36,6 +37,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { InstrumentType, TransactionType } from "@/lib/generated/prisma";
+import type { DuplicateRow } from "@/lib/importers/duplicates";
 import { computeRowStats } from "@/lib/importers/row-validation";
 import type {
   ImportPreviewSummary,
@@ -60,8 +62,10 @@ type UnifiedReviewStepProps = {
   onResetRow: (rowNumber: number) => void;
   onConfirmImport: () => void;
   onBackToAutoClear: () => void;
-  checkingDuplicates: boolean;
+  committing: boolean;
   canCommit: boolean;
+  /** Rows flagged as possible duplicates of registered transactions, by row number. */
+  duplicateByRow: Map<number, DuplicateRow>;
 };
 
 function formatDate(iso: string) {
@@ -70,6 +74,12 @@ function formatDate(iso: string) {
   } catch {
     return iso;
   }
+}
+
+function describeDuplicate(dup: DuplicateRow): string {
+  const when = formatDate(dup.existing.createdAt);
+  const from = dup.existing.fileName ? ` desde "${dup.existing.fileName}"` : "";
+  return `Ya registrado el ${when}${from}`;
 }
 
 function formatAmount(value: string) {
@@ -107,8 +117,9 @@ export function UnifiedReviewStep({
   onResetRow,
   onConfirmImport,
   onBackToAutoClear,
-  checkingDuplicates,
+  committing,
   canCommit,
+  duplicateByRow,
 }: UnifiedReviewStepProps) {
   const [activeTab, setActiveTab] = useState<HealthTab>("committable");
   const [tickerQuery, setTickerQuery] = useState("");
@@ -200,13 +211,13 @@ export function UnifiedReviewStep({
             type="button"
             size="sm"
             onClick={onConfirmImport}
-            disabled={!canCommit || checkingDuplicates}
+            disabled={!canCommit || committing}
             className="gap-1.5"
           >
-            {checkingDuplicates ? (
+            {committing ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Verificando duplicados…
+                Importando…
               </>
             ) : (
               <>
@@ -409,6 +420,7 @@ export function UnifiedReviewStep({
                     row={row}
                     isExcluded={isExcluded}
                     isEditing={isEditing}
+                    duplicate={duplicateByRow.get(row.rowNumber)}
                     onToggle={() => onToggleRow(row.rowNumber)}
                     onStartEdit={() => setEditingRowNumber(row.rowNumber)}
                     onStopEdit={() => setEditingRowNumber(null)}
@@ -433,6 +445,7 @@ type UnifiedRowItemProps = {
   row: NormalizedImportRow;
   isExcluded: boolean;
   isEditing: boolean;
+  duplicate: DuplicateRow | undefined;
   onToggle: () => void;
   onStartEdit: () => void;
   onStopEdit: () => void;
@@ -444,6 +457,7 @@ function UnifiedRowItem({
   row,
   isExcluded,
   isEditing,
+  duplicate,
   onToggle,
   onStartEdit,
   onStopEdit,
@@ -516,6 +530,16 @@ function UnifiedRowItem({
           )}
           {row.edited && <Pencil className="h-3 w-3 text-teal-400" />}
         </div>
+        {duplicate && (
+          <Badge
+            variant="outline"
+            className="mt-1 gap-1 border-amber-500/30 text-[10px] text-amber-300"
+            title={describeDuplicate(duplicate)}
+          >
+            <Copy className="h-3 w-3" />
+            Posible duplicado
+          </Badge>
+        )}
         {row.messages.length > 0 && !isExcluded && (
           <p className="mt-0.5 max-w-[120px] truncate text-[10px] text-zinc-500" title={row.messages.join("; ")}>
             {row.messages[0]}
