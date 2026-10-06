@@ -1,5 +1,9 @@
 "use client";
 
+import { useState } from "react";
+import { Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { DeleteHoldingDialog } from "@/components/transactions/delete-holding-dialog";
 import {
   Table,
   TableBody,
@@ -50,12 +54,13 @@ export function HoldingsTable({ holdings, search }: HoldingsTableProps) {
             <TableHead className="text-right">Monto</TableHead>
             <TableHead className="text-right">Precio actual</TableHead>
             <TableHead className="text-right">Rendimiento</TableHead>
+            <TableHead className="text-right">Acciones</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {filtered.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={6} className="py-8 text-center text-sm text-zinc-500">
+              <TableCell colSpan={7} className="py-8 text-center text-sm text-zinc-500">
                 Ningún ticker coincide con la búsqueda.
               </TableCell>
             </TableRow>
@@ -80,6 +85,7 @@ function EmptyState() {
 }
 
 function HoldingRow({ row }: { row: HoldingRow }) {
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const pnl = Number(row.pnlArs);
   const pnlPct = Number(row.pnlPercent);
   const positive = pnl >= 0;
@@ -110,6 +116,27 @@ function HoldingRow({ row }: { row: HoldingRow }) {
           {formatMoney(row.pnlArs)} ({positive ? "+" : ""}
           {pnlPct.toLocaleString("es-AR", { maximumFractionDigits: 2 })}%)
         </span>
+      </TableCell>
+      <TableCell className="text-right">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-red-400/80 hover:text-red-400"
+          title="Borrar posición"
+          aria-label={`Borrar posición ${row.ticker}`}
+          onClick={() => setDeleteOpen(true)}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+        {deleteOpen && (
+          <DeleteHoldingDialog
+            open={deleteOpen}
+            onOpenChange={setDeleteOpen}
+            instrumentId={row.instrumentId}
+            ticker={row.ticker}
+          />
+        )}
       </TableCell>
     </TableRow>
   );
