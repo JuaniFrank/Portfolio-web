@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import {
@@ -19,6 +18,10 @@ import { buildImportIdempotencyHash } from "@/lib/importers/idempotency";
 import type { ImportedTransactionRow } from "@/lib/imports/filters";
 import { runMacroBackfill, runPriceBackfill } from "@/lib/market/backfill";
 import { prisma } from "@/lib/prisma";
+import {
+  deleteOwnedTransactions,
+  revalidateTransactionConsumers,
+} from "@/lib/transactions/mutations";
 import { ImportStatus, TransactionSource, TransactionType } from "@/lib/generated/prisma";
 import type { CommitImportRow, DuplicateStrategy } from "@/lib/importers/types";
 
@@ -331,7 +334,7 @@ export async function commitImportAction(
   });
 
   if (result.ok) {
-    revalidateImportConsumers();
+    revalidateTransactionConsumers();
 
     // AD-9/T-53: enrichment runs after the response is prepared — a Yahoo/
     // Docta failure here can never fail this commit (FR-13). Instruments are
@@ -451,60 +454,19 @@ export async function deleteImportedTransactionsAction(
     return { ok: false, error: `No se pueden borrar más de ${MAX_BULK_IDS} operaciones a la vez` };
   }
 
-  // Resolvemos primero para (a) verificar pertenencia y (b) saber qué lotes
-  // hay que recalcular después.
-  const owned = await prisma.transaction.findMany({
-    where: {
+  try {
+    const deleted = await deleteOwnedTransactions(user.id, {
       id: { in: uniqueIds },
       source: TransactionSource.IMPORT,
-      portfolio: { userId: user.id },
-    },
-    select: { id: true, importBatchId: true },
-  });
-
-  if (owned.length === 0) {
-    return { ok: false, error: "No se encontraron operaciones para borrar" };
-  }
-
-  const ownedIds = owned.map((t) => t.id);
-  const affectedBatchIds = [
-    ...new Set(owned.map((t) => t.importBatchId).filter((v): v is string => Boolean(v))),
-  ];
-
-  try {
-    const deleted = await prisma.$transaction(async (tx) => {
-      const res = await tx.transaction.deleteMany({ where: { id: { in: ownedIds } } });
-
-      for (const batchId of affectedBatchIds) {
-        const remaining = await tx.transaction.count({ where: { importBatchId: batchId } });
-        await tx.importBatch.update({
-          where: { id: batchId },
-          data: {
-            rowsImported: remaining,
-            status: remaining === 0 ? ImportStatus.REVERTED : ImportStatus.COMMITTED,
-          },
-        });
-      }
-
-      return res.count;
     });
+    if (deleted === 0) {
+      return { ok: false, error: "No se encontraron operaciones para borrar" };
+    }
 
-    revalidateImportConsumers();
+    revalidateTransactionConsumers();
     return { ok: true, deleted };
   } catch (error) {
     console.error("deleteImportedTransactionsAction", error);
     return { ok: false, error: "No se pudieron borrar las operaciones. Volvé a intentar." };
   }
-}
-
-/**
- * Todas las pantallas que leen `Transaction`. Un import o un borrado las
- * invalida a todas: si agregás una pantalla que use holdings, sumala acá.
- */
-function revalidateImportConsumers() {
-  revalidatePath("/imports");
-  revalidatePath("/transactions");
-  revalidatePath("/dashboard");
-  revalidatePath("/dividends");
-  revalidatePath("/bonds");
 }
