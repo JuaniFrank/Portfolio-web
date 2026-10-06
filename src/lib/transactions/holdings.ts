@@ -41,7 +41,7 @@ export type FxForHoldings = {
  * al CCL de su propia fecha. `null` cuando falta el CCL de alguna compra: un costo en
  * dólares a medias es peor que no mostrarlo.
  */
-function computePositionFromTrades(
+export function computePositionFromTrades(
   trades: TradeForHoldings[],
   fx?: FxForHoldings
 ): {
