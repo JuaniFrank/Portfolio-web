@@ -44,9 +44,11 @@ import { overlayLiveCcl, overlayLivePrices } from "./live-overlay";
 import { marketDayOf } from "./market-day";
 import { buildPositionRows } from "./position-rows";
 import { PriceIndex, TimeSeries } from "./price-series";
+import { buildRealizedSales } from "./realized-sales";
 import {
   accumulateInArs,
   attributeMonthlyPositionGains,
+  type InstrumentIdentity,
   type PortfolioValuation,
   type ReplayInputs,
   valuatePortfolioAt,
@@ -263,6 +265,17 @@ export async function buildPerformanceReport(
     });
   }
 
+  // Identidad por instrumento para las filas de posiciones cerradas dentro del mes.
+  const instrumentLookup = new Map<string, InstrumentIdentity>();
+  for (const trade of trades) {
+    if (instrumentLookup.has(trade.instrumentId)) continue;
+    instrumentLookup.set(trade.instrumentId, {
+      ticker: trade.ticker,
+      instrumentName: trade.instrumentName,
+      instrumentType: trade.instrumentType,
+    });
+  }
+
   const forFlows: TransactionForFlows[] = transactions.map((tx) => ({
     type: tx.type,
     tradeDate: tx.tradeDate,
@@ -394,7 +407,8 @@ export async function buildPerformanceReport(
       valuation.positions,
       previousPositions,
       new Map([...monthInstrumentFlows].map(([id, amounts]) => [id, amounts.ars])),
-      new Map([...monthInstrumentFlows].map(([id, amounts]) => [id, amounts.usd]))
+      new Map([...monthInstrumentFlows].map(([id, amounts]) => [id, amounts.usd])),
+      instrumentLookup
     );
     previousPositions = valuation.positions;
 
@@ -477,6 +491,11 @@ export async function buildPerformanceReport(
     excludedHoldings: findExcludedHoldings(transactions),
     positions,
     sectorByTicker,
+    realizedSales: buildRealizedSales(
+      trades,
+      eventsByInstrument,
+      (date) => ccl.asOf(date)?.value ?? null
+    ),
     dataQuality: {
       partialMonths: rows.filter((row) => row.coverage === "partial").map((row) => row.month),
       missingCclMonths: rows.filter((row) => row.cclMonthEnd === null).map((row) => row.month),
@@ -725,6 +744,7 @@ function emptyReport(portfolioName: string): PerformanceReport {
     excludedHoldings: [],
     positions: [],
     sectorByTicker: {},
+    realizedSales: [],
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],

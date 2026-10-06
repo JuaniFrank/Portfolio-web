@@ -147,6 +147,7 @@ function emptyReport(portfolioName: string): PerformanceReport {
     excludedHoldings: [],
     positions: [],
     sectorByTicker: {},
+    realizedSales: [],
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],
