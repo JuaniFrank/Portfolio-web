@@ -1,6 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import { format } from "date-fns";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { deleteTransactionAction } from "@/app/actions/transactions";
+import { ConfirmDeleteDialog } from "@/components/transactions/confirm-delete-dialog";
+import { TransactionFormDialog } from "@/components/transactions/transaction-form-modal";
 import { Pencil, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -103,6 +109,10 @@ export function TradeHistoryTable({ trades, search }: TradeHistoryTableProps) {
 }
 
 function TradeRow({ row }: { row: TradeHistoryRow }) {
+  const router = useRouter();
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
   return (
     <TableRow>
       <TableCell>
@@ -143,8 +153,9 @@ function TradeRow({ row }: { row: TradeHistoryRow }) {
             variant="ghost"
             size="icon"
             className="h-8 w-8 text-zinc-400 hover:text-zinc-100"
-            disabled
-            title="Editar (próximamente)"
+            title="Editar"
+            aria-label={`Editar ${row.ticker}`}
+            onClick={() => setEditOpen(true)}
           >
             <Pencil className="h-4 w-4" />
           </Button>
@@ -153,12 +164,38 @@ function TradeRow({ row }: { row: TradeHistoryRow }) {
             variant="ghost"
             size="icon"
             className="h-8 w-8 text-red-400/80 hover:text-red-400"
-            disabled
-            title="Eliminar (próximamente)"
+            title="Eliminar"
+            aria-label={`Eliminar ${row.ticker}`}
+            onClick={() => setDeleteOpen(true)}
           >
             <Trash2 className="h-4 w-4" />
           </Button>
         </div>
+        {editOpen && (
+          <TransactionFormDialog
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            transactionId={row.id}
+          />
+        )}
+        <ConfirmDeleteDialog
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          title="Borrar operación"
+          confirmLabel="Borrar operación"
+          onConfirm={() => deleteTransactionAction(row.id)}
+          onDeleted={() => {
+            toast.success("Operación borrada");
+            router.refresh();
+          }}
+        >
+          <p>
+            Se va a borrar la {TRANSACTION_TYPE_LABELS[row.type].toLowerCase()} de{" "}
+            <span className="font-semibold text-zinc-200">{row.ticker}</span> del{" "}
+            {formatDate(row.tradeDate)} ({formatQty(row.quantity)} u.).
+          </p>
+          <p>Se van a recalcular tus posiciones, dividendos y el dashboard.</p>
+        </ConfirmDeleteDialog>
       </TableCell>
     </TableRow>
   );
