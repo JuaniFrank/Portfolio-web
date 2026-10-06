@@ -271,7 +271,7 @@ describe("buildEvolutionSeries — ranking de movers", () => {
     expect(second.losers[0]!.pricePercent).toBeCloseTo(-20, 6);
   });
 
-  it("recorta cada lado a 4 posiciones", () => {
+  it("conserva todas las posiciones que suben y bajan sin truncar", () => {
     const many = Array.from({ length: 12 }, (_, i) => ({
       id: `inst-${i}`,
       ticker: `T${i}`,
@@ -294,8 +294,10 @@ describe("buildEvolutionSeries — ranking de movers", () => {
     );
 
     const point = wide.series.daily[1]!;
-    expect(point.gainers).toHaveLength(4);
-    expect(point.losers).toHaveLength(4);
+    expect(point.gainers).toHaveLength(6);
+    expect(point.losers).toHaveLength(6);
+    expect(point.gainers[0]!.ticker).toBe("T5");
+    expect(point.losers[0]!.ticker).toBe("T11");
   });
 });
 

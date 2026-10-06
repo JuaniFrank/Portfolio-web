@@ -52,7 +52,7 @@ import {
   valuatePortfolioAt,
 } from "@/lib/rendimientos/valuation";
 
-/** Cuántas posiciones se muestran por lado en el detalle de cada período. */
+/** Cuántas posiciones se muestran por lado en el tooltip del gráfico de evolución. */
 export const MOVERS_PER_SIDE = 4;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -352,13 +352,11 @@ function computeMovers(
 
   const gainers = movers
     .filter((mover) => mover.pnlArs > 0)
-    .sort((a, b) => b.pnlArs - a.pnlArs)
-    .slice(0, MOVERS_PER_SIDE);
+    .sort((a, b) => b.pnlArs - a.pnlArs);
 
   const losers = movers
     .filter((mover) => mover.pnlArs < 0)
-    .sort((a, b) => a.pnlArs - b.pnlArs)
-    .slice(0, MOVERS_PER_SIDE);
+    .sort((a, b) => a.pnlArs - b.pnlArs);
 
   return { gainers, losers };
 }
