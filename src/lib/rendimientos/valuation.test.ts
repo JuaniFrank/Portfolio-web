@@ -406,15 +406,94 @@ describe("attributeMonthlyPositionGains", () => {
     expect(result!.monthReturnPctUsd).toBeNull();
   });
 
-  it("no incluye en el resultado un ticker que ya no está al cierre del mes", () => {
-    // Vendido por completo durante el mes: la atribución por ticker no lo puede
-    // mostrar (no hay fila de posición), a diferencia de "Ganancia mes" a nivel
-    // cartera, que sí lo captura. Limitación conocida, no un bug de este helper.
-    const start = [position({ instrumentId: GGAL, valueArs: 1000 })];
+  it("incluye como fila cerrada un ticker vendido por completo durante el mes", () => {
+    // Estaba al inicio (valía 1000), se vendió todo por 1200: el flujo neto es −1200.
+    // Ganancia del mes = 0 − 1000 − (−1200) = 200, y tiene que aparecer en la tabla.
+    const start = [position({ instrumentId: GGAL, ticker: "GGAL", valueArs: 1000 })];
 
-    const result = attributeMonthlyPositionGains([], start, new Map());
+    const result = attributeMonthlyPositionGains([], start, new Map([[GGAL, -1200]]));
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      instrumentId: GGAL,
+      ticker: "GGAL",
+      closed: true,
+      quantity: 0,
+      valueArs: 0,
+      valueUsd: 0,
+      monthGainArs: 200,
+    });
+    expect(result[0]!.monthReturnPct).toBeCloseTo(20, 6); // 200 / 1000
+  });
+
+  it("las filas abiertas no quedan marcadas como cerradas", () => {
+    const [result] = attributeMonthlyPositionGains([position()], [], new Map());
+
+    expect(result!.closed).toBe(false);
+  });
+
+  it("atribuye en dólares la fila cerrada con su propio flujo", () => {
+    const start = [position({ instrumentId: GGAL, valueArs: 1000, valueUsd: 1 })];
+
+    const [result] = attributeMonthlyPositionGains(
+      [],
+      start,
+      new Map([[GGAL, -1200]]),
+      new Map([[GGAL, -0.9]])
+    );
+
+    expect(result!.monthGainUsd).toBeCloseTo(-0.1, 6); // 0 − 1 − (−0,9)
+  });
+
+  it("incluye un ticker comprado y vendido dentro del mismo mes, usando el lookup", () => {
+    // Ni al inicio ni al cierre: solo lo delatan los flujos (compra 1000, venta 1100).
+    const result = attributeMonthlyPositionGains(
+      [],
+      [],
+      new Map([[GGAL, -100]]),
+      undefined,
+      new Map([[GGAL, { ticker: "GGAL", instrumentName: "Galicia", instrumentType: "STOCK_AR" }]])
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      ticker: "GGAL",
+      instrumentName: "Galicia",
+      instrumentType: "STOCK_AR",
+      closed: true,
+      monthGainArs: 100, // 0 − 0 − (−100)
+    });
+  });
+
+  it("ignora un flujo nulo de un ticker que no estuvo en cartera", () => {
+    const result = attributeMonthlyPositionGains(
+      [],
+      [],
+      new Map([[GGAL, 0]]),
+      undefined,
+      new Map([[GGAL, { ticker: "GGAL", instrumentName: "Galicia", instrumentType: "STOCK_AR" }]])
+    );
 
     expect(result).toEqual([]);
+  });
+
+  it("mantiene la identidad: Σ monthGainArs de las filas = ganancia del mes a nivel cartera", () => {
+    // AAPL abierta (vale 1600, tenía 1000, compró 500) + GGAL cerrada (tenía 1000, vendió por 1200).
+    const start = [
+      position({ valueArs: 1000 }),
+      position({ instrumentId: GGAL, ticker: "GGAL", valueArs: 1000 }),
+    ];
+    const end = [position({ valueArs: 1600 })];
+    const flows = new Map([
+      [AAPL, 500],
+      [GGAL, -1200],
+    ]);
+
+    const rows = attributeMonthlyPositionGains(end, start, flows);
+
+    const sum = rows.reduce((total, row) => total + row.monthGainArs, 0);
+    const portfolioGain = 1600 - 2000 - (500 - 1200); // valor fin − valor inicio − capital neto
+    expect(sum).toBe(portfolioGain);
   });
 });
 

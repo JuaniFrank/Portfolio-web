@@ -281,11 +281,20 @@ export function attributeMonthlyPositionGains(
    * atribución en dólares no se calcula: dividir `monthGainArs` por el CCL del cierre
    * sería la ganancia en pesos con otra etiqueta.
    */
-  netInvestedByInstrumentUsd?: Map<string, number>
+  netInvestedByInstrumentUsd?: Map<string, number>,
+  /**
+   * Datos de identidad por instrumento, para los que no están ni al inicio ni al cierre
+   * (comprados y vendidos dentro del mismo mes): solo los delatan los flujos y no hay
+   * `PositionDetail` de donde sacar el ticker. Sin lookup esos casos se omiten.
+   */
+  instrumentLookup?: Map<string, InstrumentIdentity>
 ): MonthlyPositionDetail[] {
   const startByInstrument = new Map(startPositions.map((p) => [p.instrumentId, p]));
 
-  return endPositions.map((position) => {
+  const attribute = (
+    position: PositionDetail,
+    closed: boolean
+  ): MonthlyPositionDetail => {
     const start = startByInstrument.get(position.instrumentId);
     const startValue = start?.valueArs ?? 0;
     const netInvested = netInvestedByInstrumentArs.get(position.instrumentId) ?? 0;
@@ -305,8 +314,68 @@ export function attributeMonthlyPositionGains(
     const monthReturnPctUsd =
       monthGainUsd !== null && basisUsd > 0 ? (monthGainUsd / basisUsd) * 100 : null;
 
-    return { ...position, monthGainArs, monthReturnPct, monthGainUsd, monthReturnPctUsd };
-  });
+    return { ...position, closed, monthGainArs, monthReturnPct, monthGainUsd, monthReturnPctUsd };
+  };
+
+  const rows = endPositions.map((position) => attribute(position, false));
+  const seen = new Set(endPositions.map((p) => p.instrumentId));
+
+  // Posiciones cerradas durante el mes: sin ellas, la venta total de un ticker sale de
+  // la tabla y Σ `monthGainArs` deja de coincidir con la ganancia del mes. Valen cero al
+  // cierre, así que su resultado es lo que cobraron menos lo que valían al empezar.
+  for (const start of startPositions) {
+    if (seen.has(start.instrumentId)) continue;
+    seen.add(start.instrumentId);
+    rows.push(attribute(closedPosition(start), true));
+  }
+
+  // Comprados y vendidos dentro del mismo mes: ni inicio ni cierre, solo flujos.
+  const flowIds = new Set([
+    ...netInvestedByInstrumentArs.keys(),
+    ...(netInvestedByInstrumentUsd?.keys() ?? []),
+  ]);
+  for (const instrumentId of flowIds) {
+    if (seen.has(instrumentId)) continue;
+    const flowArs = netInvestedByInstrumentArs.get(instrumentId) ?? 0;
+    const flowUsd = netInvestedByInstrumentUsd?.get(instrumentId) ?? 0;
+    if (flowArs === 0 && flowUsd === 0) continue;
+    const identity = instrumentLookup?.get(instrumentId);
+    if (!identity) continue;
+    seen.add(instrumentId);
+    rows.push(attribute(closedPosition({ instrumentId, ...identity }), true));
+  }
+
+  return rows;
+}
+
+/** Quién es un instrumento, para armar la fila de una posición que ya no existe. */
+export type InstrumentIdentity = Pick<
+  PositionDetail,
+  "ticker" | "instrumentName" | "instrumentType"
+>;
+
+/** Posición vendida por completo: cantidad y valor en cero, sin costo ni no realizado. */
+function closedPosition(
+  base: Pick<PositionDetail, "instrumentId" | "ticker" | "instrumentName" | "instrumentType">
+): PositionDetail {
+  return {
+    instrumentId: base.instrumentId,
+    ticker: base.ticker,
+    instrumentName: base.instrumentName,
+    instrumentType: base.instrumentType,
+    quantity: 0,
+    priceArs: 0,
+    valueArs: 0,
+    valueUsd: 0,
+    costBasisArs: 0,
+    unrealizedPnlArs: 0,
+    unrealizedReturnPct: null,
+    costBasisUsd: null,
+    unrealizedPnlUsd: null,
+    unrealizedReturnPctUsd: null,
+    priceIsStale: false,
+    priceIsLive: false,
+  };
 }
 
 /** Suma acumulada hasta `cutoff` inclusive. Asume `amounts` ordenado ascendente. */
