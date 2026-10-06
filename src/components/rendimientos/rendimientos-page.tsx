@@ -10,6 +10,7 @@ import { MonthlyReturns } from "@/components/rendimientos/monthly-returns";
 import { MonthlyTable } from "@/components/rendimientos/monthly-table";
 import { PerformanceKpis } from "@/components/rendimientos/performance-kpis";
 import { PortfolioVsBenchmark } from "@/components/rendimientos/portfolio-vs-benchmark";
+import { RealizedSales } from "@/components/rendimientos/realized-sales";
 import { PositionsTable } from "@/components/rendimientos/positions-table";
 import { PortfolioEvolutionChart } from "@/components/dashboard/portfolio-evolution";
 import { formatDateLong } from "@/components/rendimientos/chart-utils";
@@ -128,6 +129,12 @@ export function RendimientosPage({
           />
 
           <PositionsTable positions={report.positions} currency={currency} />
+
+          <RealizedSales
+            sales={report.realizedSales}
+            months={monthsInPeriod}
+            currency={currency}
+          />
 
           <div className="space-y-4">
             <div className="space-y-2">
