@@ -2,78 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth";
+import { invalidateAllReports } from "@/lib/cache/report-cache";
 import { prisma } from "@/lib/prisma";
 import { newEventInputSchema, type NewEventInput } from "@/lib/events/validations";
 import type { CorporateEventDTO, CorporateEventForBuilder, ProjectedPosition } from "@/lib/events/types";
 import { buildHoldings, type TradeForHoldings } from "@/lib/transactions/holdings";
 import { HOLDABLE_TRADE_TYPES } from "@/lib/events/constants";
 import type { InstrumentType } from "@/lib/generated/prisma";
-
-// ---------------------------------------------------------------------------
-// listPortfolioInstruments — instruments held by the user's portfolio
-// Used to populate the instrument picker in the create form.
-// ---------------------------------------------------------------------------
-
-export async function listPortfolioInstruments(): Promise<
-  Array<{ id: string; ticker: string; name: string }> | { error: "unauthorized" }
-> {
-  const user = await getCurrentUser();
-  if (!user) return { error: "unauthorized" };
-
-  const instruments = await prisma.instrument.findMany({
-    where: {
-      transactions: { some: { portfolio: { userId: user.id } } },
-    },
-    select: { id: true, ticker: true, name: true },
-    orderBy: { ticker: "asc" },
-    distinct: ["id"],
-  });
-
-  return instruments;
-}
-
-// ---------------------------------------------------------------------------
-// listCorporateEvents (T-10)
-// ---------------------------------------------------------------------------
-
-export async function listCorporateEvents(): Promise<
-  CorporateEventDTO[] | { error: "unauthorized" }
-> {
-  const user = await getCurrentUser();
-  if (!user) return { error: "unauthorized" };
-
-  const events = await prisma.corporateEvent.findMany({
-    where: {
-      instrument: {
-        transactions: { some: { portfolio: { userId: user.id } } },
-      },
-    },
-    orderBy: { effectiveDate: "desc" },
-    select: {
-      id: true,
-      instrumentId: true,
-      instrument: { select: { ticker: true } },
-      eventType: true,
-      effectiveDate: true,
-      numerator: true,
-      denominator: true,
-      notes: true,
-      appliedAt: true,
-    },
-  });
-
-  return events.map((e) => ({
-    id: e.id,
-    instrumentId: e.instrumentId,
-    ticker: e.instrument.ticker,
-    eventType: e.eventType,
-    effectiveDate: e.effectiveDate.toISOString().slice(0, 10),
-    numerator: e.numerator.toString(),
-    denominator: e.denominator.toString(),
-    notes: e.notes,
-    appliedAt: e.appliedAt.toISOString(),
-  }));
-}
 
 // ---------------------------------------------------------------------------
 // previewCorporateEvent (T-11)
@@ -262,6 +197,8 @@ export async function createCorporateEvent(input: NewEventInput): Promise<
     revalidatePath("/dashboard");
     revalidatePath("/transactions");
     revalidatePath("/dividends");
+    // Events are keyed by instrument and shared: every holder's cached report changes.
+    invalidateAllReports();
 
     return {
       ok: true,
@@ -325,6 +262,7 @@ export async function deleteCorporateEvent(id: string): Promise<
   revalidatePath("/dashboard");
   revalidatePath("/transactions");
   revalidatePath("/dividends");
+  invalidateAllReports();
 
   return { ok: true };
 }
