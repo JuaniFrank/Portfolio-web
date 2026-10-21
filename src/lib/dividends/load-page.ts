@@ -1,5 +1,3 @@
-"use server";
-
 import { getCurrentUser } from "@/lib/auth";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { aggregateReceivedDividends } from "@/lib/dividends/aggregate";
@@ -13,7 +11,7 @@ import { TransactionType, type InstrumentType } from "@/lib/generated/prisma";
 
 const HOLDABLE_TYPES: InstrumentType[] = ["STOCK_AR", "CEDEAR", "STOCK_US", "ETF"];
 
-export async function getDividendsPageDataAction(): Promise<
+export async function loadDividendsPageData(): Promise<
   DividendsPageData | { error: "unauthorized" }
 > {
   const user = await getCurrentUser();
