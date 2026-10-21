@@ -1,4 +1,5 @@
 import bcrypt from "bcrypt";
+import { cache } from "react";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import type { CostMethod } from "@/lib/generated/prisma";
@@ -83,7 +84,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
 });
 
-export async function getCurrentUser() {
+/** Memoized per request: layout, page and actions share one session + user lookup. */
+export const getCurrentUser = cache(async () => {
   const session = await auth();
   const id = session?.user?.id;
   if (!id) {
@@ -93,7 +95,7 @@ export async function getCurrentUser() {
     where: { id },
     include: { displayCurrency: true },
   });
-}
+});
 
 export async function hashPassword(plain: string) {
   return bcrypt.hash(plain, 12);
