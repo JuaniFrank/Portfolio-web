@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBondCashflowOutlook,
+  buildCouponDates,
+  computeCouponsYtd,
   projectCashFlows,
   scaleFlowsToHolding,
   type BondCashflowEntry,
@@ -177,5 +179,112 @@ describe("buildBondCashflowOutlook", () => {
 
     expect(outlook.projectedCurrentYearUsd).toBe("50.00");
     expect(outlook.projectedCurrentYearArs).toBe("0.00");
+  });
+});
+
+describe("computeCouponsYtd", () => {
+  const thisYear = new Date().getUTCFullYear();
+  const coupon = (amount: string, currencyCode: string) => ({
+    ticker: "YMCJO",
+    type: "COUPON" as const,
+    date: `${thisYear}-03-10T12:00:00.000Z`,
+    amount,
+    currencyCode,
+  });
+
+  it("counts every USD code as dollars", () => {
+    const total = computeCouponsYtd(
+      [coupon("5", "USD"), coupon("5", "USD_MEP"), coupon("5", "USD_CABLE")],
+      1000
+    );
+    expect(total).toBe("15.00");
+  });
+
+  it("converts ARS coupons at the given CCL", () => {
+    expect(computeCouponsYtd([coupon("10000", "ARS")], 1000)).toBe("10.00");
+  });
+});
+
+describe("projectCashFlows — amortization and coupon dates", () => {
+  const terms: BondTermsForProjection = {
+    faceValue: "100",
+    currencyCode: "USD",
+    rateType: "FIXED",
+    couponRate: "0.10",
+    couponFrequencyMonths: 6,
+    issueDate: "2026-01-15",
+    maturityDate: "2027-01-15",
+    amortizationSchedule: [
+      { date: "2026-07-15", principalPct: 50 },
+      { date: "2027-01-15", principalPct: 50 },
+    ],
+    dayCountConvention: "30/360",
+  };
+  const today = new Date("2026-02-01T00:00:00.000Z");
+  const flowsOn = (flows: ProjectedFlow[], date: string, type: ProjectedFlow["flowType"]) =>
+    flows.filter((f) => f.date.startsWith(date) && f.flowType === type);
+
+  it("accrues the coupon on principal at period start when an amortization lands on the coupon date", () => {
+    const flows = projectCashFlows(terms, today);
+    const [coupon] = flowsOn(flows, "2026-07-15", "COUPON");
+    // 100 outstanding for the whole Jan-Jul period: 100 x 10% x 0.5 = 5.0 (not 2.5).
+    expect(coupon!.amount).toBeCloseTo(5.0, 8);
+    expect(flowsOn(flows, "2026-07-15", "AMORTIZATION")[0]!.amount).toBeCloseTo(50, 8);
+  });
+
+  it("keeps the last coupon when the final amortization lands on maturity", () => {
+    const flows = projectCashFlows(terms, today);
+    const [coupon] = flowsOn(flows, "2027-01-15", "COUPON");
+    // The 50 left after July earns 50 x 10% x 0.5 = 2.5.
+    expect(coupon).toBeDefined();
+    expect(coupon!.amount).toBeCloseTo(2.5, 8);
+    expect(flowsOn(flows, "2027-01-15", "AMORTIZATION")[0]!.amount).toBeCloseTo(50, 8);
+  });
+
+  it("splits accrual at a mid-period amortization", () => {
+    const flows = projectCashFlows(
+      { ...terms, amortizationSchedule: [{ date: "2026-04-15", principalPct: 50 }, { date: "2027-01-15", principalPct: 50 }] },
+      today
+    );
+    // Jan15-Apr15 on 100 (2.5) + Apr15-Jul15 on 50 (1.25).
+    expect(flowsOn(flows, "2026-07-15", "COUPON")[0]!.amount).toBeCloseTo(3.75, 8);
+  });
+
+  it("is unchanged for a bullet bond", () => {
+    const flows = projectCashFlows(
+      { ...terms, amortizationSchedule: [{ date: "2027-01-15", principalPct: 100 }] },
+      today
+    );
+    expect(flowsOn(flows, "2026-07-15", "COUPON")[0]!.amount).toBeCloseTo(5.0, 8);
+    expect(flowsOn(flows, "2027-01-15", "COUPON")[0]!.amount).toBeCloseTo(5.0, 8);
+  });
+});
+
+describe("buildCouponDates", () => {
+  const iso = (dates: Date[]) => dates.map((d) => d.toISOString().slice(0, 10));
+  const utc = (day: string) => new Date(`${day}T00:00:00.000Z`);
+
+  it("anchors every date to the issue date instead of chaining month by month", () => {
+    // Chained: Jan 31 -> Feb 28 -> Mar 28. Anchored: Mar 31.
+    expect(iso(buildCouponDates(utc("2026-01-31"), utc("2026-05-31"), 1))).toEqual([
+      "2026-02-28",
+      "2026-03-31",
+      "2026-04-30",
+      "2026-05-31",
+    ]);
+  });
+
+  it("recovers the anchor day after a short month on a semiannual bond", () => {
+    expect(iso(buildCouponDates(utc("2026-08-31"), utc("2027-08-31"), 6))).toEqual([
+      "2027-02-28",
+      "2027-08-31",
+    ]);
+  });
+
+  it("appends maturity when it is not on the cadence", () => {
+    expect(iso(buildCouponDates(utc("2026-01-15"), utc("2026-08-01"), 6))).toEqual([
+      "2026-07-15",
+      "2026-08-01",
+    ]);
   });
 });

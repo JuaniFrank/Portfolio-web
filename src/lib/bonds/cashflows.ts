@@ -6,9 +6,9 @@
  */
 
 import Decimal from "decimal.js";
-import { addMonths as dateFnsAddMonths } from "date-fns";
 import type { ReceivedFlow } from "./types";
 import type { CashFlow } from "./analytics";
+import { isUsdCurrency } from "@/lib/rendimientos/cashflows";
 import { normalizeConvention, periodAccrual } from "./day-count";
 
 export type TransactionForCashFlows = {
@@ -64,7 +64,7 @@ export function computeCouponsYtd(flows: ReceivedFlow[], cclRate: number): strin
 
     const amount = new Decimal(flow.amount);
 
-    if (flow.currencyCode === "USD") {
+    if (isUsdCurrency(flow.currencyCode)) {
       total = total.plus(amount);
     } else if (flow.currencyCode === "ARS" && cclRate > 0) {
       total = total.plus(amount.div(new Decimal(cclRate)));
@@ -126,8 +126,9 @@ export type ProjectedFlow = CashFlow & {
  *  - Past flows (before `today`) are excluded.
  *  - FIXED: coupon amounts are deterministic from couponRate × remainingPrincipal / periodsPerYear.
  *  - FLOATING: projects at last-known couponRate; every coupon row is labeled assumedRate: true.
- *  - Amortization events reduce the outstanding principal; subsequent coupons apply to the
- *    reduced principal.
+ *  - Each coupon accrues on the principal outstanding at the START of its period (split at
+ *    any amortization inside the period). An amortization paid on a coupon date reduces the
+ *    principal for the NEXT period, not for that coupon.
  *  - Returns an empty array for a matured bond (maturityDate < today).
  *
  * @param terms  - BondTerms record (from Prisma or equivalent)
@@ -155,98 +156,64 @@ export function projectCashFlows(
 
   // Build ordered coupon payment dates from issueDate to maturityDate
   const couponDates = buildCouponDates(issueDate, maturityDate, freqMonths);
-  const couponDateSet = new Set(couponDates.map((d) => d.getTime()));
 
-  // Map each coupon date to the start of its accrual period (the previous coupon
-  // date, or the issue date for the first coupon). Interest accrues over the full
-  // period regardless of the valuation date, so a full coupon is projected even
-  // when today falls mid-period.
-  const periodStartByCoupon = new Map<number, Date>();
-  let prevCouponDate = issueDate;
-  for (const d of couponDates) {
-    periodStartByCoupon.set(d.getTime(), prevCouponDate);
-    prevCouponDate = d;
-  }
-
-  // Build a merged, date-sorted timeline of all events so that amortizations
-  // between coupon dates reduce the outstanding principal before the next coupon
-  // is computed — fixing the bug where mid-period amortizations left principal
-  // unchanged and subsequent coupons were computed on too-high a base.
-  type TimelineEvent =
-    | { kind: "COUPON"; date: Date }
-    | { kind: "AMORTIZATION"; date: Date; principalPct: number };
-
-  const timeline: TimelineEvent[] = [];
-
-  for (const d of couponDates) {
-    timeline.push({ kind: "COUPON", date: d });
-  }
-  for (const amort of schedule) {
-    const amortDate = new Date(amort.date);
-    // Amortizations that land exactly on a coupon date are included in the
-    // coupon-date set; we still add them as AMORTIZATION events so the principal
-    // reduction fires in the walk below.
-    timeline.push({ kind: "AMORTIZATION", date: amortDate, principalPct: amort.principalPct });
-  }
-
-  // Sort: by date ascending; within same date, AMORTIZATION before COUPON so
-  // the coupon on that date uses the already-reduced principal.
-  timeline.sort((a, b) => {
-    const dt = a.date.getTime() - b.date.getTime();
-    if (dt !== 0) return dt;
-    // AMORTIZATION < COUPON
-    return a.kind === "AMORTIZATION" ? -1 : 1;
-  });
-
-  // Track remaining principal (as percentage 0..100)
-  let remainingPrincipalPct = new Decimal(100);
-
+  // Coupons first: each accrues over its own period on the principal outstanding during
+  // that period. An amortization paid ON a coupon date comes out of the principal only
+  // after the period's interest has accrued, so it does not shrink that coupon.
   const flows: ProjectedFlow[] = [];
 
-  for (const event of timeline) {
-    const eventTime = event.date.getTime();
+  let periodStart = issueDate;
+  for (const couponDate of couponDates) {
+    const eventTime = couponDate.getTime();
+    const start = periodStart;
+    periodStart = couponDate;
+    if (eventTime <= todayTime) continue;
 
-    if (event.kind === "AMORTIZATION") {
-      // Reduce principal regardless of whether this is past or future; we need
-      // correct principal for subsequent coupon calculations.
-      remainingPrincipalPct = remainingPrincipalPct.minus(new Decimal(event.principalPct));
-      if (remainingPrincipalPct.lt(0)) remainingPrincipalPct = new Decimal(0);
-
-      // Emit the flow only for future amortization events
-      if (eventTime > todayTime) {
-        const principalAmount = faceValue.mul(new Decimal(event.principalPct).div(100));
-        const t = yearsBetween(today, event.date);
-        flows.push({
-          date: event.date.toISOString(),
-          flowType: "AMORTIZATION",
-          amount: principalAmount.toDecimalPlaces(8).toNumber(),
-          t,
-          assumedRate: false,
-          periodDays: null,
-        });
-      }
-    } else {
-      // COUPON event — only emit if it falls on a proper coupon date and is in the future
-      if (!couponDateSet.has(eventTime)) continue; // skip duplicates
-      if (eventTime > todayTime && remainingPrincipalPct.gt(0)) {
-        // Day-count accrual: interest = outstandingPrincipal × rate × yearFraction.
-        const periodStart = periodStartByCoupon.get(eventTime) ?? issueDate;
-        const accrual = periodAccrual(periodStart, event.date, convention);
-        const outstandingPrincipal = faceValue.mul(remainingPrincipalPct.div(100));
-        const couponAmount = couponRate
-          .mul(outstandingPrincipal)
-          .mul(new Decimal(accrual.yearFraction));
-        const t = yearsBetween(today, event.date);
-        flows.push({
-          date: event.date.toISOString(),
-          flowType: "COUPON",
-          amount: couponAmount.toDecimalPlaces(8).toNumber(),
-          t,
-          assumedRate: isFloating,
-          periodDays: accrual.days,
-        });
-      }
+    // Interest accrues on principal at period start; an amortization strictly inside
+    // the period splits it into sub-periods, each accruing on what was outstanding then.
+    const boundaries = [
+      start,
+      ...schedule
+        .map((entry) => new Date(entry.date))
+        .filter((d) => d.getTime() > start.getTime() && d.getTime() < eventTime),
+      couponDate,
+    ];
+    let couponAmount = new Decimal(0);
+    for (let i = 0; i < boundaries.length - 1; i++) {
+      const from = boundaries[i]!;
+      const principalPct = outstandingPctAt(schedule, from);
+      if (principalPct.lte(0)) continue;
+      const accrual = periodAccrual(from, boundaries[i + 1]!, convention);
+      couponAmount = couponAmount.plus(
+        couponRate
+          .mul(faceValue.mul(principalPct.div(100)))
+          .mul(new Decimal(accrual.yearFraction))
+      );
     }
+    if (couponAmount.lte(0)) continue;
+
+    const fullPeriod = periodAccrual(start, couponDate, convention);
+    flows.push({
+      date: couponDate.toISOString(),
+      flowType: "COUPON",
+      amount: couponAmount.toDecimalPlaces(8).toNumber(),
+      t: yearsBetween(today, couponDate),
+      assumedRate: isFloating,
+      periodDays: fullPeriod.days,
+    });
+  }
+
+  for (const amort of schedule) {
+    const amortDate = new Date(amort.date);
+    if (amortDate.getTime() <= todayTime) continue;
+    flows.push({
+      date: amortDate.toISOString(),
+      flowType: "AMORTIZATION",
+      amount: faceValue.mul(new Decimal(amort.principalPct).div(100)).toDecimalPlaces(8).toNumber(),
+      t: yearsBetween(today, amortDate),
+      assumedRate: false,
+      periodDays: null,
+    });
   }
 
   // Sort all flows by date ascending (chronological order)
@@ -437,21 +404,34 @@ function parseAmortizationSchedule(raw: unknown): AmortizationEntry[] {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
+/** Principal outstanding (0..100) once every amortization dated on or before `time` is paid. */
+function outstandingPctAt(schedule: AmortizationEntry[], time: Date): Decimal {
+  let remaining = new Decimal(100);
+  for (const entry of schedule) {
+    if (new Date(entry.date).getTime() <= time.getTime()) {
+      remaining = remaining.minus(new Decimal(entry.principalPct));
+    }
+  }
+  return remaining.lt(0) ? new Decimal(0) : remaining;
+}
+
 /**
- * Generate coupon payment dates from issueDate through maturityDate,
- * stepping by freqMonths each time.
+ * Generate coupon payment dates from issueDate through maturityDate. Every date is
+ * `issueDate + k × freqMonths` (not the previous date + freqMonths), so a short month
+ * clamps that one date only: an issue on Jan 31 pays Feb 28, then Mar 31 — not Mar 28.
  */
-function buildCouponDates(
+export function buildCouponDates(
   issueDate: Date,
   maturityDate: Date,
   freqMonths: number
 ): Date[] {
   const dates: Date[] = [];
-  let current = addMonths(issueDate, freqMonths);
-
-  while (current.getTime() <= maturityDate.getTime()) {
-    dates.push(new Date(current));
-    current = addMonths(current, freqMonths);
+  if (freqMonths > 0) {
+    for (let k = 1; ; k++) {
+      const next = addMonthsUtc(issueDate, k * freqMonths);
+      if (next.getTime() > maturityDate.getTime()) break;
+      dates.push(next);
+    }
   }
 
   // Always include maturityDate as the last coupon/amortization date if not already covered
@@ -464,13 +444,25 @@ function buildCouponDates(
 }
 
 /**
- * Add `months` to `date`, clamping to the last valid day when the target month
- * is shorter (e.g. Jan 31 + 1 month → Feb 28/29, not Mar 2/3).
- * Uses date-fns addMonths which handles month-end overflow correctly.
- * Returns a new UTC-consistent Date.
+ * Add `months` to `date` in UTC, clamping to the last valid day when the target month is
+ * shorter (Jan 31 + 1 month → Feb 28/29). UTC on purpose: date-fns works in the server's
+ * local zone, which can shift a UTC-midnight date by a day.
  */
-function addMonths(date: Date, months: number): Date {
-  return dateFnsAddMonths(date, months);
+function addMonthsUtc(date: Date, months: number): Date {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + months;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(
+    Date.UTC(
+      year,
+      month,
+      Math.min(date.getUTCDate(), lastDay),
+      date.getUTCHours(),
+      date.getUTCMinutes(),
+      date.getUTCSeconds(),
+      date.getUTCMilliseconds()
+    )
+  );
 }
 
 /** Returns fractional years between two dates using ACT/365 convention. */
