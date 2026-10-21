@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildMonitoringSeries,
   calculateChangePct,
-  calculateDataQuality,
   dedupeAndSortBars,
   filterBarsByRange,
   mergeHistoryBars,

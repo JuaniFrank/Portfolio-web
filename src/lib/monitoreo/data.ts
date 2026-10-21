@@ -1,4 +1,4 @@
-import { Prisma, type InstrumentType } from "@/lib/generated/prisma";
+import { Prisma } from "@/lib/generated/prisma";
 import { prisma } from "@/lib/prisma";
 import { fetchLiveQuoteFromData912 } from "@/lib/market/data912-live";
 import { fetchData912History } from "@/lib/market/data912-history";
