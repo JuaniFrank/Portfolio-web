@@ -1,18 +1,16 @@
 "use client";
 
 import { CalendarDays, RefreshCw } from "lucide-react";
+import dynamic from "next/dynamic";
 import { Suspense, use, useMemo, useState } from "react";
 import { AttributionCard } from "@/components/rendimientos/attribution-card";
 import { DataNotices } from "@/components/rendimientos/data-notices";
-import { DrawdownChart } from "@/components/rendimientos/drawdown-chart";
-import { MonthlyReturnChart } from "@/components/rendimientos/monthly-return-chart";
 import { MonthlyReturns } from "@/components/rendimientos/monthly-returns";
 import { MonthlyTable } from "@/components/rendimientos/monthly-table";
 import { PerformanceKpis } from "@/components/rendimientos/performance-kpis";
-import { PortfolioVsBenchmark } from "@/components/rendimientos/portfolio-vs-benchmark";
 import { RealizedSales } from "@/components/rendimientos/realized-sales";
 import { PositionsTable } from "@/components/rendimientos/positions-table";
-import { PortfolioEvolutionChart } from "@/components/dashboard/portfolio-evolution";
+import { PortfolioEvolutionChartLazy } from "@/components/dashboard/portfolio-evolution-lazy";
 import { formatDateLong } from "@/components/rendimientos/chart-utils";
 import { ChartBlockSkeleton } from "@/components/layout/page-skeletons";
 import { useCurrency } from "@/components/providers/currency-provider";
@@ -20,6 +18,21 @@ import type { PortfolioEvolution } from "@/lib/dashboard/evolution";
 import type { PerformanceReport } from "@/lib/rendimientos/types";
 import { PERIODS, resolveView, sliceMonths, summaryForCurrency, type Period } from "@/lib/rendimientos/view";
 import { cn } from "@/lib/utils";
+
+// recharts is heavy and these charts sit below the KPIs: code-split them (client-only, like the
+// evolution chart) and hold their space with a skeleton of the same height.
+const MonthlyReturnChart = dynamic(
+  () => import("@/components/rendimientos/monthly-return-chart").then((m) => m.MonthlyReturnChart),
+  { ssr: false, loading: () => <ChartBlockSkeleton heightClass="h-72" /> }
+);
+const PortfolioVsBenchmark = dynamic(
+  () => import("@/components/rendimientos/portfolio-vs-benchmark").then((m) => m.PortfolioVsBenchmark),
+  { ssr: false, loading: () => <ChartBlockSkeleton heightClass="h-80" /> }
+);
+const DrawdownChart = dynamic(
+  () => import("@/components/rendimientos/drawdown-chart").then((m) => m.DrawdownChart),
+  { ssr: false, loading: () => <ChartBlockSkeleton heightClass="h-56" /> }
+);
 
 /**
  * `evolution` llega como promesa (se resuelve en el server, ver `rendimientos/page.tsx`)
@@ -173,7 +186,7 @@ function EvolutionChart({
   evolution: Promise<PortfolioEvolution>;
   currency: "ARS" | "USD";
 }) {
-  return <PortfolioEvolutionChart evolution={use(evolution)} currency={currency} />;
+  return <PortfolioEvolutionChartLazy evolution={use(evolution)} currency={currency} />;
 }
 
 function Header({ report }: { report: PerformanceReport }) {
