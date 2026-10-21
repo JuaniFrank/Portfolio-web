@@ -4,7 +4,7 @@ import {
   computeAutoClearSummary,
   getExcludedRowNumbersForCategories,
 } from "../auto-clear";
-import { getBrokerAnalyzer, BROKER_ANALYZERS } from "../registry";
+import { getBrokerAnalyzer } from "../registry";
 import type { NormalizedImportRow } from "../types";
 
 describe("Broker Analyzers & Auto-Clear Modular Architecture", () => {

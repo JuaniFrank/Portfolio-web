@@ -1,5 +1,5 @@
 import Decimal from "decimal.js";
-import * as XLSX from "xlsx";
+import type { WorkBook } from "xlsx";
 import { InstrumentType, TransactionType } from "@/lib/generated/prisma";
 import type { BrokerAnalyzer, ParseContext } from "./types";
 import type {
@@ -342,10 +342,14 @@ export function readBalanzSheetRows(sheetRows: unknown[][]): BalanzRawRow[] {
   return result;
 }
 
-export function parseBalanzWorkbook(
-  workbook: XLSX.WorkBook,
+/**
+ * `xlsx` is loaded on demand: it is large and only needed once a file is actually parsed,
+ * so it must not ride in the import page bundle.
+ */
+export async function parseBalanzWorkbook(
+  workbook: WorkBook,
   options: { fileName: string; fileHash: string }
-): ImportPreviewSummary {
+): Promise<ImportPreviewSummary> {
   const sheetName = workbook.SheetNames.includes(BALANZ_SHEET_NAME)
     ? BALANZ_SHEET_NAME
     : workbook.SheetNames[0];
@@ -373,7 +377,8 @@ export function parseBalanzWorkbook(
     };
   }
 
-  const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+  const { utils } = await import("xlsx");
+  const matrix = utils.sheet_to_json<unknown[]>(sheet, {
     header: 1,
     defval: "",
   }) as unknown[][];
@@ -389,8 +394,9 @@ export class BalanzAnalyzer implements BrokerAnalyzer {
   readonly acceptMimeTypes =
     ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-  parse(buffer: ArrayBuffer, context: ParseContext): ImportPreviewSummary {
-    const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
+  async parse(buffer: ArrayBuffer, context: ParseContext): Promise<ImportPreviewSummary> {
+    const { read } = await import("xlsx");
+    const workbook = read(buffer, { type: "array", cellDates: false });
     return parseBalanzWorkbook(workbook, context);
   }
 }
