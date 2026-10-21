@@ -113,3 +113,50 @@ export function reconcileColumnOrder(defaultOrder: string[], storedOrder: string
   const missing = defaultOrder.filter((id) => !validStored.includes(id));
   return [...validStored, ...missing];
 }
+
+export type ColumnWidthSpec = { id: string; size: number; minSize: number; maxSize?: number };
+
+export type ResolvedColumnWidths = {
+  columns: Array<{ id: string; width: number }>;
+  total: number;
+};
+
+function clampWidth(width: number, spec: ColumnWidthSpec): number {
+  return Math.min(Math.max(width, spec.minSize), spec.maxSize ?? Number.POSITIVE_INFINITY);
+}
+
+/**
+ * Ancho de cada columna visible, en orden, y el total de la tabla. Ambos salen de los
+ * mismos números: con `table-layout: fixed`, si el ancho de la tabla no coincide con la
+ * suma de las columnas, el navegador reparte la diferencia entre TODAS, y achicar o
+ * agrandar una mueve a las demás. Por eso no se usan los getters memoizados de TanStack,
+ * que pueden quedar desfasados respecto del estado controlado durante un resize.
+ */
+export function resolveColumnWidths(
+  specs: ColumnWidthSpec[],
+  order: string[],
+  visibility: Record<string, boolean>,
+  sizing: Record<string, number>
+): ResolvedColumnWidths {
+  const specsById = new Map(specs.map((spec) => [spec.id, spec]));
+  const columns: ResolvedColumnWidths["columns"] = [];
+  let total = 0;
+
+  for (const id of order) {
+    const spec = specsById.get(id);
+    if (!spec || visibility[id] === false) continue;
+    const stored = sizing[id];
+    const width = clampWidth(typeof stored === "number" && Number.isFinite(stored) ? stored : spec.size, spec);
+    columns.push({ id, width });
+    total += width;
+  }
+
+  return { columns, total };
+}
+
+/** Ancho que deja ver entero el contenido más ancho medido de la columna (doble click en
+ * el borde), dentro de sus límites. Sin mediciones vuelve al tamaño por defecto. */
+export function fitColumnWidth(contentWidths: number[], spec: ColumnWidthSpec): number {
+  if (contentWidths.length === 0) return spec.size;
+  return clampWidth(Math.ceil(Math.max(...contentWidths)), spec);
+}
