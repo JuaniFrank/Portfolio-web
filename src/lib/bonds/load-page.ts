@@ -1,5 +1,3 @@
-"use server";
-
 import { getCurrentUser } from "@/lib/auth";
 import { buildBondsPageData, type TradeForBonds } from "@/lib/bonds/build";
 import type {
@@ -44,7 +42,7 @@ function scheduleRowsToProjectedFlows(rows: BondScheduleRow[], today: Date): Pro
     });
 }
 
-export async function getBondsPageDataAction(): Promise<
+export async function loadBondsPageData(): Promise<
   BondsPageDataV2 | { error: "unauthorized" }
 > {
   const user = await getCurrentUser();
