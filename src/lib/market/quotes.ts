@@ -2,6 +2,7 @@ import { Prisma, type InstrumentType, type Settlement } from "@/lib/generated/pr
 import { prisma } from "@/lib/prisma";
 import { resolveCclRate } from "./ccl-rate";
 import { resolveMonitoringRouting } from "./provider-routing";
+import { isQuoteFresh } from "./quote-freshness";
 import { fetchYahooQuote } from "./yahoo";
 
 /** Tipos que cotizan en BYMA y por lo tanto llevan sufijo `.BA` en Yahoo.
@@ -15,9 +16,6 @@ export const ARGENTINIAN_TYPES = new Set<InstrumentType>([
   "LETRA",
   "ON",
 ]);
-
-/** Considera "fresco" todo precio con menos de 10 minutos. */
-const FRESH_PRICE_MS = 10 * 60 * 1000;
 
 export type InstrumentForQuote = {
   id: string;
@@ -34,6 +32,8 @@ export type InstrumentForQuote = {
 export type RefreshQuotesResult = {
   prices: Map<string, string>;
   errors: string[];
+  /** Ids de los instrumentos cuyo fetch en vivo falló (con o sin precio de respaldo en caché). */
+  failedIds: string[];
 };
 
 /**
@@ -51,7 +51,8 @@ export async function refreshLatestQuotes(
 ): Promise<RefreshQuotesResult> {
   const prices = new Map<string, string>();
   const errors: string[] = [];
-  if (instruments.length === 0) return { prices, errors };
+  const failedIds: string[] = [];
+  if (instruments.length === 0) return { prices, errors, failedIds };
 
   const ids = instruments.map((i) => i.id);
   const cached = await prisma.priceCache.findMany({
@@ -67,14 +68,16 @@ export async function refreshLatestQuotes(
 
   for (const inst of instruments) {
     const hit = cachedById.get(inst.id);
-    if (hit && now - hit.datetime.getTime() < FRESH_PRICE_MS) {
+    // `datetime` of a "yahoo" row is its FETCH time (see the write below), so a quote
+    // fetched after the close stays fresh instead of being refetched on every render.
+    if (hit && isQuoteFresh(hit.datetime, now)) {
       prices.set(inst.id, hit.close.toString());
     } else {
       toFetch.push(inst);
     }
   }
 
-  if (toFetch.length === 0) return { prices, errors };
+  if (toFetch.length === 0) return { prices, errors, failedIds };
 
   // Resolved lazily, once, only if a USD-routed instrument actually needs it.
   let cclRatePromise: Promise<number | null> | null = null;
@@ -107,34 +110,34 @@ export async function refreshLatestQuotes(
         }
 
         prices.set(inst.id, priceArs.toString());
-        const datetime = quote.asOf ? new Date(quote.asOf * 1000) : new Date();
-        await prisma.priceCache.upsert({
-          where: {
-            instrumentId_datetime_source: {
+        // Fetch time, not `quote.asOf` (last trade): the cache has no separate fetched-at
+        // column and freshness must not depend on whether the market is open. Only this
+        // function reads/writes source "yahoo"; EOD history uses its own sources.
+        const datetime = new Date();
+        await prisma.$transaction([
+          prisma.priceCache.create({
+            data: {
               instrumentId: inst.id,
               datetime,
+              close: new Prisma.Decimal(priceArs),
               source: "yahoo",
             },
-          },
-          create: {
-            instrumentId: inst.id,
-            datetime,
-            close: new Prisma.Decimal(priceArs),
-            source: "yahoo",
-          },
-          update: {
-            close: new Prisma.Decimal(priceArs),
-          },
-        });
+          }),
+          // One live row per instrument: every refresh has a new `datetime`, so drop the old ones.
+          prisma.priceCache.deleteMany({
+            where: { instrumentId: inst.id, source: "yahoo", datetime: { lt: datetime } },
+          }),
+        ]);
       } catch (err) {
         const cachedClose = cachedById.get(inst.id);
         if (cachedClose) {
           prices.set(inst.id, cachedClose.close.toString());
         }
+        failedIds.push(inst.id);
         errors.push(`${symbol}: ${err instanceof Error ? err.message : String(err)}`);
       }
     })
   );
 
-  return { prices, errors };
+  return { prices, errors, failedIds };
 }
