@@ -7,29 +7,23 @@ import {
   AlertTriangle,
   CheckCircle2,
   Copy,
-  FileSpreadsheet,
   History,
-  Layers,
   LayoutDashboard,
-  Loader2,
   RotateCcw,
   Sparkles,
-  TrendingUp,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   checkImportDuplicatesAction,
   commitImportAction,
   getAmortizedTickersAction,
-  type ImportContextData,
 } from "@/app/actions/imports";
+import type { ImportContextData } from "@/lib/imports/load-page";
 import { AutoClearCard } from "@/components/imports/auto-clear-card";
 import { ImportUploadStep } from "@/components/imports/import-upload-step";
 import { UnifiedReviewStep } from "@/components/imports/unified-review-step";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  AUTO_CLEAR_CATEGORIES,
   computeAutoClearSummary,
   getExcludedRowNumbersForCategories,
   collectTickers,

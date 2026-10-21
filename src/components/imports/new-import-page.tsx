@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
-import type { ImportContextData } from "@/app/actions/imports";
+import type { ImportContextData } from "@/lib/imports/load-page";
 import { ImportWizard } from "@/components/imports/import-wizard";
 import { Button } from "@/components/ui/button";
 
