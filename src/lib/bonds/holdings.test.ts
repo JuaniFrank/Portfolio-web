@@ -70,3 +70,38 @@ describe("buildBondHoldings — ARS cost basis at historical CCL", () => {
     expect(holding!.costBasisArs).toBeNull();
   });
 });
+
+describe("buildBondHoldings — trades not denominated in USD", () => {
+  it("converts an ARS purchase to USD at its own CCL and keeps the ARS amount as paid", () => {
+    // 120.000 ARS on 2025-06-15 (CCL 1200) = 100 USD.
+    const [holding] = buildBondHoldings(
+      [trade({ tradeDate: "2025-06-15T12:00:00.000Z", currencyCode: "ARS", netAmount: "120000" })],
+      { cclAt }
+    );
+
+    expect(holding!.costBasisUsd).toBe("100.00");
+    expect(holding!.costBasisArs).toBe("120000.00");
+  });
+
+  it("mixes USD and ARS purchases in consistent units", () => {
+    const trades = [
+      trade({ tradeDate: "2025-01-15T12:00:00.000Z" }), // 100 USD
+      trade({ tradeDate: "2025-06-15T12:00:00.000Z", currencyCode: "ARS", netAmount: "120000" }), // 100 USD
+    ];
+
+    const [holding] = buildBondHoldings(trades, { cclAt });
+
+    expect(holding!.costBasisUsd).toBe("200.00");
+    expect(holding!.costBasisArs).toBe("220000.00");
+  });
+
+  it("treats USD_MEP like USD", () => {
+    const [holding] = buildBondHoldings(
+      [trade({ tradeDate: "2025-01-15T12:00:00.000Z", currencyCode: "USD_MEP" })],
+      { cclAt }
+    );
+
+    expect(holding!.costBasisUsd).toBe("100.00");
+    expect(holding!.costBasisArs).toBe("100000.00");
+  });
+});

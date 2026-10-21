@@ -6,6 +6,7 @@
 
 import Decimal from "decimal.js";
 import type { InstrumentType } from "@/lib/generated/prisma";
+import { isUsdCurrency } from "@/lib/rendimientos/cashflows";
 import type { BondHolding } from "./types";
 
 export type TradeForBondHoldings = {
@@ -25,7 +26,7 @@ export type TradeForBondHoldings = {
   quantity: string;
   /** Net amount in native transaction currency (USD for ONs). */
   netAmount: string;
-  /** Trade currency — expected to be "USD" for ONs. */
+  /** Trade currency — expected to be a USD code for ONs; any other code is treated as ARS. */
   currencyCode: string;
   tradeDate: string;
 };
@@ -126,11 +127,20 @@ function computePosition(
 
     if (t.type === "BUY") {
       nominalHeld = nominalHeld.plus(qty);
-      costBasisUsd = costBasisUsd.plus(net);
-      if (arsIsMeasurable) {
-        const rate = fx!.cclAt(new Date(t.tradeDate));
-        if (!rate || rate <= 0) arsIsMeasurable = false;
-        else costBasisArs = costBasisArs.plus(net.mul(rate));
+      // Cost is accumulated in USD and ARS separately, each in its own unit. A trade
+      // already in USD feeds the USD side directly; any other currency is taken as ARS
+      // and converted at the CCL of its own date (raw amount only as a last resort).
+      const rate = fx?.cclAt(new Date(t.tradeDate)) ?? null;
+      const hasRate = rate !== null && rate > 0;
+      if (isUsdCurrency(t.currencyCode)) {
+        costBasisUsd = costBasisUsd.plus(net);
+        if (arsIsMeasurable) {
+          if (!hasRate) arsIsMeasurable = false;
+          else costBasisArs = costBasisArs.plus(net.mul(rate));
+        }
+      } else {
+        costBasisUsd = costBasisUsd.plus(hasRate ? net.div(rate) : net);
+        if (arsIsMeasurable) costBasisArs = costBasisArs.plus(net);
       }
     } else {
       // SELL: reduce cost basis proportionally
