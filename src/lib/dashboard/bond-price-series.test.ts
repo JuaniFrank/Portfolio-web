@@ -112,4 +112,22 @@ describe("buildBondDailyPriceSeries", () => {
     expect(result[0]).toEqual({ date: "2026-09-20", priceArsPerVn: 1601, estimated: false });
     expect(result[1]).toEqual({ date: "2026-01-15", priceArsPerVn: 1000, estimated: true });
   });
+
+  it("ignora un snapshot con cierre 0: no es un precio, es un día sin dato", () => {
+    const result = buildBondDailyPriceSeries({
+      days: [utc("2026-09-22"), utc("2026-09-23")],
+      snapshots: [
+        { datetime: at("2026-09-22T13:00:00.000Z"), close: 155000 },
+        { datetime: at("2026-09-22T15:00:00.000Z"), close: 0 },
+        { datetime: at("2026-09-23T15:00:00.000Z"), close: 0 },
+      ],
+      schedule: [],
+      ccl: new TimeSeries([{ date: utc("2026-09-20"), value: 1000 }]),
+    });
+
+    expect(result).toEqual([
+      { date: "2026-09-22", priceArsPerVn: 1550, estimated: false },
+      { date: "2026-09-23", priceArsPerVn: 1000, estimated: true },
+    ]);
+  });
 });

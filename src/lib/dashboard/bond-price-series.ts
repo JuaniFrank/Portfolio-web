@@ -85,6 +85,8 @@ function lastSnapshotOfDay(snapshots: BondRealSnapshot[], day: Date): number | n
 
   for (const snapshot of snapshots) {
     if (toUtcDay(snapshot.datetime).getTime() !== dayTime) continue;
+    // Un cierre 0 es un día sin dato, no un precio: tomarlo valuaría la ON a 0.
+    if (!(snapshot.close > 0)) continue;
     if (!latest || snapshot.datetime.getTime() > latest.datetime.getTime()) {
       latest = snapshot;
     }
