@@ -25,6 +25,7 @@ import { EOD_PRICE_SOURCE } from "@/lib/market/history-sync";
 import { fetchLiveOverlayInputs } from "@/lib/market/live-quotes";
 import { resolveSector } from "@/lib/sector";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
+import { convertTradeToArs } from "@/lib/transactions/trade-currency";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { buildIndexBenchmark, buildInflationBenchmark } from "./benchmarks";
 import {
@@ -247,11 +248,17 @@ export async function buildPerformanceReport(
     eventsByInstrument.set(event.instrumentId, list);
   }
 
+  const cclAtTrade = (date: Date) => ccl.asOf(date)?.value ?? null;
   const trades: TradeForHoldings[] = [];
   for (const tx of transactions) {
     if (!tx.instrument) continue;
     if (tx.type !== "BUY" && tx.type !== "SELL") continue;
     if (!ELIGIBLE_TYPES.has(tx.instrument.type)) continue;
+    // The replay assumes ARS; USD-denominated trades are converted at their trade-date CCL.
+    const { netAmount } = convertTradeToArs(
+      { netAmount: tx.netAmount.toString(), currencyCode: tx.currencyCode, tradeDate: tx.tradeDate },
+      cclAtTrade
+    );
     trades.push({
       instrumentId: tx.instrument.id,
       ticker: tx.instrument.ticker,
@@ -260,7 +267,7 @@ export async function buildPerformanceReport(
       type: tx.type,
       quantity: tx.quantity.toString(),
       price: tx.price.toString(),
-      netAmount: tx.netAmount.toString(),
+      netAmount,
       tradeDate: tx.tradeDate.toISOString(),
     });
   }

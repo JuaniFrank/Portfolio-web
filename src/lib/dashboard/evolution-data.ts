@@ -15,9 +15,9 @@ import { EOD_PRICE_SOURCE } from "@/lib/market/history-sync";
 import { fetchLiveOverlayInputs } from "@/lib/market/live-quotes";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
+import { convertTradeToArs } from "@/lib/transactions/trade-currency";
 import {
   classifyIncome,
-  isUsdCurrency,
   type MonetaryEvent,
   type TransactionForFlows,
 } from "@/lib/rendimientos/cashflows";
@@ -298,6 +298,7 @@ export async function loadPortfolioEvolution(
     eventsByInstrument.set(event.instrumentId, list);
   }
 
+  const cclAtTrade = (date: Date) => cclSeries.asOf(date)?.value ?? null;
   const trades: TradeForHoldings[] = [];
   const flows: InstrumentFlow[] = [];
 
@@ -306,21 +307,16 @@ export async function loadPortfolioEvolution(
     if (tx.type !== "BUY" && tx.type !== "SELL") continue;
     if (!ELIGIBLE_TYPES.has(tx.instrument.type)) continue;
 
-    const rawNetAmount = Number(tx.netAmount);
-    const isUsdTrade = isUsdCurrency(tx.currencyCode);
     // El CCL del día de la operación, no el del cierre del período: es lo que hace que
     // la ganancia en dólares del tramo mida el tipo de cambio en vez de cancelarlo.
-    const rate = cclSeries.asOf(tx.tradeDate)?.value ?? null;
-
-    // Las ONs conocidas son hard-dollar (USD 1 por VN): `netAmount` viene en USD, pero
-    // `buildHoldings` no distingue moneda — asume ARS sin condicional (ver
-    // `computePositionFromTrades`, que suma `|netAmount|` directo al costo). Se
-    // convierte acá, al CCL del día de la operación, antes de que el trade entre al
-    // replay; `costBasisUsd` sale de dividir por ese mismo CCL más abajo, así que el
-    // viaje ida y vuelta reproduce el USD original sin pérdida. Sin CCL para esa fecha
-    // (no debería pasar: el histórico cubre bien atrás de cualquier compra real) se
-    // deja el monto crudo como último recurso en vez de descartar la operación.
-    const netAmountArs = isUsdTrade && rate && rate > 0 ? rawNetAmount * rate : rawNetAmount;
+    // `buildHoldings` asume ARS sin condicional, así que un trade en USD (ONs hard-dollar)
+    // se convierte acá, antes de entrar al replay; ver `convertTradeToArs`.
+    const converted = convertTradeToArs(
+      { netAmount: tx.netAmount.toString(), currencyCode: tx.currencyCode, tradeDate: tx.tradeDate },
+      cclAtTrade
+    );
+    const { isUsd: isUsdTrade, rawNetAmount, rate } = converted;
+    const netAmountArs = Number(converted.netAmount);
 
     trades.push({
       instrumentId: tx.instrument.id,
@@ -330,7 +326,7 @@ export async function loadPortfolioEvolution(
       type: tx.type,
       quantity: tx.quantity.toString(),
       price: tx.price.toString(),
-      netAmount: netAmountArs.toString(),
+      netAmount: converted.netAmount,
       tradeDate: tx.tradeDate.toISOString(),
     });
 
