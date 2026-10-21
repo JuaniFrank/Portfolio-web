@@ -6,7 +6,7 @@
  * crypto, ETFs).
  *
  * Extracted from `src/lib/dashboard/build.ts` (`translateSector`, previously
- * unexported) and the inline fallback in `src/app/actions/dashboard.ts` so
+ * unexported) and the inline fallback in `src/lib/dashboard/load-page.ts` so
  * both callers — and now `series.ts` for the attribution card — share one
  * implementation instead of two copies drifting apart.
  */

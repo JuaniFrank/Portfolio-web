@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
-import { getDashboardPageDataAction } from "@/app/actions/dashboard";
+import { loadDashboardPageData } from "@/lib/dashboard/load-page";
 import { DashboardPage } from "@/components/dashboard/dashboard-page";
 
 export default async function DashboardRoutePage() {
-  const result = await getDashboardPageDataAction();
+  const result = await loadDashboardPageData();
 
   if ("error" in result) {
     redirect("/login");
