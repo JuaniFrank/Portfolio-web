@@ -1,4 +1,5 @@
 import { revalidatePath } from "next/cache";
+import { invalidateUserReports } from "@/lib/cache/report-cache";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/lib/generated/prisma";
 import { batchStateAfterDelete } from "@/lib/transactions/delete-helpers";
@@ -19,8 +20,10 @@ const TRANSACTION_CONSUMER_PATHS = [
   "/monitoreo",
 ] as const;
 
-export function revalidateTransactionConsumers() {
+export function revalidateTransactionConsumers(userId: string) {
   for (const path of TRANSACTION_CONSUMER_PATHS) revalidatePath(path);
+  // The cached /rendimientos report is keyed by user, not by path: expire it explicitly.
+  invalidateUserReports(userId);
 }
 
 /**

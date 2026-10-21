@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
-import { getTransactionsPageDataAction } from "@/app/actions/transactions";
+import { loadTransactionsPageData } from "@/lib/transactions/load-page";
 import { TransactionsPage } from "@/components/transactions/transactions-page";
 
 export default async function TransactionsRoutePage() {
-  const data = await getTransactionsPageDataAction();
+  const data = await loadTransactionsPageData();
 
   if ("error" in data) {
     redirect("/login");
