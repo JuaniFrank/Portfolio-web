@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { calculatePortfolioValuation } from "@/lib/calculations/performance";
+import { summarizeSnapshotRun, type PortfolioRunResult } from "@/lib/snapshots/cron-summary";
 
 // Vercel Cron hits this on a schedule (see vercel.json). Requests carry
 // `Authorization: Bearer $CRON_SECRET`, which we verify so the endpoint can't
@@ -26,47 +27,64 @@ async function runSnapshotsCron() {
     const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
     const users = await prisma.user.findMany({ include: { portfolios: true } });
-    let inserted = 0;
+    const results: PortfolioRunResult[] = [];
 
     for (const user of users) {
       for (const portfolio of user.portfolios) {
-        const perf = await calculatePortfolioValuation(portfolio.id);
+        // One failing portfolio must not abort the rest: isolate each one.
+        try {
+          const perf = await calculatePortfolioValuation(portfolio.id);
 
-        await prisma.portfolioSnapshot.upsert({
-          where: {
-            portfolioId_date: {
+          await prisma.portfolioSnapshot.upsert({
+            where: {
+              portfolioId_date: {
+                portfolioId: portfolio.id,
+                date: day,
+              },
+            },
+            create: {
               portfolioId: portfolio.id,
               date: day,
+              totalValueArs: perf.totalValueArs,
+              totalValueUsd: perf.totalValueUsd,
+              cashArs: perf.cashArs,
+              cashUsd: perf.cashUsd,
+              netDepositsArs: perf.netDepositsArs,
+              netDepositsUsd: perf.netDepositsUsd,
+              twrSinceInception: perf.twrSinceInception,
+              positions: perf.positions,
             },
-          },
-          create: {
-            portfolioId: portfolio.id,
-            date: day,
-            totalValueArs: perf.totalValueArs,
-            totalValueUsd: perf.totalValueUsd,
-            cashArs: perf.cashArs,
-            cashUsd: perf.cashUsd,
-            netDepositsArs: perf.netDepositsArs,
-            netDepositsUsd: perf.netDepositsUsd,
-            twrSinceInception: perf.twrSinceInception,
-            positions: perf.positions,
-          },
-          update: {
-            totalValueArs: perf.totalValueArs,
-            totalValueUsd: perf.totalValueUsd,
-            cashArs: perf.cashArs,
-            cashUsd: perf.cashUsd,
-            netDepositsArs: perf.netDepositsArs,
-            netDepositsUsd: perf.netDepositsUsd,
-            twrSinceInception: perf.twrSinceInception,
-            positions: perf.positions,
-          },
-        });
-        inserted++;
+            update: {
+              totalValueArs: perf.totalValueArs,
+              totalValueUsd: perf.totalValueUsd,
+              cashArs: perf.cashArs,
+              cashUsd: perf.cashUsd,
+              netDepositsArs: perf.netDepositsArs,
+              netDepositsUsd: perf.netDepositsUsd,
+              twrSinceInception: perf.twrSinceInception,
+              positions: perf.positions,
+            },
+          });
+
+          const priceIssueTickers = [
+            ...new Set([...perf.priceIssues.valuedAtCost, ...perf.priceIssues.stale]),
+          ];
+          if (priceIssueTickers.length > 0) {
+            console.warn(
+              `Snapshot cron: portfolio ${portfolio.id} valued with missing/stale prices`,
+              perf.priceIssues
+            );
+          }
+          results.push({ portfolioId: portfolio.id, ok: true, priceIssueTickers });
+        } catch (error) {
+          console.error(`Snapshot cron: portfolio ${portfolio.id} failed`, error);
+          results.push({ portfolioId: portfolio.id, ok: false });
+        }
       }
     }
 
-    return Response.json({ ok: true, snapshotsCreated: inserted });
+    const { status, ...summary } = summarizeSnapshotRun(results);
+    return Response.json(summary, { status });
   } catch (e) {
     console.error("Snapshot cron error", e);
     return Response.json({ ok: false, error: String(e) }, { status: 500 });
