@@ -1,6 +1,7 @@
 "use server";
 
 import { getCurrentUser } from "@/lib/auth";
+import { invalidateAllReports } from "@/lib/cache/report-cache";
 import { prisma } from "@/lib/prisma";
 import { RateType, type BondTerms } from "@/lib/generated/prisma";
 import { fetchArgenBondProposal, type ScrapedBondProposal } from "@/lib/bonds/argen-bond-scraper";
@@ -209,6 +210,9 @@ export async function upsertBondTermsAction(
       dayCountConvention: input.dayCountConvention,
     },
   });
+
+  // Bond terms are keyed by instrument and shared: every holder's cached report changes.
+  invalidateAllReports();
 
   return { success: true, data: toBondTermsDTO(data) };
 }
