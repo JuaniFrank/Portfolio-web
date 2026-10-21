@@ -2,7 +2,7 @@
  * Shared loader: portfolio-wide future ON cash flows, scaled to the actual
  * nominal held.
  *
- * Extracted from `getBondsPageDataAction` (src/app/actions/bonds.ts) so the
+ * Extracted from `loadBondsPageData` (src/lib/bonds/load-page.ts) so the
  * dashboard's "Próximos cobros" panel (`getUpcomingIncomeAction`) can reuse
  * the exact same holdings → schedule → scaled-flows pipeline instead of
  * re-deriving it — no duplication, `/bonds` behavior unchanged (this module
@@ -30,7 +30,7 @@ export type CashflowEntriesScope = { userId: string } | { portfolioIds: string[]
 /** AD-14: Docta's stored schedule has no COUPON/AMORTIZATION distinction of
  * its own (one row combines both) — split by whichever component of the row
  * is non-zero, matching the shape `projectCashFlows` already produces.
- * (Mirrors the private helper of the same name in `src/app/actions/bonds.ts`.) */
+ * (Mirrors the private helper of the same name in `src/lib/bonds/load-page.ts`.) */
 function scheduleRowsToProjectedFlows(rows: BondScheduleRow[], today: Date): ProjectedFlow[] {
   const todayTime = today.getTime();
   return rows

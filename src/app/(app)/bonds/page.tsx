@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
-import { getBondsPageDataAction } from "@/app/actions/bonds";
+import { loadBondsPageData } from "@/lib/bonds/load-page";
 import { BondsPage } from "@/components/bonds/bonds-page";
 
 export default async function BondsRoutePage() {
-  const data = await getBondsPageDataAction();
+  const data = await loadBondsPageData();
 
   if ("error" in data) {
     redirect("/login");
