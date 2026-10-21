@@ -10,11 +10,11 @@ import {
   Info,
   LineChart,
   Loader2,
-  RefreshCw,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   getInstrumentTradeMarkersAction,
@@ -31,8 +31,13 @@ import type {
   UiMonitoringSeriesKind,
 } from "@/lib/monitoreo/types";
 import { AssetSelector } from "./asset-selector";
-import { formatCurrency, formatPercent, formatTradingDate } from "./format";
-import { KLineChart } from "./kline-chart";
+import { formatTradingDate } from "./format";
+
+// klinecharts is heavy and only paints once a series is loaded: code-split it (client-only).
+const KLineChart = dynamic(() => import("./kline-chart").then((m) => m.KLineChart), {
+  ssr: false,
+  loading: () => <Skeleton className="w-full" style={{ height: 440 }} />,
+});
 
 interface MonitoreoPageProps {
   initialData: MonitoringBootstrapData;
