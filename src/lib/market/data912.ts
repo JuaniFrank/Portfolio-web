@@ -17,6 +17,7 @@
 
 import { Prisma } from "@/lib/generated/prisma";
 import { prisma } from "@/lib/prisma";
+import { parseCachedClose, parseLiveOnQuote } from "./data912-parse";
 
 const DATA912_ENDPOINT = "https://data912.com/live/arg_corp";
 const REVALIDATE_SECONDS = 300;
@@ -94,15 +95,8 @@ export async function fetchOnPrices(symbols: string[]): Promise<FetchOnPricesRes
     await Promise.all(
       upperSymbols.map(async (ticker) => {
         const item = liveMap.get(ticker);
-        if (!item || typeof item.c !== "number" || !Number.isFinite(item.c)) return;
-
-        const quote: Data912Quote = {
-          symbol: ticker,
-          c: item.c,
-          px_bid: typeof item.px_bid === "number" ? item.px_bid : item.c,
-          px_ask: typeof item.px_ask === "number" ? item.px_ask : item.c,
-          pct_change: typeof item.pct_change === "number" ? item.pct_change : 0,
-        };
+        const quote = parseLiveOnQuote(item, ticker);
+        if (!item || !quote) return;
 
         quotes.set(ticker, quote);
 
@@ -124,11 +118,11 @@ export async function fetchOnPrices(symbols: string[]): Promise<FetchOnPricesRes
               create: {
                 instrumentId: instrument.id,
                 datetime: bucketedNow,
-                close: new Prisma.Decimal(item.c),
+                close: new Prisma.Decimal(quote.c),
                 source: "data912",
               },
               update: {
-                close: new Prisma.Decimal(item.c),
+                close: new Prisma.Decimal(quote.c),
               },
             });
           }
@@ -169,8 +163,8 @@ async function readCachedQuotes(symbols: string[]): Promise<Map<string, Data912Q
         });
         if (!cached) return;
 
-        const price = Number(cached.close.toString());
-        if (!Number.isFinite(price)) return;
+        const price = parseCachedClose(Number(cached.close.toString()));
+        if (price === null) return;
 
         quotes.set(ticker, {
           symbol: ticker,
