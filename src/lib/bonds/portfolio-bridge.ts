@@ -33,6 +33,10 @@ export type ValuatedOnPosition = {
   pnlPercent: string;
   pnlUsd: string | null;
   pnlPercentUsd: string | null;
+  /** Sin cotización: la posición se valúa a costo (P&L 0), no a 0. */
+  priceUnavailable: boolean;
+  /** La cotización viene del caché porque falló el fetch en vivo. */
+  priceStale: boolean;
 };
 
 /**
@@ -86,8 +90,11 @@ export function valuateOnPositions(
     const quote = priceResult.quotes.get(h.ticker.toUpperCase()) ?? null;
     const isStale = priceResult.stale && quote !== null;
     const mtm = markToMarket(h, quote, cclRate, isStale);
-    const marketValueArs = mtm.marketValueArs ?? "0";
     const basis = costBasisArsOf(h.costBasisArs, h.costBasisUsd, cclRate);
+    // Sin cotización no se sabe cuánto vale, pero tampoco vale 0: valuarla a 0 dibujaba
+    // un −100 % que además persiste el cron de snapshots. Se valúa a costo y se marca.
+    const valuedAtCost = mtm.marketValueArs === null;
+    const marketValueArs = mtm.marketValueArs ?? basis.value.toFixed(2);
     const pnlArs = new Decimal(marketValueArs).minus(basis.value);
     const pnlPercent = basis.value.isZero()
       ? new Decimal(0)
@@ -103,12 +110,14 @@ export function valuateOnPositions(
       costBasisArs: basis.value.toFixed(2),
       arsBasisIsApproximate: basis.isApproximate,
       marketValueArs,
-      marketValueUsd: mtm.marketValueUsd,
+      marketValueUsd: valuedAtCost ? h.costBasisUsd : mtm.marketValueUsd,
       pnlArs: pnlArs.toFixed(2),
       pnlPercent: pnlPercent.toFixed(2),
       // La ON cotiza en dólares: su resultado en USD ya es histórico por construcción.
-      pnlUsd: mtm.unrealizedPnlUsd,
-      pnlPercentUsd: mtm.pctChange,
+      pnlUsd: valuedAtCost ? "0.00" : mtm.unrealizedPnlUsd,
+      pnlPercentUsd: valuedAtCost ? "0.00" : mtm.pctChange,
+      priceUnavailable: mtm.priceUnavailable,
+      priceStale: mtm.priceStale,
     };
   });
 }
