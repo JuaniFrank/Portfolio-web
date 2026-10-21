@@ -11,7 +11,6 @@ import {
   Sliders,
   History,
   Eye,
-  ChevronRight,
   Info,
   ArrowRight,
   ArrowLeft,
