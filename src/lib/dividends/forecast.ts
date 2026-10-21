@@ -1,6 +1,7 @@
 import Decimal from "decimal.js";
 import type { InstrumentType } from "@/lib/generated/prisma";
 import type { DividendCurrency, UpcomingDividend } from "./types";
+import { isBymaQuoted, pickCurrency } from "./forecast-helpers";
 import {
   buildYahooSymbol,
   fetchYahooDividends,
@@ -17,12 +18,6 @@ export type HoldingForForecast = {
 };
 
 const MS_PER_DAY = 86_400_000;
-const ARGENTINIAN_TYPES = new Set<InstrumentType>([
-  "STOCK_AR",
-  "BOND_AR",
-  "LETRA",
-  "ON",
-]);
 
 function averageIntervalDays(events: YahooDividendEvent[]): number | null {
   if (events.length < 2) return null;
@@ -36,13 +31,6 @@ function averageIntervalDays(events: YahooDividendEvent[]): number | null {
   if (gaps.length === 0) return null;
   gaps.sort((a, b) => a - b);
   return gaps[Math.floor(gaps.length / 2)]!;
-}
-
-function pickCurrency(meta: string | null): DividendCurrency {
-  if (!meta) return "ARS";
-  const c = meta.toUpperCase();
-  if (c === "USD") return "USD";
-  return "ARS";
 }
 
 /** ¿`ts` cae en el mismo mes calendario (UTC) que `now`? */
@@ -129,14 +117,18 @@ async function forecastCedear(
   });
 }
 
-/** Camino legacy para STOCK_AR/USA o cuando falla el path con ratio derivado. */
+/**
+ * Camino legacy para STOCK_AR/USA o cuando falla el path con ratio derivado. Los CEDEAR
+ * piden la línea `.BA` (por CEDEAR): la del símbolo USA es por acción y sin ratio
+ * inflaría el pronóstico.
+ */
 async function forecastFromArsCedear(
   h: HoldingForForecast,
   qty: Decimal,
   now: number,
   horizonMs: number
 ): Promise<UpcomingDividend[]> {
-  const symbol = buildYahooSymbol(h.ticker, ARGENTINIAN_TYPES.has(h.instrumentType));
+  const symbol = buildYahooSymbol(h.ticker, isBymaQuoted(h.instrumentType));
   const { dividends, currency } = await fetchYahooDividends(symbol);
   if (dividends.length === 0) return [];
 
