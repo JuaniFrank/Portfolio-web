@@ -1,5 +1,3 @@
-"use server";
-
 import { getCurrentUser } from "@/lib/auth";
 import {
   toDashboardHolding,
@@ -17,6 +15,13 @@ import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { fetchOnPrices } from "@/lib/market/data912";
 import { resolveCclRate } from "@/lib/market/ccl-rate";
 import { cclLookupFrom, loadCclSeries } from "@/lib/market/ccl-history";
+import {
+  classifyQuoteCoverage,
+  onlyHeldInstruments,
+  mergePriceIssues,
+  onPriceIssues,
+} from "@/lib/dashboard/price-issues";
+import { convertTradeToArs } from "@/lib/transactions/trade-currency";
 import { refreshLatestQuotes, type InstrumentForQuote } from "@/lib/market/quotes";
 import { prisma } from "@/lib/prisma";
 import { resolveRawSector } from "@/lib/sector";
@@ -41,7 +46,7 @@ export type DashboardPageData = {
   evolution: Promise<PortfolioEvolution>;
 };
 
-export async function getDashboardPageDataAction(): Promise<
+export async function loadDashboardPageData(): Promise<
   DashboardPageData | { error: "unauthorized" }
 > {
   const user = await getCurrentUser();
@@ -131,6 +136,11 @@ export async function getDashboardPageDataAction(): Promise<
     eventsMap.set(e.instrumentId, list);
   }
 
+  // El costo de cada posición se replaya contra el CCL del día de cada compra; el valor
+  // a mercado va al CCL de hoy. Esa asimetría es lo que hace que el rendimiento en
+  // dólares mida algo distinto del de pesos.
+  const cclAt = cclLookupFrom(cclSeries);
+
   const trades: TradeForHoldings[] = [];
   const onBondTrades: ReturnType<typeof toBondTrade>[] = [];
   const sectorByInstrument = new Map<string, string | null>();
@@ -167,7 +177,14 @@ export async function getDashboardPageDataAction(): Promise<
       continue;
     }
 
-    trades.push(trade);
+    // The equity replay assumes ARS: convert USD-denominated trades at their trade-date CCL.
+    trades.push({
+      ...trade,
+      netAmount: convertTradeToArs(
+        { netAmount: trade.netAmount, currencyCode: r.currencyCode, tradeDate: r.tradeDate },
+        cclAt
+      ).netAmount,
+    });
     if (!uniqueInstruments.has(r.instrument.id)) {
       uniqueInstruments.set(r.instrument.id, {
         id: r.instrument.id,
@@ -182,15 +199,10 @@ export async function getDashboardPageDataAction(): Promise<
 
   const onTickers = Array.from(new Set(onBondTrades.map((t) => t.ticker.toUpperCase())));
 
-  const [{ prices }, onPriceResult] = await Promise.all([
+  const [{ prices, failedIds }, onPriceResult] = await Promise.all([
     refreshLatestQuotes([...uniqueInstruments.values()]),
     onTickers.length > 0 ? fetchOnPrices(onTickers) : Promise.resolve({ quotes: new Map(), stale: false }),
   ]);
-
-  // El costo de cada posición se replaya contra el CCL del día de cada compra; el valor
-  // a mercado va al CCL de hoy. Esa asimetría es lo que hace que el rendimiento en
-  // dólares mida algo distinto del de pesos.
-  const cclAt = cclLookupFrom(cclSeries);
 
   const equityHoldings = buildHoldings(trades, prices, eventsMap, {
     cclAt,
@@ -199,6 +211,17 @@ export async function getDashboardPageDataAction(): Promise<
   const onPositions = valuateOnPositions(onBondTrades, onPriceResult, cclRate, onNamesById, {
     cclAt,
   });
+
+  // Una cotización que falla no puede pasar por precio real: lo que cayó a costo (P&L 0)
+  // o a un precio guardado se declara en el panel de avisos.
+  const priceIssues = mergePriceIssues(
+    classifyQuoteCoverage(
+      onlyHeldInstruments([...uniqueInstruments.values()], equityHoldings),
+      prices,
+      failedIds
+    ),
+    onPriceIssues(onPositions)
+  );
 
   const rawHoldings: HoldingForDashboard[] = [
     ...equityHoldings.map((h) => ({
@@ -222,7 +245,7 @@ export async function getDashboardPageDataAction(): Promise<
 
   return {
     data: withoutEvolution(
-      buildDashboardData({ portfolioName: portfolio.name, rawHoldings, cclRate })
+      buildDashboardData({ portfolioName: portfolio.name, rawHoldings, cclRate, priceIssues })
     ),
     evolution,
   };
