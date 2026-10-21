@@ -5,6 +5,7 @@
  * la UI la oculta en ese caso.
  */
 import type { EvolutionPoint } from "./evolution";
+import type { PriceIssues } from "./price-issues";
 import type { ConcentrationStats, DashboardHolding } from "./types";
 
 export type DashboardNoticeSeverity = "warning" | "info";
@@ -27,8 +28,10 @@ export function buildDashboardNotices(args: {
   lastPoint: EvolutionPoint | null;
   concentration: ConcentrationStats;
   holdings?: DashboardHolding[];
+  /** Posiciones sin cotización fresca (ver `price-issues.ts`). */
+  priceIssues?: PriceIssues;
 }): DashboardNotice[] {
-  const { cclMissing, lastPoint, concentration } = args;
+  const { cclMissing, lastPoint, concentration, priceIssues } = args;
   const notices: DashboardNotice[] = [];
 
   if (cclMissing) {
@@ -38,6 +41,24 @@ export function buildDashboardNotices(args: {
       title: "Falta la cotización del CCL",
       detail:
         "No hay CCL cargado: las métricas en dólares aparecen en cero. Importá o registrá un tipo de cambio USD/ARS para habilitarlas.",
+    });
+  }
+
+  if (priceIssues && priceIssues.valuedAtCost.length > 0) {
+    notices.push({
+      id: "valued-at-cost",
+      severity: "warning",
+      title: "Posiciones valuadas a costo",
+      detail: `${priceIssues.valuedAtCost.join(", ")}: no hay cotización disponible, así que se valúan a su costo y el resultado aparece en 0.`,
+    });
+  }
+
+  if (priceIssues && priceIssues.stale.length > 0) {
+    notices.push({
+      id: "quote-failures",
+      severity: "warning",
+      title: "Cotizaciones que no se pudieron actualizar",
+      detail: `${priceIssues.stale.join(", ")}: falló la consulta en vivo, se usó el último precio guardado.`,
     });
   }
 

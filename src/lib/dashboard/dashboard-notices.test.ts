@@ -167,4 +167,37 @@ describe("buildDashboardNotices", () => {
       "concentration",
     ]);
   });
+
+  it("avisa de posiciones valuadas a costo por falta de cotización", () => {
+    const notices = buildDashboardNotices({
+      cclMissing: false,
+      lastPoint: null,
+      concentration: concentration(),
+      priceIssues: { valuedAtCost: ["MCC3O", "AAPL"], stale: [] },
+    });
+    const notice = notices.find((n) => n.id === "valued-at-cost");
+    expect(notice?.severity).toBe("warning");
+    expect(notice?.detail).toContain("MCC3O, AAPL");
+  });
+
+  it("avisa de cotizaciones que fallaron y se resolvieron con caché", () => {
+    const notices = buildDashboardNotices({
+      cclMissing: false,
+      lastPoint: null,
+      concentration: concentration(),
+      priceIssues: { valuedAtCost: [], stale: ["YPFD"] },
+    });
+    expect(notices.find((n) => n.id === "quote-failures")?.detail).toContain("YPFD");
+  });
+
+  it("no agrega avisos sin problemas de precio", () => {
+    const notices = buildDashboardNotices({
+      cclMissing: false,
+      lastPoint: null,
+      concentration: concentration(),
+      priceIssues: { valuedAtCost: [], stale: [] },
+    });
+    expect(notices.map((n) => n.id)).not.toContain("valued-at-cost");
+    expect(notices.map((n) => n.id)).not.toContain("quote-failures");
+  });
 });
