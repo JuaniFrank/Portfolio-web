@@ -74,6 +74,7 @@ export function DashboardPage({ data, evolution }: Props) {
             evolution={evolution}
             cclMissing={cclMissing}
             concentration={data.concentration}
+            priceIssues={data.priceIssues}
           />
 
           <section className="space-y-3">
