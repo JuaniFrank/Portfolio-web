@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -60,8 +60,10 @@ import { formatHoldingAge, type PositionTableRow } from "@/lib/rendimientos/posi
 import {
   compareNullableAlphabetical,
   compareNullableNumeric,
+  fitColumnWidth,
   parseStoredLayout,
   reconcileColumnOrder,
+  resolveColumnWidths,
   serializeLayout,
   type PositionsTableLayout,
   type SortDirection,
@@ -79,6 +81,7 @@ type ColumnConfig = {
   align: "left" | "right";
   size: number;
   minSize: number;
+  maxSize?: number;
   kind: ColumnKind;
   /** El valor sobre el que se ordena. Recibe la moneda activa: "Precio" y "Valor de
    * mercado" cambian de columna comparable según el toggle ARS/USD. */
@@ -122,8 +125,9 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     id: "ticker",
     label: "Ticker",
     align: "left",
-    size: 220,
-    minSize: 160,
+    size: 180,
+    minSize: 120,
+    maxSize: 360,
     kind: "alphabetical",
     getSortValue: (row) => row.ticker,
     renderCell: (row) => (
@@ -145,7 +149,7 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     id: "avgCostArs",
     label: "Costo prom. ARS",
     align: "right",
-    size: 140,
+    size: 150,
     minSize: 110,
     kind: "numeric",
     getSortValue: (row) => row.avgCostArs,
@@ -155,7 +159,7 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     id: "avgCostUsd",
     label: "Costo prom. USD",
     align: "right",
-    size: 140,
+    size: 150,
     minSize: 110,
     kind: "numeric",
     getSortValue: (row) => row.avgCostUsd,
@@ -165,7 +169,7 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     id: "price",
     label: "Precio",
     align: "right",
-    size: 120,
+    size: 115,
     minSize: 90,
     kind: "numeric",
     getSortValue: (row, currency) => priceFor(row, currency),
@@ -175,8 +179,8 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     id: "returnArs",
     label: "Result. ARS",
     align: "right",
-    size: 150,
-    minSize: 120,
+    size: 130,
+    minSize: 100,
     kind: "numeric",
     // Se ordena por el %, no por el monto: el monto absoluto está dominado por el
     // tamaño de la posición (para eso ya está "Peso"), el % mide cómo le fue.
@@ -189,8 +193,8 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     id: "returnUsd",
     label: "Result. USD",
     align: "right",
-    size: 150,
-    minSize: 120,
+    size: 130,
+    minSize: 100,
     kind: "numeric",
     getSortValue: (row) => row.returnUsd.pct,
     renderCell: (row) => (
@@ -201,7 +205,7 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     id: "dailyChangePct",
     label: "Var. diaria",
     align: "right",
-    size: 110,
+    size: 115,
     minSize: 90,
     kind: "numeric",
     getSortValue: (row) => row.dailyChangePct,
@@ -215,7 +219,7 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     id: "weightPct",
     label: "Peso",
     align: "right",
-    size: 90,
+    size: 85,
     minSize: 70,
     kind: "numeric",
     getSortValue: (row) => row.weightPct,
@@ -225,8 +229,8 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     id: "holdingAge",
     label: "Antigüedad",
     align: "right",
-    size: 110,
-    minSize: 90,
+    size: 125,
+    minSize: 95,
     kind: "numeric",
     getSortValue: (row) => row.holdingDays,
     renderCell: (row) => (row.holdingDays === null ? EMPTY_VALUE : formatHoldingAge(row.holdingDays)),
@@ -235,7 +239,7 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     id: "marketValue",
     label: "Valor de mercado",
     align: "right",
-    size: 160,
+    size: 165,
     minSize: 130,
     kind: "numeric",
     getSortValue: (row, currency) => (currency === "ARS" ? row.valueArs : row.valueUsd),
@@ -390,6 +394,7 @@ export function PositionsTable({
           header: config.label,
           size: config.size,
           minSize: config.minSize,
+          maxSize: config.maxSize,
           enableHiding: config.id !== "ticker",
           cell: ({ row }) => config.renderCell(row.original, currency),
         })
@@ -432,6 +437,22 @@ export function PositionsTable({
 
   function resetLayout() {
     writeLayout(DEFAULT_LAYOUT);
+  }
+
+  const tableRef = useRef<HTMLTableElement>(null);
+  const widths = resolveColumnWidths(POSITION_COLUMNS, columnOrder, columnVisibility, columnSizing);
+  const widthById = new Map(widths.columns.map((column) => [column.id, column.width]));
+
+  /** Doble click en el borde: la columna toma el ancho de su contenido más ancho. */
+  function autoFitColumn(columnId: string) {
+    const config = POSITION_COLUMNS.find((column) => column.id === columnId);
+    const cells = tableRef.current?.querySelectorAll<HTMLElement>(`[data-column-id="${columnId}"]`);
+    if (!config || !cells) return;
+    const contentWidths = [...cells].map(measureContentWidth);
+    writeLayout({
+      ...layout,
+      columnSizing: { ...columnSizing, [columnId]: fitColumnWidth(contentWidths, config) },
+    });
   }
 
   const headerGroup = table.getHeaderGroups()[0];
@@ -495,6 +516,9 @@ export function PositionsTable({
         </div>
       ) : (
         <DndContext
+          // Fixed id: dnd-kit's auto-generated `aria-describedby` ids differ between the
+          // server render and hydration otherwise.
+          id="positions-table-dnd"
           sensors={sensors}
           collisionDetection={closestCenter}
           modifiers={[restrictToHorizontalAxis]}
@@ -502,9 +526,15 @@ export function PositionsTable({
         >
           <div className="overflow-x-auto rounded-lg border border-zinc-800">
             <table
+              ref={tableRef}
               className="border-collapse text-(length:--positions-table-font-size) leading-(--positions-table-line-height)"
-              style={{ width: table.getTotalSize(), tableLayout: "fixed" }}
+              style={{ width: widths.total, tableLayout: "fixed" }}
             >
+              <colgroup>
+                {widths.columns.map((column) => (
+                  <col key={column.id} style={{ width: column.width }} />
+                ))}
+              </colgroup>
               <thead>
                 {headerGroup ? (
                   <tr>
@@ -520,10 +550,12 @@ export function PositionsTable({
                           <SortableHeaderCell
                             key={header.id}
                             header={header}
+                            width={widthById.get(header.column.id)}
                             label={config?.label ?? header.column.id}
                             align={config?.align ?? "left"}
                             sort={sort}
                             onSort={() => handleSort(header.column.id)}
+                            onAutoFit={() => autoFitColumn(header.column.id)}
                           />
                         );
                       })}
@@ -552,14 +584,16 @@ export function PositionsTable({
                         return (
                           <td
                             key={cell.id}
-                            style={{ width: cell.column.getSize() }}
+                            data-column-id={cell.column.id}
                             className={cn(
                               "overflow-hidden px-(--positions-table-cell-px) py-(--positions-table-cell-py) tabular-nums",
                               config?.align === "right" ? "text-right" : "text-left",
                               sticky && "sticky left-0 z-10 bg-zinc-950"
                             )}
                           >
-                            <table.FlexRender cell={cell} />
+                            <div>
+                              <table.FlexRender cell={cell} />
+                            </div>
                           </td>
                         );
                       })}
@@ -575,18 +609,40 @@ export function PositionsTable({
   );
 }
 
+/**
+ * Ancho natural del contenido de una celda, sin el límite de la columna: mide una copia
+ * invisible a `max-content` dentro de la misma celda (hereda fuente y tamaño) y le suma
+ * el padding horizontal.
+ */
+function measureContentWidth(cell: HTMLElement): number {
+  const content = cell.firstElementChild;
+  if (!(content instanceof HTMLElement)) return 0;
+  const probe = content.cloneNode(true) as HTMLElement;
+  probe.style.cssText +=
+    ";position:absolute;visibility:hidden;pointer-events:none;left:0;top:0;width:max-content;white-space:nowrap";
+  cell.appendChild(probe);
+  const contentWidth = probe.getBoundingClientRect().width;
+  probe.remove();
+  const style = window.getComputedStyle(cell);
+  return contentWidth + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+}
+
 function SortableHeaderCell({
   header,
+  width,
   label,
   align,
   sort,
   onSort,
+  onAutoFit,
 }: {
   header: Header<typeof features, PositionTableRow, unknown>;
+  width: number | undefined;
   label: string;
   align: "left" | "right";
   sort: Sort;
   onSort: () => void;
+  onAutoFit: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: header.column.id,
@@ -598,8 +654,9 @@ function SortableHeaderCell({
   return (
     <th
       ref={setNodeRef}
+      data-column-id={header.column.id}
       style={{
-        width: header.getSize(),
+        width,
         transform: CSS.Translate.toString(transform),
         transition,
       }}
@@ -627,6 +684,7 @@ function SortableHeaderCell({
         <button
           type="button"
           onClick={onSort}
+          title={label}
           className="flex items-center gap-1 truncate hover:text-zinc-200"
         >
           <span className="truncate">{label}</span>
@@ -645,6 +703,8 @@ function SortableHeaderCell({
         <div
           onMouseDown={header.getResizeHandler()}
           onTouchStart={header.getResizeHandler()}
+          onDoubleClick={onAutoFit}
+          title="Arrastrar para cambiar el ancho · doble click para ajustar al contenido"
           className={cn(
             "absolute right-0 top-0 h-full w-1.5 cursor-col-resize touch-none select-none",
             header.column.getIsResizing() ? "bg-teal-400" : "bg-transparent hover:bg-zinc-700"
