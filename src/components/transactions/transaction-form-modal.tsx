@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { localTodayIso } from "@/lib/transactions/trade-date";
 import {
   Select,
   SelectContent,
@@ -50,9 +51,7 @@ const INSTRUMENT_TYPE_OPTIONS: { value: InstrumentType; label: string }[] = [
   { value: InstrumentType.LETRA, label: "Letra" },
 ];
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
+const todayIso = localTodayIso;
 
 function formatAmount(value: number, currency: string) {
   return value.toLocaleString("es-AR", { style: "currency", currency });

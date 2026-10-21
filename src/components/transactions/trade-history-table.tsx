@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { format } from "date-fns";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { deleteTransactionAction } from "@/app/actions/transactions";
@@ -21,10 +20,10 @@ import {
 import { TickerAvatar } from "@/components/transactions/ticker-avatar";
 import { TRANSACTION_TYPE_LABELS } from "@/lib/imports/filters";
 import type { TradeHistoryRow } from "@/lib/transactions/types";
-import { cn } from "@/lib/utils";
 
 function formatDate(iso: string) {
-  return format(new Date(iso), "yyyy-MM-dd");
+  // The day is stored at 12:00Z; reading the UTC day avoids a local-time shift.
+  return iso.slice(0, 10);
 }
 
 function formatMoneyArs(value: string) {
