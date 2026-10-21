@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getMonitoringBootstrapAction } from "@/app/actions/monitoreo";
+import { loadMonitoringBootstrap } from "@/lib/monitoreo/load-bootstrap";
 import { MonitoreoPage } from "@/components/monitoreo/monitoreo-page";
 
 export const metadata = {
@@ -8,7 +8,7 @@ export const metadata = {
 };
 
 export default async function MonitoreoRoutePage() {
-  const data = await getMonitoringBootstrapAction();
+  const data = await loadMonitoringBootstrap();
 
   if ("error" in data) {
     redirect("/login");
