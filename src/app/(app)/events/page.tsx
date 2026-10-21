@@ -1,13 +1,13 @@
 import { redirect } from "next/navigation";
-import { listCorporateEvents, listPortfolioInstruments } from "@/app/actions/events";
-import { listSuggestedCorporateEvents } from "@/app/actions/suggested-events";
+import { loadCorporateEvents, loadPortfolioInstruments } from "@/lib/events/load-page";
+import { loadSuggestedCorporateEvents } from "@/lib/events/load-suggested";
 import { EventsPage } from "@/components/events/events-page";
 
 export default async function EventsRoutePage() {
   const [eventsResult, instrumentsResult, suggestionsResult] = await Promise.all([
-    listCorporateEvents(),
-    listPortfolioInstruments(),
-    listSuggestedCorporateEvents(),
+    loadCorporateEvents(),
+    loadPortfolioInstruments(),
+    loadSuggestedCorporateEvents(),
   ]);
 
   if ("error" in eventsResult || "error" in instrumentsResult || "error" in suggestionsResult) {
