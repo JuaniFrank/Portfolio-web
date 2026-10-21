@@ -11,6 +11,14 @@ import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { fetchOnPrices } from "@/lib/market/data912";
 import { resolveCclRate } from "@/lib/market/ccl-rate";
 import { cclLookupFrom, loadCclSeries } from "@/lib/market/ccl-history";
+import {
+  classifyQuoteCoverage,
+  onlyHeldInstruments,
+  mergePriceIssues,
+  onPriceIssues,
+  type PriceIssues,
+} from "@/lib/dashboard/price-issues";
+import { convertTradeToArs } from "@/lib/transactions/trade-currency";
 import { refreshLatestQuotes, type InstrumentForQuote } from "@/lib/market/quotes";
 import {
   buildHoldings,
@@ -31,6 +39,8 @@ export type PortfolioValuationResult = {
   netDepositsUsd: number;
   twrSinceInception: number | null;
   positions: Prisma.InputJsonValue;
+  /** Posiciones valuadas a costo o con precio viejo; el llamador decide si lo persiste/loguea. */
+  priceIssues: PriceIssues;
 };
 
 export async function calculatePortfolioValuation(
@@ -87,6 +97,10 @@ export async function calculatePortfolioValuation(
     });
     eventsMap.set(e.instrumentId, list);
   }
+
+  // Mismo criterio que el dashboard: el costo en dólares sale del CCL del día de cada
+  // compra, no del de hoy. Ver `@/lib/market/ccl-history`.
+  const cclAt = cclLookupFrom(cclSeries);
 
   const trades: TradeForHoldings[] = [];
   const onBondTrades: ReturnType<typeof toBondTrade>[] = [];
@@ -165,7 +179,7 @@ export async function calculatePortfolioValuation(
     };
 
     // AD-3 3-step sector fallback (design §2.3), on BOTH branches — see the
-    // identical fix in src/app/actions/dashboard.ts (T-41).
+    // identical fix in src/lib/dashboard/load-page.ts (T-41).
     const sector =
       r.instrument.sector ??
       r.instrument.baseInstrument?.sector ??
@@ -179,7 +193,14 @@ export async function calculatePortfolioValuation(
       continue;
     }
 
-    trades.push(trade);
+    // The equity replay assumes ARS: convert USD-denominated trades at their trade-date CCL.
+    trades.push({
+      ...trade,
+      netAmount: convertTradeToArs(
+        { netAmount: trade.netAmount, currencyCode: r.currencyCode, tradeDate: r.tradeDate },
+        cclAt
+      ).netAmount,
+    });
     if (!uniqueInstruments.has(r.instrument.id)) {
       uniqueInstruments.set(r.instrument.id, {
         id: r.instrument.id,
@@ -196,16 +217,12 @@ export async function calculatePortfolioValuation(
     new Set(onBondTrades.map((t) => t.ticker.toUpperCase()))
   );
 
-  const [{ prices }, onPriceResult] = await Promise.all([
+  const [{ prices, failedIds }, onPriceResult] = await Promise.all([
     refreshLatestQuotes([...uniqueInstruments.values()]),
     onTickers.length > 0
       ? fetchOnPrices(onTickers)
       : Promise.resolve({ quotes: new Map(), stale: false }),
   ]);
-
-  // Mismo criterio que el dashboard: el costo en dólares sale del CCL del día de cada
-  // compra, no del de hoy. Ver `@/lib/market/ccl-history`.
-  const cclAt = cclLookupFrom(cclSeries);
 
   const equityHoldings = buildHoldings(trades, prices, eventsMap, {
     cclAt,
@@ -217,6 +234,15 @@ export async function calculatePortfolioValuation(
     cclRate,
     onNamesById,
     { cclAt }
+  );
+
+  const priceIssues = mergePriceIssues(
+    classifyQuoteCoverage(
+      onlyHeldInstruments([...uniqueInstruments.values()], equityHoldings),
+      prices,
+      failedIds
+    ),
+    onPriceIssues(onPositions)
   );
 
   const rawHoldings: HoldingForDashboard[] = [
@@ -278,5 +304,6 @@ export async function calculatePortfolioValuation(
     netDepositsUsd: Decimal.max(0, netDepositsUsd).toNumber(),
     twrSinceInception: null,
     positions: positionsJson,
+    priceIssues,
   };
 }
