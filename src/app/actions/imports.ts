@@ -15,7 +15,6 @@ import {
   type ExistingTransactionForMatch,
 } from "@/lib/importers/duplicates";
 import { buildImportIdempotencyHash } from "@/lib/importers/idempotency";
-import type { ImportedTransactionRow } from "@/lib/imports/filters";
 import { runMacroBackfill, runPriceBackfill } from "@/lib/market/backfill";
 import { prisma } from "@/lib/prisma";
 import {
@@ -27,41 +26,6 @@ import type { CommitImportRow, DuplicateStrategy } from "@/lib/importers/types";
 
 /** Tope defensivo para las operaciones masivas disparadas desde el cliente. */
 const MAX_BULK_IDS = 2000;
-
-export type ImportContextData = {
-  brokers: Array<{ id: string; code: string; name: string; enabled: boolean }>;
-  portfolios: Array<{ id: string; name: string; isDefault: boolean }>;
-  brokerAccounts: Array<{
-    id: string;
-    name: string;
-    brokerId: string;
-    currencyCode: string;
-    broker: { code: string; name: string };
-  }>;
-};
-
-export async function getImportContextAction(): Promise<
-  ImportContextData | { error: "unauthorized" }
-> {
-  const user = await getCurrentUser();
-  if (!user) return { error: "unauthorized" };
-
-  const [brokers, portfolios, brokerAccounts] = await Promise.all([
-    prisma.broker.findMany({ orderBy: { name: "asc" } }),
-    prisma.portfolio.findMany({
-      where: { userId: user.id, archivedAt: null },
-      orderBy: [{ isDefault: "desc" }, { name: "asc" }],
-      select: { id: true, name: true, isDefault: true },
-    }),
-    prisma.brokerAccount.findMany({
-      where: { userId: user.id, archivedAt: null },
-      orderBy: { name: "asc" },
-      include: { broker: { select: { code: true, name: true } } },
-    }),
-  ]);
-
-  return { brokers, portfolios, brokerAccounts };
-}
 
 // ---------------------------------------------------------------------------
 // Detección de duplicados (corre ANTES del commit)
@@ -334,7 +298,7 @@ export async function commitImportAction(
   });
 
   if (result.ok) {
-    revalidateTransactionConsumers();
+    revalidateTransactionConsumers(user.id);
 
     // AD-9/T-53: enrichment runs after the response is prepared — a Yahoo/
     // Docta failure here can never fail this commit (FR-13). Instruments are
@@ -380,52 +344,6 @@ async function runImportBackfill(): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Listado y borrado de transacciones importadas
-// ---------------------------------------------------------------------------
-
-export async function getImportedTransactionsAction(): Promise<
-  ImportedTransactionRow[] | { error: "unauthorized" }
-> {
-  const user = await getCurrentUser();
-  if (!user) return { error: "unauthorized" };
-
-  const rows = await prisma.transaction.findMany({
-    where: {
-      source: TransactionSource.IMPORT,
-      portfolio: { userId: user.id },
-    },
-    orderBy: { tradeDate: "desc" },
-    include: {
-      instrument: { select: { ticker: true, type: true } },
-      importBatch: {
-        select: {
-          id: true,
-          fileName: true,
-          broker: { select: { name: true } },
-        },
-      },
-    },
-  });
-
-  return rows
-    .filter((r) => r.importBatch)
-    .map((r) => ({
-      id: r.id,
-      tradeDate: r.tradeDate.toISOString(),
-      type: r.type,
-      ticker: r.instrument?.ticker ?? null,
-      instrumentType: r.instrument?.type ?? null,
-      quantity: r.quantity.toString(),
-      netAmount: r.netAmount.toString(),
-      currencyCode: r.currencyCode,
-      notes: r.notes,
-      brokerName: r.importBatch!.broker.name,
-      fileName: r.importBatch!.fileName,
-      importBatchId: r.importBatch!.id,
-    }));
-}
-
 export type DeleteImportedResult =
   | { ok: true; deleted: number }
   | { ok: false; error: string };
@@ -463,7 +381,7 @@ export async function deleteImportedTransactionsAction(
       return { ok: false, error: "No se encontraron operaciones para borrar" };
     }
 
-    revalidateTransactionConsumers();
+    revalidateTransactionConsumers(user.id);
     return { ok: true, deleted };
   } catch (error) {
     console.error("deleteImportedTransactionsAction", error);
