@@ -12,6 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { MobileNav } from "@/components/layout/mobile-nav";
 import { PortfolioSwitcher } from "@/components/layout/portfolio-switcher";
 import { CurrencySwitcher } from "@/components/layout/currency-switcher";
 
@@ -19,19 +20,20 @@ export function Header() {
   const { data } = useSession();
 
   return (
-    <header className="flex h-14 items-center justify-between border-b border-zinc-800 bg-zinc-950/40 px-6">
-      <div className="flex items-center gap-4">
-        <Link href="/dashboard" className="text-sm font-semibold text-zinc-100">
+    <header className="flex h-14 items-center justify-between border-b border-zinc-800 bg-zinc-950/40 px-4 md:px-6">
+      <div className="flex min-w-0 items-center gap-2 md:gap-4">
+        <MobileNav />
+        <Link href="/dashboard" className="hidden text-sm font-semibold text-zinc-100 sm:inline">
           Portafolio
         </Link>
         <PortfolioSwitcher />
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-2 md:gap-3">
         <CurrencySwitcher />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="gap-2">
-              <span className="max-w-[160px] truncate text-left text-xs">
+              <span className="max-w-[96px] sm:max-w-[160px] truncate text-left text-xs">
                 {data?.user?.name ?? data?.user?.email ?? "Usuario"}
               </span>
               <ChevronDown className="h-4 w-4 opacity-70" />
