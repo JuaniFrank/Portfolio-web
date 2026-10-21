@@ -4,17 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
-  Building2,
   CalendarSync,
   Coins,
   Download,
   LayoutDashboard,
   LineChart,
   Landmark,
-  Settings,
-  Shapes,
   TrendingUp,
-  Wallet,
 } from "lucide-react";
 import { PaletteToggle } from "@/components/layout/palette-toggle";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
@@ -35,14 +31,16 @@ const items = [
   // { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
-export function Sidebar() {
+/** Marca, navegación y toggles. Compartido por la barra fija (desktop) y el drawer (mobile). */
+export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
 
   return (
-    <aside className="flex w-64 flex-col border-r border-zinc-200 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-950/60">
+    <>
       <div className="px-4 py-5">
         <Link
           href="/dashboard"
+          onClick={onNavigate}
           className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
         >
           Portafolio
@@ -57,6 +55,7 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              onClick={onNavigate}
               className={cn(
                 "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
                 active
@@ -74,6 +73,15 @@ export function Sidebar() {
         <PaletteToggle />
         <ThemeToggle />
       </div>
+    </>
+  );
+}
+
+/** Barra lateral fija; por debajo de `md` se reemplaza por el drawer de `MobileNav`. */
+export function Sidebar() {
+  return (
+    <aside className="hidden w-64 flex-col border-r border-zinc-200 bg-zinc-50/80 md:flex dark:border-zinc-800 dark:bg-zinc-950/60">
+      <SidebarContent />
     </aside>
   );
 }
