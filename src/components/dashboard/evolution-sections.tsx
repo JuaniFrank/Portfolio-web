@@ -12,7 +12,7 @@ import { DayMovers } from "./day-movers";
 import type { ViewCurrency } from "./format";
 import { NoticesPanel } from "./notices-panel";
 import { PeriodKpisPanel } from "./period-kpis-panel";
-import { PortfolioEvolutionChart } from "./portfolio-evolution";
+import { PortfolioEvolutionChartLazy } from "./portfolio-evolution-lazy";
 
 /**
  * Secciones del dashboard que dependen de la serie histórica reconstruida. La serie es
@@ -26,15 +26,22 @@ export function EvolutionNotices({
   evolution,
   cclMissing,
   concentration,
+  priceIssues,
 }: {
   evolution: EvolutionPromise;
   cclMissing: boolean;
   concentration: DashboardData["concentration"];
+  priceIssues: DashboardData["priceIssues"];
 }) {
   // Sin fallback: los avisos están ocultos cuando no hay nada que reportar.
   return (
     <Suspense fallback={null}>
-      <Notices evolution={evolution} cclMissing={cclMissing} concentration={concentration} />
+      <Notices
+        evolution={evolution}
+        cclMissing={cclMissing}
+        concentration={concentration}
+        priceIssues={priceIssues}
+      />
     </Suspense>
   );
 }
@@ -43,16 +50,18 @@ function Notices({
   evolution,
   cclMissing,
   concentration,
+  priceIssues,
 }: {
   evolution: EvolutionPromise;
   cclMissing: boolean;
   concentration: DashboardData["concentration"];
+  priceIssues: DashboardData["priceIssues"];
 }) {
   const resolved = use(evolution);
   const lastPoint = resolved.series.daily.at(-1) ?? null;
   const notices = useMemo(
-    () => buildDashboardNotices({ cclMissing, lastPoint, concentration }),
-    [cclMissing, lastPoint, concentration]
+    () => buildDashboardNotices({ cclMissing, lastPoint, concentration, priceIssues }),
+    [cclMissing, lastPoint, concentration, priceIssues]
   );
   return <NoticesPanel notices={notices} />;
 }
@@ -106,7 +115,7 @@ function Chart({
   initialRange: TimeRange;
 }) {
   return (
-    <PortfolioEvolutionChart
+    <PortfolioEvolutionChartLazy
       evolution={use(evolution)}
       currency={currency}
       initialRange={initialRange}
