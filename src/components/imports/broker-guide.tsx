@@ -7,7 +7,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Maximize2,
-  Sparkles,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {

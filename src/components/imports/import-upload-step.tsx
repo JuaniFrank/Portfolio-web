@@ -1,7 +1,7 @@
 "use client";
 
-import { Loader2, ArrowRight } from "lucide-react";
-import type { ImportContextData } from "@/app/actions/imports";
+import { Loader2 } from "lucide-react";
+import type { ImportContextData } from "@/lib/imports/load-page";
 import { BrokerGuide } from "@/components/imports/broker-guide";
 import { FileDropzone } from "@/components/imports/file-dropzone";
 import { Label } from "@/components/ui/label";
