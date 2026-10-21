@@ -1,5 +1,6 @@
 import Decimal from "decimal.js";
 import { TransactionType, type InstrumentType } from "@/lib/generated/prisma";
+import { isUsdCurrency } from "@/lib/rendimientos/cashflows";
 import type { DividendCurrency, ReceivedDividend } from "./types";
 
 type RawTransaction = {
@@ -33,7 +34,7 @@ function tickerForTax(t: RawTransaction): string | null {
 }
 
 function asDividendCurrency(code: string): DividendCurrency {
-  return code === "USD" ? "USD" : "ARS";
+  return isUsdCurrency(code) ? "USD" : "ARS";
 }
 
 /**
@@ -68,12 +69,30 @@ export function aggregateReceivedDividends(rows: RawTransaction[]): ReceivedDivi
     taxByKey.set(key, bucket);
   }
 
+  // Several dividend rows can share ticker+date (two payments, or duplicated loads).
+  // Each withholding bucket is allocated across them in proportion to gross so the
+  // total tax is counted once, not once per row.
+  const grossByKey = new Map<string, Decimal>();
+  const countByKey = new Map<string, number>();
+  const keyOf = (d: RawTransaction) =>
+    `${d.instrument!.ticker.toUpperCase()}|${d.tradeDate.toISOString().slice(0, 10)}`;
+  for (const d of dividends) {
+    const key = keyOf(d);
+    const gross = new Decimal(d.netAmount.toString()).abs();
+    grossByKey.set(key, (grossByKey.get(key) ?? new Decimal(0)).plus(gross));
+    countByKey.set(key, (countByKey.get(key) ?? 0) + 1);
+  }
+
   return dividends.map((d) => {
     const instrument = d.instrument!;
     const ticker = instrument.ticker.toUpperCase();
-    const dateKey = d.tradeDate.toISOString().slice(0, 10);
-    const matchKey = `${ticker}|${dateKey}`;
-    const taxBucket = taxByKey.get(matchKey) ?? { ars: new Decimal(0), usd: new Decimal(0) };
+    const matchKey = keyOf(d);
+    const fullBucket = taxByKey.get(matchKey) ?? { ars: new Decimal(0), usd: new Decimal(0) };
+    const totalGross = grossByKey.get(matchKey)!;
+    const share = totalGross.isZero()
+      ? new Decimal(1).div(countByKey.get(matchKey)!)
+      : new Decimal(d.netAmount.toString()).abs().div(totalGross);
+    const taxBucket = { ars: fullBucket.ars.mul(share), usd: fullBucket.usd.mul(share) };
 
     const nativeCurrency = asDividendCurrency(d.currencyCode);
     const grossNative = new Decimal(d.netAmount.toString()).abs();
