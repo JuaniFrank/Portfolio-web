@@ -1,19 +1,26 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
+import { ChartBlockSkeleton } from "@/components/layout/page-skeletons";
 import { AlertTriangle } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import type { DividendsPageData } from "@/lib/dividends/types";
 import { cn } from "@/lib/utils";
 import { DividendCalendar } from "./dividend-calendar";
-import { DividendCharts } from "./dividend-charts";
 import {
   DividendByTickerTable,
   DividendHistoryTable,
 } from "./dividend-detail-table";
 import { DividendKpiCards } from "./dividend-kpis";
 import type { ViewCurrency } from "./format";
+
+// recharts is heavy: code-split the charts (client-only) behind a same-size skeleton.
+const DividendCharts = dynamic(() => import("./dividend-charts").then((m) => m.DividendCharts), {
+  ssr: false,
+  loading: () => <ChartBlockSkeleton heightClass="h-72" />,
+});
 
 type Props = {
   data: DividendsPageData;

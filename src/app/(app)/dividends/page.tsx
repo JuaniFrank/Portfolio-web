@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
-import { getDividendsPageDataAction } from "@/app/actions/dividends";
+import { loadDividendsPageData } from "@/lib/dividends/load-page";
 import { DividendsPage } from "@/components/dividends/dividends-page";
 
 export default async function DividendsRoutePage() {
-  const data = await getDividendsPageDataAction();
+  const data = await loadDividendsPageData();
 
   if ("error" in data) {
     redirect("/login");
