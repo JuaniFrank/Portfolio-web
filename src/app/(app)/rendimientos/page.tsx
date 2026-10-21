@@ -4,22 +4,20 @@ import { KpiCardRowSkeleton, TableSkeleton } from "@/components/layout/page-skel
 import { RendimientosPage } from "@/components/rendimientos/rendimientos-page";
 import { getCurrentUser } from "@/lib/auth";
 import { EMPTY_EVOLUTION, type PortfolioEvolution } from "@/lib/dashboard/evolution";
-import { loadPortfolioEvolution } from "@/lib/dashboard/evolution-data";
+import { getCachedPerformanceReport, getCachedPortfolioEvolution } from "@/lib/cache/report-cache";
 import { prisma } from "@/lib/prisma";
-import { buildPerformanceReport } from "@/lib/rendimientos/series";
 import type { PerformanceReport } from "@/lib/rendimientos/types";
 
 /**
- * El reporte se calcula on-demand en cada revalidación en vez de leerse de una tabla.
- *
- * Es la decisión de fondo de este rediseño: al recalcular siempre, el histórico **nunca
- * puede quedar desactualizado**, que era exactamente la enfermedad del enfoque anterior
- * basado en `PortfolioSnapshot`. Cuesta cuatro queries más matemática pura, así que 5
- * minutos de caché alcanzan de sobra. Si con muchos meses se pusiera lento, el paso
- * siguiente es materializar la serie mensual — pero siempre como caché reconstruible,
- * nunca como fuente de verdad.
+ * El reporte se recalcula desde las transacciones en vez de leerse de una tabla: el histórico
+ * **nunca puede quedar desactualizado**, que era la enfermedad del enfoque anterior basado en
+ * `PortfolioSnapshot`. Como la página lee la sesión es dinámica y un `export const revalidate`
+ * no tendría efecto; el costo se acota con una caché por usuario de ~5 minutos
+ * (`lib/cache/report-cache.ts`) que las mutaciones de transacciones, eventos y términos de
+ * bonos expiran al instante. Si con muchos meses se pusiera lento, el paso siguiente es
+ * materializar la serie mensual — pero siempre como caché reconstruible, nunca como fuente
+ * de verdad.
  */
-export const revalidate = 300;
 
 export default async function RendimientosRoutePage() {
   const user = await getCurrentUser();
@@ -55,8 +53,8 @@ export default async function RendimientosRoutePage() {
   // detrás de un `<Suspense>` y la evolución viaja como promesa hasta el gráfico, que se
   // suspende por su cuenta. Los `safe*` nunca rechazan, así que no hay promesa suelta
   // que pueda tirar abajo el render.
-  const reportPromise = safeBuildReport(portfolio.id, portfolio.name);
-  const evolutionPromise = safeLoadEvolution(portfolio.id);
+  const reportPromise = safeBuildReport(user.id, portfolio.id, portfolio.name);
+  const evolutionPromise = safeLoadEvolution(user.id, portfolio.id);
 
   return (
     <Suspense fallback={<ReportFallback portfolioName={portfolio.name} />}>
@@ -100,11 +98,12 @@ function ReportFallback({ portfolioName }: { portfolioName: string }) {
  * JSX no atraparía errores de render — solo daría una falsa sensación de seguridad.
  */
 async function safeBuildReport(
+  userId: string,
   portfolioId: string,
   portfolioName: string
 ): Promise<PerformanceReport> {
   try {
-    return await buildPerformanceReport({ portfolioIds: [portfolioId], portfolioName });
+    return await getCachedPerformanceReport(userId, portfolioId, portfolioName);
   } catch (error) {
     console.error("Rendimientos report error", error);
     return emptyReport(portfolioName);
@@ -113,9 +112,12 @@ async function safeBuildReport(
 
 /** Mismo criterio que `safeBuildReport`: si la serie diaria falla, el gráfico muestra su
  * placeholder y el resto de la página (el reporte mensual) sigue en pie. */
-async function safeLoadEvolution(portfolioId: string): Promise<PortfolioEvolution> {
+async function safeLoadEvolution(
+  userId: string,
+  portfolioId: string
+): Promise<PortfolioEvolution> {
   try {
-    return await loadPortfolioEvolution([portfolioId]);
+    return await getCachedPortfolioEvolution(userId, portfolioId);
   } catch (error) {
     console.error("Rendimientos evolution error", error);
     return EMPTY_EVOLUTION;
