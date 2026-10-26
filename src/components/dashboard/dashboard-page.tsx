@@ -90,7 +90,7 @@ export function DashboardPage({ data, evolution }: Props) {
               title="Vista Detallada"
               description="Snapshot rápido de la salud actual de tus inversiones."
             />
-            <DashboardKpiCards kpis={data.kpis} />
+            <DashboardKpiCards kpis={data.kpis} fxRates={data.fxRates} />
           </section>
 
           <ChartCard
