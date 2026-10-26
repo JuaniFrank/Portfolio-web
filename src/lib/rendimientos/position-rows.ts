@@ -11,6 +11,7 @@ import type { TradeForHoldings } from "@/lib/transactions/holdings";
 import { toUtcDay } from "./months";
 import type { PriceIndex } from "./price-series";
 import type { InstrumentType } from "@/lib/generated/prisma";
+import type { UnderlyingPrices } from "./underlying-price";
 import type { PositionDetail } from "./types";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -43,6 +44,14 @@ export type PositionTableRow = {
   holdingDays: number | null;
   priceIsStale: boolean;
   priceIsLive: boolean;
+  /** Símbolo de la acción original en su mercado de origen (solo CEDEARs con datos). */
+  underlyingSymbol: string | null;
+  /** Mercado donde cotiza la acción original ("NASDAQ", "NYSE"). */
+  underlyingExchange: string | null;
+  /** Costo promedio de la acción original en USD sobre las fechas de compra del lote abierto. */
+  underlyingAvgCostUsd: number | null;
+  /** Precio actual de la acción original en USD. */
+  underlyingPriceUsd: number | null;
 };
 
 /**
@@ -54,33 +63,41 @@ export function buildPositionRows(
   positions: PositionDetail[],
   trades: TradeForHoldings[],
   prices: PriceIndex,
-  today: Date
+  today: Date,
+  underlying: ReadonlyMap<string, UnderlyingPrices> = new Map()
 ): PositionTableRow[] {
   const totalValueArs = positions.reduce((sum, position) => sum + position.valueArs, 0);
   const holdingStarts = holdingStartDates(trades);
 
-  return positions.map((position) => ({
-    instrumentId: position.instrumentId,
-    ticker: position.ticker,
-    instrumentName: position.instrumentName,
-    instrumentType: position.instrumentType,
-    quantity: position.quantity,
-    avgCostArs: position.quantity > 0 ? position.costBasisArs / position.quantity : null,
-    avgCostUsd:
-      position.costBasisUsd === null || position.quantity <= 0
-        ? null
-        : position.costBasisUsd / position.quantity,
-    priceArs: position.priceArs,
-    dailyChangePct: dailyChangePct(position, prices, today),
-    valueArs: position.valueArs,
-    valueUsd: position.valueUsd,
-    weightPct: totalValueArs > 0 ? (position.valueArs / totalValueArs) * 100 : 0,
-    returnArs: { amount: position.unrealizedPnlArs, pct: position.unrealizedReturnPct },
-    returnUsd: { amount: position.unrealizedPnlUsd, pct: position.unrealizedReturnPctUsd },
-    holdingDays: holdingDaysFor(position.instrumentId, holdingStarts, today),
-    priceIsStale: position.priceIsStale,
-    priceIsLive: position.priceIsLive,
-  }));
+  return positions.map((position) => {
+    const original = underlying.get(position.instrumentId);
+    return {
+      instrumentId: position.instrumentId,
+      ticker: position.ticker,
+      instrumentName: position.instrumentName,
+      instrumentType: position.instrumentType,
+      quantity: position.quantity,
+      avgCostArs: position.quantity > 0 ? position.costBasisArs / position.quantity : null,
+      avgCostUsd:
+        position.costBasisUsd === null || position.quantity <= 0
+          ? null
+          : position.costBasisUsd / position.quantity,
+      priceArs: position.priceArs,
+      dailyChangePct: dailyChangePct(position, prices, today),
+      valueArs: position.valueArs,
+      valueUsd: position.valueUsd,
+      weightPct: totalValueArs > 0 ? (position.valueArs / totalValueArs) * 100 : 0,
+      returnArs: { amount: position.unrealizedPnlArs, pct: position.unrealizedReturnPct },
+      returnUsd: { amount: position.unrealizedPnlUsd, pct: position.unrealizedReturnPctUsd },
+      holdingDays: holdingDaysFor(position.instrumentId, holdingStarts, today),
+      priceIsStale: position.priceIsStale,
+      priceIsLive: position.priceIsLive,
+      underlyingSymbol: original?.symbol ?? null,
+      underlyingExchange: original?.exchange ?? null,
+      underlyingAvgCostUsd: original?.avgCostUsd ?? null,
+      underlyingPriceUsd: original?.priceUsd ?? null,
+    };
+  });
 }
 
 function dailyChangePct(

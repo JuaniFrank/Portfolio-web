@@ -266,3 +266,31 @@ describe("formatHoldingAge", () => {
     expect(formatHoldingAge(730)).toBe("2a");
   });
 });
+
+describe("buildPositionRows — acción original", () => {
+  it("copia el símbolo, mercado, costo y precio del subyacente de la posición", () => {
+    const [row] = buildPositionRows(
+      [position()],
+      [],
+      new PriceIndex([]),
+      utc("2026-01-10"),
+      new Map([
+        [AAPL, { symbol: "AAPL", exchange: "NASDAQ", avgCostUsd: 150, priceUsd: 200 }],
+      ])
+    );
+
+    expect(row!.underlyingSymbol).toBe("AAPL");
+    expect(row!.underlyingExchange).toBe("NASDAQ");
+    expect(row!.underlyingAvgCostUsd).toBe(150);
+    expect(row!.underlyingPriceUsd).toBe(200);
+  });
+
+  it("deja todo en null cuando la posición no tiene subyacente (no CEDEAR o falla de Yahoo)", () => {
+    const [row] = buildPositionRows([position()], [], new PriceIndex([]), utc("2026-01-10"));
+
+    expect(row!.underlyingSymbol).toBeNull();
+    expect(row!.underlyingExchange).toBeNull();
+    expect(row!.underlyingAvgCostUsd).toBeNull();
+    expect(row!.underlyingPriceUsd).toBeNull();
+  });
+});
