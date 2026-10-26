@@ -6,6 +6,7 @@ import {
 } from "@/lib/bonds/portfolio-bridge";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { cclLookupFrom, loadCclSeries } from "@/lib/market/ccl-history";
+import { CCL_RATE_WHERE } from "@/lib/market/ccl-rate-filter";
 import { fetchOnPrices } from "@/lib/market/data912";
 import { refreshLatestQuotes, type InstrumentForQuote } from "@/lib/market/quotes";
 import { prisma } from "@/lib/prisma";
@@ -89,10 +90,7 @@ export async function loadTransactionsPageData(): Promise<
       },
     }),
     prisma.fxRate.findFirst({
-      where: {
-        baseCurrencyCode: "USD",
-        quoteCurrencyCode: "ARS",
-      },
+      where: CCL_RATE_WHERE,
       orderBy: { date: "desc" },
     }),
     prisma.corporateEvent.findMany({
