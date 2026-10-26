@@ -73,7 +73,13 @@ export type CclOverlayResult = {
   isLive: boolean;
 };
 
-/** Igual criterio que `overlayLivePrices`, pero para la serie de CCL, que es única. */
+/**
+ * Como `overlayLivePrices`, pero para la serie de CCL, que es única, y con la regla
+ * inversa: acá el valor en vivo gana. El CCL no tiene un "cierre medido" que lo
+ * reemplace; la fila de hoy que ya esté guardada suele ser el cierre del viernes que
+ * argentinadatos arrastra hasta que publica el del día, y quedarse con ella congela el
+ * dólar en un valor viejo. Sin cotización utilizable, se conserva lo guardado.
+ */
 export function overlayLiveCcl(
   points: SeriesPoint[],
   liveMid: number | null,
@@ -83,10 +89,8 @@ export function overlayLiveCcl(
   const todayTime = todayUtc.getTime();
 
   if (!isTradingWeekday(todayUtc)) return { points, isLive: false };
-
-  const hasToday = points.some((point) => toUtcDay(point.date).getTime() === todayTime);
-  if (hasToday) return { points, isLive: false };
   if (!isUsableQuote(liveMid)) return { points, isLive: false };
 
-  return { points: [...points, { date: todayUtc, value: liveMid }], isLive: true };
+  const withoutToday = points.filter((point) => toUtcDay(point.date).getTime() !== todayTime);
+  return { points: [...withoutToday, { date: todayUtc, value: liveMid }], isLive: true };
 }

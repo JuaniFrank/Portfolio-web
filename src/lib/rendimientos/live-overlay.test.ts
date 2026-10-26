@@ -87,8 +87,25 @@ describe("overlayLiveCcl", () => {
     expect(result.isLive).toBe(true);
   });
 
-  it("el punto de hoy ya presente gana: ignora el mid en vivo", () => {
-    const result = overlayLiveCcl([{ date: TODAY, value: 1000 }], 1050, TODAY);
+  it("el mid en vivo reemplaza el punto de hoy ya guardado: el guardado puede ser el cierre arrastrado", () => {
+    const result = overlayLiveCcl(
+      [
+        { date: utc("2026-09-22"), value: 990 },
+        { date: TODAY, value: 1000 },
+      ],
+      1050,
+      TODAY
+    );
+
+    expect(result.points).toEqual([
+      { date: utc("2026-09-22"), value: 990 },
+      { date: TODAY, value: 1050 },
+    ]);
+    expect(result.isLive).toBe(true);
+  });
+
+  it("sin cotización en vivo conserva el punto de hoy guardado", () => {
+    const result = overlayLiveCcl([{ date: TODAY, value: 1000 }], null, TODAY);
 
     expect(result.points).toEqual([{ date: TODAY, value: 1000 }]);
     expect(result.isLive).toBe(false);
