@@ -13,7 +13,8 @@ import { EMPTY_EVOLUTION, type PortfolioEvolution } from "@/lib/dashboard/evolut
 import type { DashboardData } from "@/lib/dashboard/types";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
 import { fetchOnPrices } from "@/lib/market/data912";
-import { resolveCclRate } from "@/lib/market/ccl-rate";
+import { resolveFxDailyChanges } from "@/lib/market/ccl-rate";
+import { toFxRateView } from "@/lib/dashboard/fx-rates";
 import { cclLookupFrom, loadCclSeries } from "@/lib/market/ccl-history";
 import {
   classifyQuoteCoverage,
@@ -78,7 +79,7 @@ export async function loadDashboardPageData(): Promise<
   // manejar; quien sí la consuma (`use`) igual recibe el error.
   evolution.catch(() => undefined);
 
-  const [rows, cclRate, cclSeries, eventRows] = await Promise.all([
+  const [rows, fxChanges, cclSeries, eventRows] = await Promise.all([
     prisma.transaction.findMany({
       where: {
         portfolioId: portfolio.id,
@@ -103,7 +104,7 @@ export async function loadDashboardPageData(): Promise<
         },
       },
     }),
-    resolveCclRate(),
+    resolveFxDailyChanges(),
     cclSeriesPromise,
     prisma.corporateEvent.findMany({
       where: {
@@ -121,6 +122,11 @@ export async function loadDashboardPageData(): Promise<
       },
     }),
   ]);
+
+  // El CCL de hoy que valúa las posiciones es el mismo que se muestra en la tarjeta de
+  // cotizaciones: sale de una sola resolución.
+  const cclRate = fxChanges.ccl?.mid ?? null;
+  const fxRates = { ccl: toFxRateView(fxChanges.ccl), mep: toFxRateView(fxChanges.mep) };
 
   // Build events map: instrumentId → events sorted ascending by effectiveDate
   const eventsMap = new Map<string, CorporateEventForBuilder[]>();
@@ -245,7 +251,7 @@ export async function loadDashboardPageData(): Promise<
 
   return {
     data: withoutEvolution(
-      buildDashboardData({ portfolioName: portfolio.name, rawHoldings, cclRate, priceIssues })
+      buildDashboardData({ portfolioName: portfolio.name, rawHoldings, cclRate, priceIssues, fxRates })
     ),
     evolution,
   };

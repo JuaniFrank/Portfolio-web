@@ -195,8 +195,9 @@ export async function loadPortfolioEvolution(
   );
 
   // Sea la compartida por el dashboard o la que se leyó acá, de acá en más es una sola.
-  // El overlay es idempotente: si ya tiene un punto de hoy (por ejemplo porque
-  // `resolveCclRate` ya lo persistió), no agrega nada.
+  // El mid en vivo reemplaza el punto de hoy que ya traiga la serie (el guardado puede
+  // ser el cierre arrastrado), así que da igual si `resolveCclRate` ya lo persistió:
+  // es el mismo valor que ven el dashboard y /rendimientos.
   //
   // El CCL de hoy también se omite si el snapshot de precios fue un eco: si ningún
   // instrumento cerró de verdad hoy, no tiene sentido que el CCL sí "cierre" — dejaría
