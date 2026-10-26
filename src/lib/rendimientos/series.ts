@@ -44,6 +44,8 @@ import {
 import { overlayLiveCcl, overlayLivePrices } from "./live-overlay";
 import { marketDayOf } from "./market-day";
 import { buildPositionRows } from "./position-rows";
+import { loadUnderlyingPrices, type UnderlyingCandidate } from "./underlying-loader";
+import { underlyingSymbolFor } from "./underlying-price";
 import { PriceIndex, TimeSeries } from "./price-series";
 import { buildRealizedSales } from "./realized-sales";
 import {
@@ -113,8 +115,10 @@ export async function buildPerformanceReport(
           name: true,
           type: true,
           sector: true,
-          baseInstrument: { select: { sector: true } },
-          underlyingAsset: { select: { sector: true } },
+          baseInstrument: {
+            select: { sector: true, ticker: true, underlyingAsset: { select: { ticker: true } } },
+          },
+          underlyingAsset: { select: { sector: true, ticker: true } },
         },
       },
     },
@@ -486,8 +490,11 @@ export async function buildPerformanceReport(
   // valúa forward-filled con el precio más reciente), así que sus posiciones son el
   // estado actual de la cartera — no hace falta un replay aparte para la tabla.
   const latestValuation = valuations.at(-1);
+  const underlying = latestValuation
+    ? await loadUnderlyingForPositions(latestValuation.positions, transactions, trades, eventsByInstrument)
+    : new Map();
   const positions = latestValuation
-    ? buildPositionRows(latestValuation.positions, trades, prices, today)
+    ? buildPositionRows(latestValuation.positions, trades, prices, today, underlying)
     : [];
 
   return {
@@ -513,6 +520,61 @@ export async function buildPerformanceReport(
       seriesFloor: seriesFloor.toISOString(),
     },
   };
+}
+
+// ============================================================
+// ACCIÓN ORIGINAL DE LOS CEDEARs
+// ============================================================
+
+/**
+ * Precio de la acción original (mercado de origen, vía Yahoo) de cada CEDEAR abierto.
+ * Es un dato accesorio de la tabla de posiciones: si Yahoo falla, la tabla igual se
+ * arma, con "—" en esas columnas.
+ */
+async function loadUnderlyingForPositions(
+  positions: PositionDetail[],
+  transactions: Array<{
+    instrument: {
+      id: string;
+      ticker: string;
+      type: InstrumentType;
+      baseInstrument: { ticker: string; underlyingAsset: { ticker: string } | null } | null;
+      underlyingAsset: { ticker: string } | null;
+    } | null;
+  }>,
+  trades: TradeForHoldings[],
+  eventsByInstrument: Map<string, CorporateEventForBuilder[]>
+) {
+  const instruments = new Map<string, NonNullable<(typeof transactions)[number]["instrument"]>>();
+  for (const tx of transactions) if (tx.instrument) instruments.set(tx.instrument.id, tx.instrument);
+
+  const candidates: UnderlyingCandidate[] = [];
+  for (const position of positions) {
+    const instrument = instruments.get(position.instrumentId);
+    if (!instrument) continue;
+    const symbol = underlyingSymbolFor({
+      type: instrument.type,
+      ticker: instrument.ticker,
+      underlyingAssetTicker: instrument.underlyingAsset?.ticker,
+      baseInstrument: instrument.baseInstrument && {
+        ticker: instrument.baseInstrument.ticker,
+        underlyingAssetTicker: instrument.baseInstrument.underlyingAsset?.ticker,
+      },
+    });
+    if (!symbol) continue;
+    candidates.push({
+      instrumentId: position.instrumentId,
+      symbol,
+      trades: trades.filter((trade) => trade.instrumentId === position.instrumentId),
+      events: eventsByInstrument.get(position.instrumentId) ?? [],
+    });
+  }
+
+  try {
+    return await loadUnderlyingPrices(candidates);
+  } catch {
+    return new Map();
+  }
 }
 
 // ============================================================
