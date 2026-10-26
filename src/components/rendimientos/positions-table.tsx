@@ -78,6 +78,8 @@ type ColumnKind = "numeric" | "alphabetical";
 type ColumnConfig = {
   id: string;
   label: string;
+  /** Texto del tooltip del encabezado, cuando el nombre corto no alcanza para explicar la fuente. */
+  title?: string;
   align: "left" | "right";
   size: number;
   minSize: number;
@@ -119,6 +121,26 @@ function ReturnCell({
     </div>
   );
 }
+
+/** Valor en USD de la acción original, con el mercado debajo. "—" si no hay dato
+ * (no es CEDEAR, o Yahoo no respondió). */
+function UnderlyingCell({ value, exchange }: { value: number | null; exchange: string | null }) {
+  if (value === null) return EMPTY_VALUE;
+  return (
+    <div className="flex flex-col items-end leading-tight">
+      <span>{formatMoney(value, "USD")}</span>
+      {exchange ? <span className="text-[10px] text-zinc-500">{exchange}</span> : null}
+    </div>
+  );
+}
+
+const UNDERLYING_COST_TITLE =
+  "Costo promedio de la acción original en su mercado de origen (Yahoo Finance), en USD: " +
+  "el cierre de ese mercado en cada día de compra del lote abierto, ponderado por cantidad. " +
+  "No es el precio del CEDEAR. Solo CEDEARs.";
+const UNDERLYING_PRICE_TITLE =
+  "Precio actual de la acción original en su mercado de origen (Yahoo Finance), en USD. " +
+  "No es el precio del CEDEAR. Solo CEDEARs.";
 
 const POSITION_COLUMNS: ColumnConfig[] = [
   {
@@ -174,6 +196,32 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     kind: "numeric",
     getSortValue: (row, currency) => priceFor(row, currency),
     renderCell: (row, currency) => formatMoneyOrEmpty(priceFor(row, currency), currency),
+  },
+  {
+    id: "underlyingAvgCostUsd",
+    label: "Costo prom. acción orig.",
+    title: UNDERLYING_COST_TITLE,
+    align: "right",
+    size: 190,
+    minSize: 140,
+    kind: "numeric",
+    getSortValue: (row) => row.underlyingAvgCostUsd,
+    renderCell: (row) => (
+      <UnderlyingCell value={row.underlyingAvgCostUsd} exchange={row.underlyingExchange} />
+    ),
+  },
+  {
+    id: "underlyingPriceUsd",
+    label: "Precio acción orig.",
+    title: UNDERLYING_PRICE_TITLE,
+    align: "right",
+    size: 160,
+    minSize: 125,
+    kind: "numeric",
+    getSortValue: (row) => row.underlyingPriceUsd,
+    renderCell: (row) => (
+      <UnderlyingCell value={row.underlyingPriceUsd} exchange={row.underlyingExchange} />
+    ),
   },
   {
     id: "returnArs",
@@ -552,6 +600,7 @@ export function PositionsTable({
                             header={header}
                             width={widthById.get(header.column.id)}
                             label={config?.label ?? header.column.id}
+                            title={config?.title}
                             align={config?.align ?? "left"}
                             sort={sort}
                             onSort={() => handleSort(header.column.id)}
@@ -631,6 +680,7 @@ function SortableHeaderCell({
   header,
   width,
   label,
+  title,
   align,
   sort,
   onSort,
@@ -639,6 +689,7 @@ function SortableHeaderCell({
   header: Header<typeof features, PositionTableRow, unknown>;
   width: number | undefined;
   label: string;
+  title?: string;
   align: "left" | "right";
   sort: Sort;
   onSort: () => void;
@@ -684,7 +735,7 @@ function SortableHeaderCell({
         <button
           type="button"
           onClick={onSort}
-          title={label}
+          title={title ?? label}
           className="flex items-center gap-1 truncate hover:text-zinc-200"
         >
           <span className="truncate">{label}</span>
