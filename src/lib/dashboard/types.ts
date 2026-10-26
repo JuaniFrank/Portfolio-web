@@ -1,5 +1,6 @@
 import type { InstrumentType } from "@/lib/generated/prisma";
 import type { PortfolioEvolution } from "./evolution";
+import type { DashboardFxRates } from "./fx-rates";
 import type { PriceIssues } from "./price-issues";
 
 export type DashboardCurrency = "ARS" | "USD";
@@ -112,6 +113,8 @@ export type DashboardData = {
   portfolioName: string;
   kpis: DashboardKpis;
   cclRate: string | null;
+  /** MEP y CCL de hoy con su variación contra el cierre previo. */
+  fxRates: DashboardFxRates;
   holdings: DashboardHolding[];
   allocationByTicker: AllocationSlice[];
   allocationByMarket: AllocationSlice[];

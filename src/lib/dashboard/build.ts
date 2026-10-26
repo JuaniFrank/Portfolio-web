@@ -2,6 +2,7 @@ import Decimal from "decimal.js";
 import type { InstrumentType } from "@/lib/generated/prisma";
 import { translateSector } from "@/lib/sector";
 import { EMPTY_EVOLUTION, type PortfolioEvolution } from "./evolution";
+import { EMPTY_FX_RATES, type DashboardFxRates } from "./fx-rates";
 import { NO_PRICE_ISSUES, type PriceIssues } from "./price-issues";
 import type {
   AllocationSlice,
@@ -125,6 +126,7 @@ export function buildDashboardData(args: {
   /** Serie histórica ya reconstruida. Se pasa entera: acá no se calcula nada. */
   evolution?: PortfolioEvolution;
   priceIssues?: PriceIssues;
+  fxRates?: DashboardFxRates;
 }): DashboardData {
   const { portfolioName, rawHoldings, cclRate } = args;
   const cashArs = new Decimal(args.cashArs ?? "0");
@@ -340,6 +342,7 @@ export function buildDashboardData(args: {
     portfolioName,
     kpis,
     cclRate: cclRate ? cclRate.toFixed(2) : null,
+    fxRates: args.fxRates ?? EMPTY_FX_RATES,
     holdings,
     allocationByTicker,
     allocationByMarket,
