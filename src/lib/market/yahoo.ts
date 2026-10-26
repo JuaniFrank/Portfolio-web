@@ -15,6 +15,7 @@ type YahooChartResponse = {
         chartPreviousClose?: number;
         regularMarketTime?: number;
         exchangeName?: string;
+        fullExchangeName?: string;
       };
       timestamp?: number[];
       indicators?: {
@@ -97,6 +98,8 @@ export type YahooQuote = {
   previousClose: number | null;
   /** Timestamp Unix segundos de la última cotización. */
   asOf: number | null;
+  /** Mercado donde cotiza, legible ("NasdaqGS", "NYSE"); cae al código corto si falta. */
+  exchange: string | null;
 };
 
 export async function fetchYahooQuote(symbol: string): Promise<YahooQuote> {
@@ -124,6 +127,7 @@ export async function fetchYahooQuote(symbol: string): Promise<YahooQuote> {
     currency: meta?.currency ?? null,
     previousClose: Number.isFinite(meta?.chartPreviousClose) ? meta!.chartPreviousClose! : null,
     asOf: Number.isFinite(meta?.regularMarketTime) ? meta!.regularMarketTime! : null,
+    exchange: meta?.fullExchangeName ?? meta?.exchangeName ?? null,
   };
 }
 
@@ -186,12 +190,15 @@ function finiteOrNull(value: unknown): number | null {
  * descartan: es mejor que el consumidor haga forward-fill explícito que inventar
  * un cierre. Si hay timestamps duplicados para el mismo día, gana el último.
  *
- * `cache: "no-store"` porque esto lo consumen crons, que siempre quieren la
- * última rueda disponible.
+ * Por defecto `cache: "no-store"` porque esto lo consumen crons, que siempre quieren
+ * la última rueda disponible. Una página puede pasar `revalidateSeconds` para cachear la
+ * respuesta; en ese caso conviene redondear `range` a días enteros, porque la URL (con
+ * `period1`/`period2`) es la clave de cache.
  */
 export async function fetchYahooHistory(
   symbol: string,
-  range: { from: Date; to: Date }
+  range: { from: Date; to: Date },
+  options: { revalidateSeconds?: number } = {}
 ): Promise<FetchHistoryResult> {
   const period1 = Math.floor(range.from.getTime() / 1000);
   const period2 = Math.ceil(range.to.getTime() / 1000);
@@ -199,7 +206,12 @@ export async function fetchYahooHistory(
     `${BASE_URL}/${encodeURIComponent(symbol)}` +
     `?period1=${period1}&period2=${period2}&interval=1d&events=split`;
 
-  const res = await fetch(url, { headers: COMMON_HEADERS, cache: "no-store" });
+  const res = await fetch(
+    url,
+    options.revalidateSeconds === undefined
+      ? { headers: COMMON_HEADERS, cache: "no-store" }
+      : { headers: COMMON_HEADERS, next: { revalidate: options.revalidateSeconds } }
+  );
   if (!res.ok) throw new Error(`Yahoo history ${symbol}: HTTP ${res.status}`);
 
   const body = (await res.json()) as YahooChartResponse;
