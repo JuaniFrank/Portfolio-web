@@ -14,6 +14,7 @@ import { PortfolioEvolutionChartLazy } from "@/components/dashboard/portfolio-ev
 import { formatDateLong } from "@/components/rendimientos/chart-utils";
 import { ChartBlockSkeleton } from "@/components/layout/page-skeletons";
 import { useCurrency } from "@/components/providers/currency-provider";
+import type { TargetCondition } from "@/lib/alerts/adapters/prisma-targets";
 import type { PortfolioEvolution } from "@/lib/dashboard/evolution";
 import type { PerformanceReport } from "@/lib/rendimientos/types";
 import { PERIODS, resolveView, sliceMonths, summaryForCurrency, type Period } from "@/lib/rendimientos/view";
@@ -41,9 +42,12 @@ const DrawdownChart = dynamic(
 export function RendimientosPage({
   report,
   evolution,
+  targets,
 }: {
   report: PerformanceReport;
   evolution: Promise<PortfolioEvolution>;
+  /** Objetivos de precio por instrumento, para la etiqueta de "Ventas realizadas". */
+  targets: Record<string, TargetCondition[]>;
 }) {
   const [period, setPeriod] = useState<Period>("ALL");
   const { currency: globalCurrency, setCurrency } = useCurrency();
@@ -147,6 +151,7 @@ export function RendimientosPage({
             sales={report.realizedSales}
             months={monthsInPeriod}
             currency={currency}
+            targets={targets}
           />
 
           <div className="space-y-4">

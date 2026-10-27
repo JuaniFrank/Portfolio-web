@@ -1,6 +1,7 @@
 "use client";
 
 import { Receipt } from "lucide-react";
+import { CreateTargetDialog } from "@/components/alerts/create-target-dialog";
 import { ChartCard } from "@/components/dashboard/chart-card";
 import { formatMoney } from "@/components/dashboard/format";
 import {
@@ -10,6 +11,8 @@ import {
   returnToneClass,
 } from "@/components/rendimientos/chart-utils";
 import { Td, Th } from "@/components/rendimientos/monthly-table";
+import type { TargetCondition } from "@/lib/alerts/adapters/prisma-targets";
+import { hasReachedTarget } from "@/lib/alerts/evaluate";
 import { formatHoldingAge } from "@/lib/rendimientos/position-rows";
 import {
   realizedFigures,
@@ -23,6 +26,35 @@ function formatMoneyOrEmpty(value: number | null, currency: ViewCurrency): strin
   return value === null ? EMPTY_VALUE : formatMoney(value, currency);
 }
 
+/** Precio de la acción original, siempre en su moneda de origen (USD o ARS). */
+function formatOriginalPrice(value: number | null, basis: "USD" | "ARS"): string {
+  return value === null ? EMPTY_VALUE : formatMoney(value, basis);
+}
+
+/** Señal de re-entrada: la acción original hoy cotiza por debajo de donde la vendiste. */
+function ReentryBadge({ pctVsSale }: { pctVsSale: number | null }) {
+  return (
+    <span
+      title="La acción original cotiza hoy por debajo del cierre del día en que vendiste"
+      className="mt-0.5 flex w-fit items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 text-[9px] font-medium uppercase tracking-wide text-sky-400 ml-auto"
+    >
+      {formatSignedPercentOrEmpty(pctVsSale)} vs tu venta
+    </span>
+  );
+}
+
+/** Un objetivo de precio de este papel está cumplido con el precio que muestra la fila. */
+function TargetReachedBadge() {
+  return (
+    <span
+      title="El precio actual cumple un objetivo que fijaste para este papel (ver Alertas)"
+      className="mt-0.5 flex w-fit items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 text-[9px] font-medium uppercase tracking-wide text-emerald-400 ml-auto"
+    >
+      Objetivo alcanzado
+    </span>
+  );
+}
+
 /**
  * Ventas del período contra el costo promedio. Es una métrica distinta de "Result. mes"
  * del detalle mensual (que compara contra el cierre del mes anterior): acá la referencia
@@ -33,11 +65,14 @@ export function RealizedSales({
   sales,
   months,
   currency,
+  targets = {},
 }: {
   sales: RealizedSale[];
   /** Meses del período visible: el mismo recorte que usa el resto de la página. */
   months: MonthlyPerformanceRow[];
   currency: ViewCurrency;
+  /** Objetivos de precio por instrumento; vacío si no hay o no se pudieron leer. */
+  targets?: Record<string, TargetCondition[]>;
 }) {
   const visible = salesInMonths(sales, months);
   const { total, unmeasured } = totalRealizedPnl(visible, currency);
@@ -66,7 +101,7 @@ export function RealizedSales({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] border-collapse text-(length:--monthly-table-font-size) leading-(--monthly-table-line-height)">
+          <table className="w-full min-w-[1240px] border-collapse text-(length:--monthly-table-font-size) leading-(--monthly-table-line-height)">
             <thead>
               <tr className="border-b border-zinc-800 text-left text-(length:--monthly-table-head-font-size) uppercase tracking-wide text-zinc-500">
                 <Th>Fecha</Th>
@@ -80,6 +115,24 @@ export function RealizedSales({
                   hint="Costo promedio por unidad (PPC) de la posición al momento de la venta. En dólares, cada compra va al CCL del día en que se hizo."
                 >
                   Costo prom.
+                </Th>
+                <Th
+                  align="right"
+                  hint="Precio promedio al que comprabas la acción original en esa posición, en su moneda de origen. CEDEAR: la acción en su mercado de origen, en USD. Acción local: el mismo papel en ARS, ajustado por splits. No cambia con el selector ARS/USD."
+                >
+                  PPC orig.
+                </Th>
+                <Th
+                  align="right"
+                  hint="Cierre de la acción original el día de la venta (o de la rueda anterior), en su moneda de origen. CEDEAR: en USD. Acción local: en ARS ajustado por splits."
+                >
+                  Venta orig.
+                </Th>
+                <Th
+                  align="right"
+                  hint="Precio actual de la acción original, en su moneda de origen. La etiqueta aparece cuando hoy cotiza por debajo del cierre del día en que vendiste."
+                >
+                  Actual orig.
                 </Th>
                 <Th
                   align="right"
@@ -102,11 +155,15 @@ export function RealizedSales({
                 >
                   Tenencia
                 </Th>
+                <Th align="right" hint="Crear un objetivo de precio sobre la acción original, con el precio de tu venta como punto de partida.">
+                  Objetivo
+                </Th>
               </tr>
             </thead>
             <tbody>
               {visible.map((sale, index) => {
                 const figures = realizedFigures(sale, currency);
+                const original = sale.original;
                 return (
                   <tr
                     key={`${sale.instrumentId}-${sale.tradeDate}-${index}`}
@@ -128,6 +185,25 @@ export function RealizedSales({
                     <Td align="right" className="text-zinc-500">
                       {formatMoneyOrEmpty(figures.avgCost, currency)}
                     </Td>
+                    <Td align="right" className="text-zinc-400">
+                      {original ? formatOriginalPrice(original.avgCost, original.basis) : EMPTY_VALUE}
+                      {original ? (
+                        <span className="block truncate text-[10px] text-zinc-500">
+                          {original.exchange ? `${original.symbol} · ${original.exchange}` : original.symbol}
+                        </span>
+                      ) : null}
+                    </Td>
+                    <Td align="right" className="text-zinc-400">
+                      {original ? formatOriginalPrice(original.saleDayPrice, original.basis) : EMPTY_VALUE}
+                    </Td>
+                    <Td align="right" className="text-zinc-200">
+                      {original ? formatOriginalPrice(original.currentPrice, original.basis) : EMPTY_VALUE}
+                      {original?.belowSale ? <ReentryBadge pctVsSale={original.pctVsSale} /> : null}
+                      {original &&
+                      hasReachedTarget(targets[sale.instrumentId] ?? [], original.currentPrice, original.basis) ? (
+                        <TargetReachedBadge />
+                      ) : null}
+                    </Td>
                     <Td align="right" className="text-zinc-200">
                       {formatMoneyOrEmpty(figures.proceeds, currency)}
                     </Td>
@@ -139,6 +215,16 @@ export function RealizedSales({
                     </Td>
                     <Td align="right" className="text-zinc-500">
                       {sale.holdingDays === null ? EMPTY_VALUE : formatHoldingAge(sale.holdingDays)}
+                    </Td>
+                    <Td align="right">
+                      {original ? (
+                        <CreateTargetDialog
+                          instrumentId={sale.instrumentId}
+                          ticker={sale.ticker}
+                          basis={original.basis}
+                          defaultPrice={original.saleDayPrice}
+                        />
+                      ) : null}
                     </Td>
                   </tr>
                 );
@@ -156,7 +242,9 @@ export function RealizedSales({
       <p className="mt-3 text-xs leading-relaxed text-zinc-500">
         El realizado usa el costo promedio ponderado de la posición, no lotes individuales.
         El precio de venta se muestra tal como lo cargaste, aunque después haya habido un
-        split.
+        split. Las columnas “orig.” miran la acción original (CEDEAR: su mercado de origen en
+        USD; acción local: el mismo papel en ARS ajustado por splits) y no dependen del selector
+        ARS/USD.
       </p>
     </ChartCard>
   );
