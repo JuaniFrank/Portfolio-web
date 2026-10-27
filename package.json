@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "diagnose:rendimientos": "tsx scripts/diagnose-rendimientos.ts",
+    "alerts:worker": "tsx scripts/price-alerts-worker.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
