@@ -5,6 +5,7 @@ import { RendimientosPage } from "@/components/rendimientos/rendimientos-page";
 import { getCurrentUser } from "@/lib/auth";
 import { EMPTY_EVOLUTION, type PortfolioEvolution } from "@/lib/dashboard/evolution";
 import { getCachedPerformanceReport, getCachedPortfolioEvolution } from "@/lib/cache/report-cache";
+import { loadTargetConditions, type TargetCondition } from "@/lib/alerts/adapters/prisma-targets";
 import { prisma } from "@/lib/prisma";
 import type { PerformanceReport } from "@/lib/rendimientos/types";
 
@@ -39,6 +40,7 @@ export default async function RendimientosRoutePage() {
       <RendimientosPage
         report={emptyReport("Sin portfolio")}
         evolution={Promise.resolve(EMPTY_EVOLUTION)}
+        targets={{}}
       />
     );
   }
@@ -55,10 +57,11 @@ export default async function RendimientosRoutePage() {
   // que pueda tirar abajo el render.
   const reportPromise = safeBuildReport(user.id, portfolio.id, portfolio.name);
   const evolutionPromise = safeLoadEvolution(user.id, portfolio.id);
+  const targetsPromise = safeLoadTargets(user.id);
 
   return (
     <Suspense fallback={<ReportFallback portfolioName={portfolio.name} />}>
-      <ReportSection reportPromise={reportPromise} evolution={evolutionPromise} />
+      <ReportSection reportPromise={reportPromise} evolution={evolutionPromise} targetsPromise={targetsPromise} />
     </Suspense>
   );
 }
@@ -66,11 +69,19 @@ export default async function RendimientosRoutePage() {
 async function ReportSection({
   reportPromise,
   evolution,
+  targetsPromise,
 }: {
   reportPromise: Promise<PerformanceReport>;
   evolution: Promise<PortfolioEvolution>;
+  targetsPromise: Promise<Record<string, TargetCondition[]>>;
 }) {
-  return <RendimientosPage report={await reportPromise} evolution={evolution} />;
+  return (
+    <RendimientosPage
+      report={await reportPromise}
+      evolution={evolution}
+      targets={await targetsPromise}
+    />
+  );
 }
 
 /** Cabecera real (el nombre del portfolio ya se conoce) + esqueleto del cuerpo. */
@@ -121,6 +132,16 @@ async function safeLoadEvolution(
   } catch (error) {
     console.error("Rendimientos evolution error", error);
     return EMPTY_EVOLUTION;
+  }
+}
+
+/** Los objetivos son accesorios (etiqueta "Objetivo alcanzado"): si falla la lectura, sin etiquetas. */
+async function safeLoadTargets(userId: string): Promise<Record<string, TargetCondition[]>> {
+  try {
+    return await loadTargetConditions(userId);
+  } catch (error) {
+    console.error("Rendimientos targets error", error);
+    return {};
   }
 }
 

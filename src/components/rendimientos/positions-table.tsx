@@ -188,16 +188,6 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     renderCell: (row) => formatMoneyOrEmpty(row.avgCostUsd, "USD"),
   },
   {
-    id: "price",
-    label: "Precio",
-    align: "right",
-    size: 115,
-    minSize: 90,
-    kind: "numeric",
-    getSortValue: (row, currency) => priceFor(row, currency),
-    renderCell: (row, currency) => formatMoneyOrEmpty(priceFor(row, currency), currency),
-  },
-  {
     id: "underlyingAvgCostUsd",
     label: "Costo prom. acción orig.",
     title: UNDERLYING_COST_TITLE,
@@ -222,6 +212,16 @@ const POSITION_COLUMNS: ColumnConfig[] = [
     renderCell: (row) => (
       <UnderlyingCell value={row.underlyingPriceUsd} exchange={row.underlyingExchange} />
     ),
+  },
+  {
+    id: "price",
+    label: "Precio",
+    align: "right",
+    size: 115,
+    minSize: 90,
+    kind: "numeric",
+    getSortValue: (row, currency) => priceFor(row, currency),
+    renderCell: (row, currency) => formatMoneyOrEmpty(priceFor(row, currency), currency),
   },
   {
     id: "returnArs",
