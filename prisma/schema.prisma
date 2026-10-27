@@ -201,6 +201,7 @@ model User {
   tags                     Tag[]
   corporateEventsCreated   CorporateEvent[]                   @relation("CorporateEventCreator")
   suggestedEventDismissals SuggestedCorporateEventDismissal[]
+  priceTargets             PriceTarget[]
 }
 
 model Portfolio {
@@ -313,6 +314,7 @@ model Instrument {
 
   transactions             Transaction[]
   prices                   PriceCache[]
+  priceTargets             PriceTarget[]
   marketSnapshot           MarketSnapshot?
   providerSymbols          InstrumentProviderSymbol[]
   corporateEvents          CorporateEvent[]
@@ -614,6 +616,43 @@ model SuggestedCorporateEventDismissal {
 
   @@unique([suggestedEventId, userId])
   @@index([userId])
+}
+
+// ============================================================
+// OBJETIVOS DE PRECIO (alertas)
+// ============================================================
+
+enum PriceTargetDirection {
+  ABOVE // dispara con precio >= objetivo
+  BELOW // dispara con precio <= objetivo
+}
+
+/**
+ * Objetivo de precio de un usuario sobre un instrumento. La base de comparación sale del
+ * tipo de instrumento: CEDEAR → acción original en USD; acción local → el papel en ARS
+ * (`currency` se fija al crearlo). Se permiten varios objetivos por instrumento.
+ * `triggeredAt` null = armado; re-armar limpia triggeredAt, triggeredPrice y notifiedAt.
+ * `notifiedAt` solo se marca si el aviso salió bien: un disparo sin notificar se reintenta.
+ */
+model PriceTarget {
+  id             String               @id @default(cuid())
+  userId         String
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  instrumentId   String
+  instrument     Instrument           @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  targetPrice    Decimal              @db.Decimal(20, 8)
+  currency       String // "USD" | "ARS"
+  direction      PriceTargetDirection
+  note           String?
+  triggeredAt    DateTime?
+  triggeredPrice Decimal?             @db.Decimal(20, 8)
+  notifiedAt     DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([userId])
+  @@index([instrumentId])
+  @@index([notifiedAt])
 }
 
 // ============================================================
