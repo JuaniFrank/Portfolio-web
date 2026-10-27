@@ -44,10 +44,16 @@ import {
 import { overlayLiveCcl, overlayLivePrices } from "./live-overlay";
 import { marketDayOf } from "./market-day";
 import { buildPositionRows } from "./position-rows";
-import { loadUnderlyingPrices, type UnderlyingCandidate } from "./underlying-loader";
-import { underlyingSymbolFor } from "./underlying-price";
+import {
+  loadUnderlyingMarket,
+  loadUnderlyingPrices,
+  type SymbolData,
+  type UnderlyingCandidate,
+} from "./underlying-loader";
+import { underlyingSymbolFor, type UnderlyingBar } from "./underlying-price";
 import { PriceIndex, TimeSeries } from "./price-series";
 import { buildRealizedSales } from "./realized-sales";
+import { withRealizedOriginals, type OriginalSource } from "./realized-original";
 import {
   accumulateInArs,
   attributeMonthlyPositionGains,
@@ -490,12 +496,32 @@ export async function buildPerformanceReport(
   // valúa forward-filled con el precio más reciente), así que sus posiciones son el
   // estado actual de la cartera — no hace falta un replay aparte para la tabla.
   const latestValuation = valuations.at(-1);
-  const underlying = latestValuation
-    ? await loadUnderlyingForPositions(latestValuation.positions, transactions, trades, eventsByInstrument)
-    : new Map();
+  const realizedSalesBase = buildRealizedSales(
+    trades,
+    eventsByInstrument,
+    (date) => ccl.asOf(date)?.value ?? null
+  );
+  const { underlying, market } = await loadUnderlyingForPositions(
+    latestValuation?.positions ?? [],
+    realizedSalesBase.map((sale) => sale.instrumentId),
+    transactions,
+    trades,
+    eventsByInstrument
+  );
   const positions = latestValuation
     ? buildPositionRows(latestValuation.positions, trades, prices, today, underlying)
     : [];
+  const realizedSales = withRealizedOriginals(
+    realizedSalesBase,
+    trades,
+    eventsByInstrument,
+    buildOriginalSources(
+      realizedSalesBase.map((sale) => sale.instrumentId),
+      transactions,
+      market,
+      overlaidPriceRows
+    )
+  );
 
   return {
     portfolioName,
@@ -505,11 +531,7 @@ export async function buildPerformanceReport(
     excludedHoldings: findExcludedHoldings(transactions),
     positions,
     sectorByTicker,
-    realizedSales: buildRealizedSales(
-      trades,
-      eventsByInstrument,
-      (date) => ccl.asOf(date)?.value ?? null
-    ),
+    realizedSales,
     dataQuality: {
       partialMonths: rows.filter((row) => row.coverage === "partial").map((row) => row.month),
       missingCclMonths: rows.filter((row) => row.cclMonthEnd === null).map((row) => row.month),
@@ -526,55 +548,141 @@ export async function buildPerformanceReport(
 // ACCIÓN ORIGINAL DE LOS CEDEARs
 // ============================================================
 
+type InstrumentForUnderlying = {
+  id: string;
+  ticker: string;
+  type: InstrumentType;
+  baseInstrument: { ticker: string; underlyingAsset: { ticker: string } | null } | null;
+  underlyingAsset: { ticker: string } | null;
+};
+
+type TransactionsForUnderlying = Array<{ instrument: InstrumentForUnderlying | null }>;
+
+function underlyingSymbolOfInstrument(instrument: InstrumentForUnderlying): string | null {
+  return underlyingSymbolFor({
+    type: instrument.type,
+    ticker: instrument.ticker,
+    underlyingAssetTicker: instrument.underlyingAsset?.ticker,
+    baseInstrument: instrument.baseInstrument && {
+      ticker: instrument.baseInstrument.ticker,
+      underlyingAssetTicker: instrument.baseInstrument.underlyingAsset?.ticker,
+    },
+  });
+}
+
+function instrumentsById(transactions: TransactionsForUnderlying) {
+  const instruments = new Map<string, InstrumentForUnderlying>();
+  for (const tx of transactions) if (tx.instrument) instruments.set(tx.instrument.id, tx.instrument);
+  return instruments;
+}
+
 /**
- * Precio de la acción original (mercado de origen, vía Yahoo) de cada CEDEAR abierto.
- * Es un dato accesorio de la tabla de posiciones: si Yahoo falla, la tabla igual se
- * arma, con "—" en esas columnas.
+ * Precio de la acción original (mercado de origen, vía Yahoo) de cada CEDEAR abierto, y
+ * además historia y cotización de los CEDEARs ya vendidos (para "Ventas realizadas"). Es un
+ * dato accesorio: si Yahoo falla, las tablas se arman igual, con "—" en esas columnas.
  */
 async function loadUnderlyingForPositions(
   positions: PositionDetail[],
-  transactions: Array<{
-    instrument: {
-      id: string;
-      ticker: string;
-      type: InstrumentType;
-      baseInstrument: { ticker: string; underlyingAsset: { ticker: string } | null } | null;
-      underlyingAsset: { ticker: string } | null;
-    } | null;
-  }>,
+  soldInstrumentIds: string[],
+  transactions: TransactionsForUnderlying,
   trades: TradeForHoldings[],
   eventsByInstrument: Map<string, CorporateEventForBuilder[]>
-) {
-  const instruments = new Map<string, NonNullable<(typeof transactions)[number]["instrument"]>>();
-  for (const tx of transactions) if (tx.instrument) instruments.set(tx.instrument.id, tx.instrument);
+): Promise<{
+  underlying: Awaited<ReturnType<typeof loadUnderlyingPrices>>;
+  market: Map<string, SymbolData>;
+}> {
+  const instruments = instrumentsById(transactions);
 
-  const candidates: UnderlyingCandidate[] = [];
-  for (const position of positions) {
-    const instrument = instruments.get(position.instrumentId);
-    if (!instrument) continue;
-    const symbol = underlyingSymbolFor({
-      type: instrument.type,
-      ticker: instrument.ticker,
-      underlyingAssetTicker: instrument.underlyingAsset?.ticker,
-      baseInstrument: instrument.baseInstrument && {
-        ticker: instrument.baseInstrument.ticker,
-        underlyingAssetTicker: instrument.baseInstrument.underlyingAsset?.ticker,
-      },
-    });
-    if (!symbol) continue;
-    candidates.push({
-      instrumentId: position.instrumentId,
+  const toCandidate = (instrumentId: string): UnderlyingCandidate | null => {
+    const instrument = instruments.get(instrumentId);
+    if (!instrument) return null;
+    const symbol = underlyingSymbolOfInstrument(instrument);
+    if (!symbol) return null;
+    return {
+      instrumentId,
       symbol,
-      trades: trades.filter((trade) => trade.instrumentId === position.instrumentId),
-      events: eventsByInstrument.get(position.instrumentId) ?? [],
-    });
-  }
+      trades: trades.filter((trade) => trade.instrumentId === instrumentId),
+      events: eventsByInstrument.get(instrumentId) ?? [],
+    };
+  };
+
+  const openCandidates = positions
+    .map((position) => toCandidate(position.instrumentId))
+    .filter((candidate): candidate is UnderlyingCandidate => candidate !== null);
+
+  // Los vendidos suman al conjunto de símbolos a bajar (sin repetir uno ya presente).
+  const allIds = new Set([...positions.map((p) => p.instrumentId), ...soldInstrumentIds]);
+  const allCandidates = [...allIds]
+    .map((id) => toCandidate(id))
+    .filter((candidate): candidate is UnderlyingCandidate => candidate !== null);
 
   try {
-    return await loadUnderlyingPrices(candidates);
+    const market = await loadUnderlyingMarket(allCandidates);
+    const underlying = await loadUnderlyingPrices(openCandidates, new Date(), market);
+    return { underlying, market };
   } catch {
-    return new Map();
+    return { underlying: new Map(), market: new Map() };
   }
+}
+
+/**
+ * Fuente de la "acción original" de cada instrumento con ventas realizadas:
+ * - CEDEAR → Yahoo (USD): ruedas y cotización del subyacente en `market`.
+ * - Acción local → el propio papel en ARS, con las ruedas EOD del replay (ya ajustadas por
+ *   splits al guardarlas) y como precio actual la última, que incluye el overlay en vivo.
+ * Otros tipos no tienen fuente.
+ */
+function buildOriginalSources(
+  soldInstrumentIds: string[],
+  transactions: TransactionsForUnderlying,
+  market: Map<string, SymbolData>,
+  priceRows: Array<{ instrumentId: string; date: Date; close: number }>
+): Map<string, OriginalSource> {
+  const instruments = instrumentsById(transactions);
+  const sources = new Map<string, OriginalSource>();
+  const localIds = new Set<string>();
+
+  for (const id of new Set(soldInstrumentIds)) {
+    const instrument = instruments.get(id);
+    if (!instrument) continue;
+
+    if (instrument.type === "CEDEAR") {
+      const symbol = underlyingSymbolOfInstrument(instrument);
+      if (!symbol) continue;
+      const data = market.get(symbol);
+      sources.set(id, {
+        basis: "USD",
+        symbol,
+        exchange: data?.exchange ?? null,
+        bars: data?.bars ?? null,
+        currentPrice: data?.price ?? null,
+      });
+    } else if (instrument.type === "STOCK_AR") {
+      localIds.add(id);
+    }
+  }
+
+  if (localIds.size > 0) {
+    const barsById = new Map<string, UnderlyingBar[]>();
+    for (const row of priceRows) {
+      if (!localIds.has(row.instrumentId)) continue;
+      const list = barsById.get(row.instrumentId) ?? [];
+      list.push({ date: row.date, close: row.close });
+      barsById.set(row.instrumentId, list);
+    }
+    for (const id of localIds) {
+      const bars = (barsById.get(id) ?? []).sort((a, b) => a.date.getTime() - b.date.getTime());
+      sources.set(id, {
+        basis: "ARS",
+        symbol: instruments.get(id)!.ticker,
+        exchange: "BYMA",
+        bars: bars.length > 0 ? bars : null,
+        currentPrice: bars.at(-1)?.close ?? null,
+      });
+    }
+  }
+
+  return sources;
 }
 
 // ============================================================

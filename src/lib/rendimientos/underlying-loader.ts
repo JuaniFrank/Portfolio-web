@@ -29,7 +29,7 @@ export type UnderlyingCandidate = {
   events: CorporateEventForBuilder[];
 };
 
-type SymbolData = {
+export type SymbolData = {
   bars: UnderlyingBar[] | null;
   price: number | null;
   exchange: string | null;
@@ -37,12 +37,16 @@ type SymbolData = {
 
 const startOfDay = (time: number) => Math.floor(time / MS_PER_DAY) * MS_PER_DAY;
 
-export async function loadUnderlyingPrices(
+/**
+ * Historia y cotización de Yahoo por símbolo, para todos los candidatos (posiciones
+ * abiertas y CEDEARs ya vendidos). Cada símbolo se baja una sola vez. Nunca tira: lo que
+ * falla queda en `null` dentro de su `SymbolData`.
+ */
+export async function loadUnderlyingMarket(
   candidates: UnderlyingCandidate[],
   now: Date = new Date()
-): Promise<Map<string, UnderlyingPrices>> {
-  const result = new Map<string, UnderlyingPrices>();
-  if (candidates.length === 0) return result;
+): Promise<Map<string, SymbolData>> {
+  if (candidates.length === 0) return new Map();
 
   // Una variante (METAD) y su base (META) comparten símbolo: se baja una sola vez.
   const firstTradeBySymbol = new Map<string, number>();
@@ -80,7 +84,19 @@ export async function loadUnderlyingPrices(
       return [symbol, data] as const;
     })
   );
-  const bySymbol = new Map(entries);
+  return new Map(entries);
+}
+
+export async function loadUnderlyingPrices(
+  candidates: UnderlyingCandidate[],
+  now: Date = new Date(),
+  /** Datos ya bajados con `loadUnderlyingMarket`; si no se pasan, se bajan acá. */
+  market?: Map<string, SymbolData>
+): Promise<Map<string, UnderlyingPrices>> {
+  const result = new Map<string, UnderlyingPrices>();
+  if (candidates.length === 0) return result;
+
+  const bySymbol = market ?? (await loadUnderlyingMarket(candidates, now));
 
   for (const candidate of candidates) {
     const data = bySymbol.get(candidate.symbol);
