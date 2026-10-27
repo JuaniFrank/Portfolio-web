@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
+  Bell,
   CalendarSync,
   Coins,
   Download,
@@ -22,6 +23,7 @@ const items = [
   { href: "/dividends", label: "Dividendos", icon: Coins },
   { href: "/bonds", label: "Bonos (ONs)", icon: Landmark },
   { href: "/monitoreo", label: "Monitoreo", icon: Activity },
+  { href: "/alertas", label: "Alertas", icon: Bell },
   { href: "/events", label: "Eventos", icon: CalendarSync },
   { href: "/transactions", label: "Transacciones", icon: LineChart },
   { href: "/imports", label: "Imports", icon: Download },
