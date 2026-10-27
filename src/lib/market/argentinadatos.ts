@@ -82,6 +82,74 @@ async function fetchJson<T>(path: string): Promise<T | null> {
   }
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SAME_MID_EPSILON = 1e-6;
+
+/** Día de la semana UTC con lunes = 0 … domingo = 6. */
+function mondayBasedDay(time: number): number {
+  return (new Date(time).getUTCDay() + 6) % 7;
+}
+
+/**
+ * Corrige el desfase de un día que argentinadatos introdujo en el CCL desde
+ * septiembre de 2026: la fila fechada D trae el cierre del día hábil anterior.
+ *
+ * En una serie bien fechada el sábado repite al viernes (la fuente rellena fines de
+ * semana con el último valor hábil). Por eso se detecta semana por semana, sin
+ * hardcodear una fecha, así la corrección se desactiva sola si la fuente se arregla:
+ * una semana (lunes a domingo alrededor del sábado S) está atrasada cuando
+ * `mid(S) != mid(S-1)`. Sus filas se corren un día hacia atrás.
+ *
+ * - La semana parcial del final (sin sábado todavía) hereda el régimen de la última
+ *   semana detectada; las filas anteriores a la primera semana detectable no se tocan.
+ * - Si al correr una fila cae en una fecha ocupada (borde entre regímenes), gana la
+ *   fila que no se movió; el hueco que quede lo cubre el lookup as-of.
+ *
+ * Pura: no muta la entrada. Devuelve la serie ordenada ascendente con fechas únicas.
+ */
+export function correctLaggedDates(points: CclHistoryPoint[]): CclHistoryPoint[] {
+  const sorted = [...points].sort((a, b) => a.date.getTime() - b.date.getTime());
+  const midByTime = new Map(sorted.map((p) => [p.date.getTime(), p.mid]));
+
+  // Régimen por sábado, en orden cronológico.
+  const regimes: { saturday: number; lagged: boolean }[] = [];
+  for (const p of sorted) {
+    const time = p.date.getTime();
+    if (mondayBasedDay(time) !== 5) continue;
+    const friday = midByTime.get(time - DAY_MS);
+    if (friday === undefined) continue;
+    regimes.push({ saturday: time, lagged: Math.abs(p.mid - friday) > SAME_MID_EPSILON });
+  }
+  if (regimes.length === 0) return sorted;
+
+  const isLagged = (time: number): boolean => {
+    const saturday = time + (5 - mondayBasedDay(time)) * DAY_MS;
+    let lagged = false; // antes de la primera semana detectable: sin tocar
+    for (const regime of regimes) {
+      if (regime.saturday > saturday) break;
+      lagged = regime.lagged;
+    }
+    return lagged;
+  };
+
+  const kept = new Map<number, CclHistoryPoint>();
+  const shifted: CclHistoryPoint[] = [];
+  for (const p of sorted) {
+    const time = p.date.getTime();
+    if (isLagged(time)) {
+      shifted.push({ ...p, date: new Date(time - DAY_MS) });
+    } else {
+      kept.set(time, p);
+    }
+  }
+  for (const p of shifted) {
+    const time = p.date.getTime();
+    if (!kept.has(time)) kept.set(time, p);
+  }
+
+  return [...kept.values()].sort((a, b) => a.date.getTime() - b.date.getTime());
+}
+
 /**
  * Serie histórica completa del CCL (verificada: desde 2013-01-02).
  *
@@ -104,8 +172,7 @@ export async function fetchCclHistory(): Promise<CclHistoryPoint[] | null> {
     points.push({ date, buy, sell, mid: (buy + sell) / 2 });
   }
 
-  points.sort((a, b) => a.date.getTime() - b.date.getTime());
-  return points;
+  return correctLaggedDates(points);
 }
 
 /**
