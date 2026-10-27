@@ -250,6 +250,7 @@ function sale(overrides: Partial<RealizedSale> = {}): RealizedSale {
     realizedPnlUsd: 0.2,
     realizedReturnPctUsd: 25,
     holdingDays: 30,
+    original: null,
     ...overrides,
   };
 }

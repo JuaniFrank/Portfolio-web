@@ -16,6 +16,7 @@
 import Decimal from "decimal.js";
 import { applyEventsToTrade } from "@/lib/events/apply";
 import type { CorporateEventForBuilder } from "@/lib/events/types";
+import type { RealizedOriginal } from "./realized-original";
 import type { ViewCurrency } from "./types";
 import {
   computePositionFromTrades,
@@ -59,6 +60,11 @@ export type RealizedSale = {
    * puntual. `null` si la fecha no se puede interpretar.
    */
   holdingDays: number | null;
+  /**
+   * Acción original de la venta (precios de compra, de venta y actual). `null` fuera de
+   * CEDEARs y acciones locales; lo completa `withRealizedOriginals`.
+   */
+  original: RealizedOriginal | null;
 };
 
 /**
@@ -162,6 +168,7 @@ function toRealizedSale(
     realizedPnlUsd: pnlUsd ? pnlUsd.toNumber() : null,
     realizedReturnPctUsd: pnlUsd && costUsd!.gt(0) ? pnlUsd.div(costUsd!).mul(100).toNumber() : null,
     holdingDays: openedAt ? daysBetween(openedAt, original.tradeDate) : null,
+    original: null,
   };
 }
 
