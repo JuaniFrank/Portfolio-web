@@ -30,9 +30,9 @@
  * cancelar y la atribución daría cualquier cosa. Todas las operaciones de instrumentos
  * elegibles están en ARS.
  *
- * El perímetro es el de `/rendimientos` (`PERFORMANCE_INSTRUMENT_TYPES`) más ONs — este
- * loader ensancha el perímetro localmente (ver `EVOLUTION_INSTRUMENT_TYPES` en
- * `evolution-data.ts`); `/rendimientos` no se toca. El resto de renta fija y las letras
+ * El perímetro es el mismo que el de `/rendimientos` (`RENDIMIENTOS_INSTRUMENT_TYPES`:
+ * acciones, CEDEARs y ONs), con los precios de ONs armados por el mismo
+ * `buildOnDailyPrices`. El resto de renta fija y las letras
  * no tienen serie de precios, así que quedan afuera y se avisan.
  */
 
