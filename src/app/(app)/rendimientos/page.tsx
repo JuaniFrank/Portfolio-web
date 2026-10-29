@@ -174,6 +174,7 @@ function emptyReport(portfolioName: string): PerformanceReport {
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],
+      estimatedPriceMonths: [],
       lastPriceSyncDate: null,
       seriesFloor: null,
     },

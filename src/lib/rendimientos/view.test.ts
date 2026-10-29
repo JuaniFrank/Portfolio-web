@@ -78,6 +78,7 @@ function report(months: MonthlyPerformanceRow[], benchmarks: BenchmarkSeries[] =
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],
+      estimatedPriceMonths: [],
       lastPriceSyncDate: null,
       seriesFloor: null,
     },
@@ -268,6 +269,7 @@ describe("resolveView — el no realizado sigue a la moneda", () => {
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],
+      estimatedPriceMonths: [],
       lastPriceSyncDate: null,
       seriesFloor: null,
     },
