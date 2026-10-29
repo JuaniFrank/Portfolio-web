@@ -23,6 +23,8 @@ import { prisma } from "@/lib/prisma";
 import type { InstrumentType } from "@/lib/generated/prisma";
 import { EOD_PRICE_SOURCE } from "@/lib/market/history-sync";
 import { fetchLiveOverlayInputs } from "@/lib/market/live-quotes";
+import { buildOnDailyPrices } from "@/lib/bonds/on-daily-prices";
+import { loadOnPriceInputs } from "@/lib/bonds/on-daily-prices-loader";
 import { resolveSector } from "@/lib/sector";
 import type { TradeForHoldings } from "@/lib/transactions/holdings";
 import { convertTradeToArs } from "@/lib/transactions/trade-currency";
@@ -43,6 +45,7 @@ import {
 } from "./months";
 import { overlayLiveCcl, overlayLivePrices } from "./live-overlay";
 import { marketDayOf } from "./market-day";
+import { monthsWithEstimatedPrices } from "./estimated-prices";
 import { buildPositionRows } from "./position-rows";
 import {
   loadUnderlyingMarket,
@@ -72,7 +75,7 @@ import {
 } from "./returns";
 import {
   EXCLUSION_REASONS,
-  PERFORMANCE_INSTRUMENT_TYPES,
+  RENDIMIENTOS_INSTRUMENT_TYPES,
   type ExcludedHolding,
   type MonthlyPerformanceRow,
   type PerformanceReport,
@@ -80,7 +83,8 @@ import {
   type PositionDetail,
 } from "./types";
 
-const ELIGIBLE_TYPES = new Set<InstrumentType>(PERFORMANCE_INSTRUMENT_TYPES);
+const ELIGIBLE_TYPES = new Set<InstrumentType>(RENDIMIENTOS_INSTRUMENT_TYPES);
+const ON_TYPE: InstrumentType = "ON";
 
 export type BuildSeriesOptions = {
   /**
@@ -146,7 +150,7 @@ export async function buildPerformanceReport(
   // Ticker+type de cada instrumento elegible: lo necesita el overlay en vivo para
   // matchear contra data912 (mismo criterio que `market-snapshots.ts`), y ya está en
   // `transactions` — no hace falta una query aparte.
-  const eligibleInstruments = [
+  const allEligibleInstruments = [
     ...new Map(
       transactions
         .filter((tx) => tx.instrument && ELIGIBLE_TYPES.has(tx.instrument.type))
@@ -173,55 +177,75 @@ export async function buildPerformanceReport(
       tx.instrument.type
     );
   }
-  const eligibleInstrumentIds = eligibleInstruments.map((instrument) => instrument.id);
+  const eligibleInstrumentIds = allEligibleInstruments.map((instrument) => instrument.id);
 
-  const [priceRows, cclRows, inflationRows, mervalRows, sp500Rows, eventRows, liveOverlay] =
-    await Promise.all([
-      eligibleInstrumentIds.length > 0
-        ? prisma.priceCache.findMany({
-            where: {
-              instrumentId: { in: eligibleInstrumentIds },
-              source: EOD_PRICE_SOURCE,
-            },
-            orderBy: { datetime: "asc" },
-            select: { instrumentId: true, datetime: true, close: true },
-          })
-        : Promise.resolve([]),
-      prisma.fxRate.findMany({
-        where: { baseCurrencyCode: "USD", quoteCurrencyCode: "ARS", source: "CCL" },
-        orderBy: { date: "asc" },
-        select: { date: true, mid: true },
-      }),
-      prisma.macroSeries.findMany({
-        where: { code: "IPC_AR" },
-        orderBy: { date: "asc" },
-        select: { date: true, value: true },
-      }),
-      prisma.macroSeries.findMany({
-        where: { code: "MERVAL" },
-        orderBy: { date: "asc" },
-        select: { date: true, value: true },
-      }),
-      prisma.macroSeries.findMany({
-        where: { code: "SP500" },
-        orderBy: { date: "asc" },
-        select: { date: true, value: true },
-      }),
-      prisma.corporateEvent.findMany({
-        where: { instrumentId: { in: eligibleInstrumentIds } },
-        orderBy: { effectiveDate: "asc" },
-        select: {
-          instrumentId: true,
-          eventType: true,
-          effectiveDate: true,
-          numerator: true,
-          denominator: true,
-        },
-      }),
-      eligibleInstruments.length > 0
-        ? fetchLiveOverlayInputs(eligibleInstruments)
-        : Promise.resolve({ priceQuotes: [], cclMid: null }),
-    ]);
+  // Las ONs quedan afuera de la query de precios EOD y del overlay en vivo genérico:
+  // data912 las cotiza ARS por 100 VN, mientras que ambos asumen ARS por unidad —
+  // mezclarlas inflaría su precio 100x. Se resuelven aparte con `buildOnDailyPrices`.
+  const eligibleInstruments = allEligibleInstruments.filter(
+    (instrument) => instrument.type !== ON_TYPE
+  );
+  const onInstrumentIds = allEligibleInstruments
+    .filter((instrument) => instrument.type === ON_TYPE)
+    .map((instrument) => instrument.id);
+  const equityInstrumentIds = eligibleInstruments.map((instrument) => instrument.id);
+
+  const [
+    priceRows,
+    cclRows,
+    inflationRows,
+    mervalRows,
+    sp500Rows,
+    eventRows,
+    liveOverlay,
+    onPriceInputs,
+  ] = await Promise.all([
+    equityInstrumentIds.length > 0
+      ? prisma.priceCache.findMany({
+          where: {
+            instrumentId: { in: equityInstrumentIds },
+            source: EOD_PRICE_SOURCE,
+          },
+          orderBy: { datetime: "asc" },
+          select: { instrumentId: true, datetime: true, close: true },
+        })
+      : Promise.resolve([]),
+    prisma.fxRate.findMany({
+      where: { baseCurrencyCode: "USD", quoteCurrencyCode: "ARS", source: "CCL" },
+      orderBy: { date: "asc" },
+      select: { date: true, mid: true },
+    }),
+    prisma.macroSeries.findMany({
+      where: { code: "IPC_AR" },
+      orderBy: { date: "asc" },
+      select: { date: true, value: true },
+    }),
+    prisma.macroSeries.findMany({
+      where: { code: "MERVAL" },
+      orderBy: { date: "asc" },
+      select: { date: true, value: true },
+    }),
+    prisma.macroSeries.findMany({
+      where: { code: "SP500" },
+      orderBy: { date: "asc" },
+      select: { date: true, value: true },
+    }),
+    prisma.corporateEvent.findMany({
+      where: { instrumentId: { in: eligibleInstrumentIds } },
+      orderBy: { effectiveDate: "asc" },
+      select: {
+        instrumentId: true,
+        eventType: true,
+        effectiveDate: true,
+        numerator: true,
+        denominator: true,
+      },
+    }),
+    eligibleInstruments.length > 0
+      ? fetchLiveOverlayInputs(eligibleInstruments)
+      : Promise.resolve({ priceQuotes: [], cclMid: null }),
+    loadOnPriceInputs(onInstrumentIds),
+  ]);
 
   // "Hoy" para el overlay: un solo corte para precios y CCL, así que ninguno de los dos
   // queda a mitad de camino entre "ya cerró" y "todavía no".
@@ -236,7 +260,6 @@ export async function buildPerformanceReport(
     liveOverlay.priceQuotes,
     today
   );
-  const prices = new PriceIndex(overlaidPriceRows);
 
   const { points: overlaidCclPoints } = overlayLiveCcl(
     cclRows.map((row) => ({ date: row.date, value: Number(row.mid) })),
@@ -244,6 +267,23 @@ export async function buildPerformanceReport(
     today
   );
   const ccl = new TimeSeries(overlaidCclPoints);
+
+  // Las ruedas: los días en que al menos un instrumento de renta variable cerró (incluye
+  // el overlay en vivo de hoy). Se calculan ANTES de sumar los precios de ONs, que se
+  // arman justamente para esos días — mismo criterio que el gráfico de evolución.
+  const tradingDays = [...new Set(overlaidPriceRows.map((row) => toUtcDay(row.date).getTime()))]
+    .sort((a, b) => a - b)
+    .map((time) => new Date(time));
+
+  const { priceRows: onPriceRows, estimatedPriceDays } = buildOnDailyPrices({
+    instrumentIds: onInstrumentIds,
+    snapshotRows: onPriceInputs.snapshotRows,
+    termsRows: onPriceInputs.termsRows,
+    tradingDays,
+    ccl,
+    today,
+  });
+  const prices = new PriceIndex([...overlaidPriceRows, ...onPriceRows]);
 
   const eventsByInstrument = new Map<string, CorporateEventForBuilder[]>();
   for (const event of eventRows) {
@@ -319,6 +359,7 @@ export async function buildPerformanceReport(
     eventsByInstrument,
     incomeArsByDate: accumulateInArs(incomeEvents, ccl),
     liveInstrumentIds,
+    estimatedPriceDays,
   };
 
   /** La valuación del núcleo, etiquetada con el mes de la fila que va a alimentar. */
@@ -535,6 +576,12 @@ export async function buildPerformanceReport(
     dataQuality: {
       partialMonths: rows.filter((row) => row.coverage === "partial").map((row) => row.month),
       missingCclMonths: rows.filter((row) => row.cclMonthEnd === null).map((row) => row.month),
+      estimatedPriceMonths: monthsWithEstimatedPrices(
+        months.map((month) => ({
+          month,
+          positions: valuations[monthEndIndex.get(month)!]!.positions,
+        }))
+      ),
       // Frescura del backfill nocturno: se mide sobre `priceRows` (solo EOD), no sobre
       // `prices` (que incluye el overlay en vivo). Si se leyera de `prices`, un precio en
       // vivo de hoy reportaría "sincronizado hoy" cuando en realidad el cron no corrió.
@@ -925,6 +972,7 @@ function emptyReport(portfolioName: string): PerformanceReport {
     dataQuality: {
       partialMonths: [],
       missingCclMonths: [],
+      estimatedPriceMonths: [],
       lastPriceSyncDate: null,
       seriesFloor: null,
     },
