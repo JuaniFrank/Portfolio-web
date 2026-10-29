@@ -24,11 +24,23 @@ export type ViewCurrency = "ARS" | "USD";
 export const PERFORMANCE_INSTRUMENT_TYPES: InstrumentType[] = ["CEDEAR", "STOCK_AR"];
 
 /**
+ * Perímetro de `/rendimientos` y del gráfico de evolución: lo que tiene precio diario
+ * para replayar. Suma ONs a `PERFORMANCE_INSTRUMENT_TYPES` porque su precio se arma
+ * aparte (data912 por 100 VN + valor técnico estimado, ver `bonds/on-daily-prices.ts`).
+ *
+ * `PERFORMANCE_INSTRUMENT_TYPES` NO incluye ON a propósito: también decide qué se
+ * backfillea desde Yahoo, que no tiene precios de ONs.
+ */
+export const RENDIMIENTOS_INSTRUMENT_TYPES: InstrumentType[] = [
+  ...PERFORMANCE_INSTRUMENT_TYPES,
+  "ON",
+];
+
+/**
  * Por qué queda afuera cada tipo excluido. Se muestra en la UI: el usuario tiene
  * derecho a saber qué parte de su cartera no está en el número que está mirando.
  */
 export const EXCLUSION_REASONS: Partial<Record<InstrumentType, string>> = {
-  ON: "Sin histórico de precios disponible (data912 solo publica cotizaciones del día).",
   BOND_AR: "Sin histórico de precios disponible.",
   LETRA: "Sin histórico de precios disponible.",
   FCI: "Sin histórico de cuotapartes disponible.",
@@ -259,6 +271,8 @@ export type DataQuality = {
   partialMonths: string[];
   /** Meses sin cotización de CCL: la serie en USD de esos meses no es confiable. */
   missingCclMonths: string[];
+  /** Meses cuyo cierre valúa alguna ON con valor técnico estimado en vez de cotización real. */
+  estimatedPriceMonths: string[];
   /** Fecha del último precio EOD que hay en la base, o `null` si nunca se backfilleó. */
   lastPriceSyncDate: string | null;
   /** Primer mes efectivamente reportado, en ISO. */
