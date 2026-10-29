@@ -16,9 +16,12 @@ import { cn } from "@/lib/utils";
 export function DataNotices({
   quality,
   excludedHoldings,
+  estimatedPriceMonths = [],
 }: {
   quality: DataQuality;
   excludedHoldings: ExcludedHolding[];
+  /** Meses estimados dentro del período visible (ver `estimatedMonthsInPeriod`). */
+  estimatedPriceMonths?: string[];
 }) {
   const noBackfill = quality.lastPriceSyncDate === null;
 
@@ -72,6 +75,17 @@ export function DataNotices({
             {quality.partialMonths.map(formatMonthLabel).join(", ")}
           </span>
           . Están marcados con un triángulo en la tabla.
+        </Notice>
+      ) : null}
+
+      {estimatedPriceMonths.length > 0 ? (
+        <Notice tone="warning" icon={AlertTriangle} title="Incluye valores estimados de ONs">
+          En{" "}
+          <span className="text-zinc-300">
+            {estimatedPriceMonths.map(formatMonthLabel).join(", ")}
+          </span>{" "}
+          el cierre de alguna ON se estima con valor técnico (residual × USD 1 × CCL del
+          día) porque no hay cotización guardada de esa rueda.
         </Notice>
       ) : null}
 

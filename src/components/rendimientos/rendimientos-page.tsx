@@ -16,6 +16,7 @@ import { ChartBlockSkeleton } from "@/components/layout/page-skeletons";
 import { useCurrency } from "@/components/providers/currency-provider";
 import type { TargetCondition } from "@/lib/alerts/adapters/prisma-targets";
 import type { PortfolioEvolution } from "@/lib/dashboard/evolution";
+import { estimatedMonthsInPeriod } from "@/lib/rendimientos/estimated-prices";
 import type { PerformanceReport } from "@/lib/rendimientos/types";
 import { PERIODS, resolveView, sliceMonths, summaryForCurrency, type Period } from "@/lib/rendimientos/view";
 import { cn } from "@/lib/utils";
@@ -75,13 +76,24 @@ export function RendimientosPage({
     [report.months, period]
   );
 
+  // `?? []`: un reporte cacheado antes de que existiera el campo (`unstable_cache` puede
+  // sobrevivir a un deploy) no lo trae, y sin el fallback la página entera se rompe.
+  const estimatedPriceMonths = useMemo(
+    () => estimatedMonthsInPeriod(report.dataQuality.estimatedPriceMonths ?? [], monthsInPeriod),
+    [report.dataQuality.estimatedPriceMonths, monthsInPeriod]
+  );
+
   const hasData = report.months.length > 0;
 
   return (
     <div className="space-y-6">
       <Header report={report} />
 
-      <DataNotices quality={report.dataQuality} excludedHoldings={report.excludedHoldings} />
+      <DataNotices
+        quality={report.dataQuality}
+        excludedHoldings={report.excludedHoldings}
+        estimatedPriceMonths={estimatedPriceMonths}
+      />
 
       {!hasData ? (
         <EmptyState />
