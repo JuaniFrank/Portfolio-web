@@ -17,7 +17,7 @@ const TRANSACTION_CONSUMER_PATHS = [
   "/dividends",
   "/bonds",
   "/events",
-  "/monitoreo",
+  "/activos",
 ] as const;
 
 export function revalidateTransactionConsumers(userId: string) {
