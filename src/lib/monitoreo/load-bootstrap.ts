@@ -1,9 +1,12 @@
 import { getCurrentUser } from "@/lib/auth";
 import { listMonitoringInstruments } from "@/lib/monitoreo/data";
 import { fetchMonitoringSeries } from "@/lib/monitoreo/load-series";
+import { resolveInitialSelection, type ActivosView } from "@/lib/monitoreo/activos-selection";
 import type { MonitoringBootstrapData } from "@/lib/monitoreo/types";
 
-export async function loadMonitoringBootstrap(): Promise<
+export async function loadMonitoringBootstrap(
+  request: { ticker?: string | null; vista?: ActivosView | null } = {}
+): Promise<
   MonitoringBootstrapData | { error: "unauthorized" }
 > {
   const user = await getCurrentUser();
@@ -15,26 +18,33 @@ export async function loadMonitoringBootstrap(): Promise<
     return {
       instruments: [],
       selectedInstrumentId: null,
+      selectedKind: "native",
+      selectedCurrency: "ARS",
       initialSeries: null,
     };
   }
 
-  // Pick first instrument in portfolio, or first available instrument
-  const recommended = instruments.find((i) => i.inPortfolio) || instruments[0]!;
-  const defaultKind = recommended.isCedear ? "cedear-underlying" : "native";
-  const defaultCurrency = recommended.isCedear ? "USD" : "ARS";
+  // Requested ticker/view (deep link) when known, else the first portfolio instrument.
+  const selection = resolveInitialSelection(instruments, {
+    ticker: request.ticker ?? null,
+    vista: request.vista ?? null,
+  })!;
+  const selected = instruments.find((i) => i.id === selection.instrumentId)!;
+  const defaultCurrency = selection.kind === "cedear-underlying" ? "USD" : "ARS";
 
   const initialSeries = await fetchMonitoringSeries({
-    instrumentId: recommended.id,
+    instrumentId: selected.id,
     currency: defaultCurrency,
     range: "ALL",
-    chartType: "line",
-    kind: defaultKind,
+    chartType: "candles",
+    kind: selection.kind,
   });
 
   return {
     instruments,
-    selectedInstrumentId: recommended.id,
+    selectedInstrumentId: selected.id,
+    selectedKind: selection.kind,
+    selectedCurrency: defaultCurrency,
     initialSeries,
   };
 }

@@ -80,5 +80,8 @@ export type MonitoringSeries = {
 export type MonitoringBootstrapData = {
   instruments: MonitoringInstrument[];
   selectedInstrumentId: string | null;
+  /** View resolved for the selected instrument (also when `initialSeries` is null) */
+  selectedKind: UiMonitoringSeriesKind;
+  selectedCurrency: MonitoringCurrency;
   initialSeries: MonitoringSeries | null;
 };
