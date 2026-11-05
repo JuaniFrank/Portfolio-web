@@ -4,7 +4,8 @@ import {
   type ProjectionMethod,
   type TradeProjectionContext,
 } from "./trade-projection";
-import type { MonitoringBar } from "./types";
+import { adjustmentFactorAfter } from "./split-adjustment";
+import type { AdjustmentEvent, MonitoringBar } from "./types";
 
 export type TradeSide = "BUY" | "SELL";
 
@@ -206,13 +207,24 @@ const QUANTITY_EPSILON = 1e-9;
  * a corporate event after any trade of the open position, makes the average meaningless:
  * quantity is still reported but `avgCost`/`unrealizedPct` are null and `comparable` is false.
  * (Sells never use their own price, so a sell without projection does not block the average.)
+ *
+ * `adjustmentEvents`: when the trade prices were divided by later events (native split-adjusted
+ * series), quantities are multiplied by the same factor (the `applyEventsToTrade` rule) so buy
+ * weighting and sells run in post-event units and the reported quantity is the current holding.
  */
 export function buildPositionSummary(
   trades: { side: TradeMarkerSide; quantity: number; chartPrice: number | null; tradeDate: string }[],
   lastClose: number,
-  corporateEventDates: string[] = []
+  corporateEventDates: string[] = [],
+  adjustmentEvents?: AdjustmentEvent[]
 ): PositionSummary {
-  const sorted = [...trades].sort(compareChronological);
+  const sorted = [...trades]
+    .sort(compareChronological)
+    .map((t) =>
+      adjustmentEvents
+        ? { ...t, quantity: t.quantity * adjustmentFactorAfter(t.tradeDate, adjustmentEvents) }
+        : t
+    );
 
   let quantity = 0;
   let cost = 0;

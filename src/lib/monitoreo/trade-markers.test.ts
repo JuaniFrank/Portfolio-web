@@ -313,3 +313,45 @@ describe("monitoreo/trade-markers buildPositionSummary", () => {
     });
   });
 });
+
+describe("monitoreo/trade-markers buildPositionSummary across a split", () => {
+  const events = [{ effectiveDate: "2026-03-10", ratio: 2 }];
+  const t = (
+    side: "buy" | "sell",
+    quantity: number,
+    chartPrice: number | null,
+    tradeDate: string
+  ) => ({ side, quantity, chartPrice, tradeDate });
+
+  it("scales pre-event quantities to post-event units so the average cost weights correctly", () => {
+    // 10 @ 100 before a 2:1 split is 20 @ 50 post-event; then 20 @ 60 -> avg (1000 + 1200) / 40 = 55
+    const s = buildPositionSummary(
+      [t("buy", 10, 50, "2026-03-01"), t("buy", 20, 60, "2026-03-12")],
+      66,
+      [],
+      events
+    );
+    expect(s.quantity).toBe(40);
+    expect(s.avgCost).toBeCloseTo(55, 10);
+  });
+
+  it("a post-split sell is measured against the split-adjusted holdings", () => {
+    // 10 pre-split shares are 20 post-split: selling 15 leaves 5 (raw units would close it)
+    const s = buildPositionSummary(
+      [t("buy", 10, 50, "2026-03-01"), t("sell", 15, 60, "2026-03-12")],
+      66,
+      [],
+      events
+    );
+    expect(s.quantity).toBe(5);
+  });
+
+  it("without events the quantities are untouched", () => {
+    const s = buildPositionSummary(
+      [t("buy", 10, 50, "2026-03-01"), t("buy", 20, 60, "2026-03-12")],
+      66,
+      []
+    );
+    expect(s.avgCost).toBeCloseTo(56.6666667, 5);
+  });
+});
