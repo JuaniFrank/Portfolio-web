@@ -4,6 +4,7 @@ import {
   calculateChangePct,
   dedupeAndSortBars,
   filterBarsByRange,
+  filterBarsByRangeFromLast,
   mergeHistoryBars,
   validateOhlc,
 } from "./series";
@@ -24,6 +25,24 @@ describe("monitoreo/series", () => {
       expect(result[0]!.close).toBe(95); // Latest 2026-03-01 entry kept
       expect(result[1]!.time).toBe("2026-03-02");
       expect(result[1]!.close).toBe(104);
+    });
+  });
+
+  describe("filterBarsByRangeFromLast", () => {
+    const bars: MonitoringBar[] = [
+      { time: "2025-01-01", open: 10, high: 12, low: 9, close: 11, volume: 100 },
+      { time: "2025-06-01", open: 11, high: 13, low: 10, close: 12, volume: 100 },
+      { time: "2025-06-20", open: 12, high: 14, low: 11, close: 13, volume: 100 },
+    ];
+
+    it("anchors the window to the last bar, so a stale series is never emptied", () => {
+      const result = filterBarsByRangeFromLast(bars, "1M");
+      expect(result.map((b) => b.time)).toEqual(["2025-06-01", "2025-06-20"]);
+    });
+
+    it("returns everything for ALL and nothing for no bars", () => {
+      expect(filterBarsByRangeFromLast(bars, "ALL")).toHaveLength(3);
+      expect(filterBarsByRangeFromLast([], "1M")).toEqual([]);
     });
   });
 

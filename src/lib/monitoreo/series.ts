@@ -60,6 +60,19 @@ export function filterBarsByRange(
 }
 
 /**
+ * Like `filterBarsByRange` but the window ends at the last bar instead of today, so a series
+ * whose latest bar is older than the window (stale/delisted) still shows its tail.
+ */
+export function filterBarsByRangeFromLast(
+  bars: MonitoringBar[],
+  range: MonitoringRange
+): MonitoringBar[] {
+  if (bars.length === 0) return bars;
+  const last = bars[bars.length - 1]!.time;
+  return filterBarsByRange(bars, range, new Date(`${last}T00:00:00Z`));
+}
+
+/**
  * Validate OHLC bar correctness and completeness.
  */
 export function validateOhlc(bar: MonitoringBar): {
