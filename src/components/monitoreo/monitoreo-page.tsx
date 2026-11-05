@@ -30,7 +30,6 @@ import { isSeriesAdjusted } from "@/lib/monitoreo/trade-projection";
 import {
   buildPositionSummary,
   buildTradeEntries,
-  projectTrades,
   type TradeEntry,
   type TradeMarker,
 } from "@/lib/monitoreo/trade-markers";
@@ -221,16 +220,22 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
     );
   }, [tradeEntries, displayedBars]);
 
+  // Reuses the projection already done for `tradeEntries` (same full bars and context).
   const position = React.useMemo(() => {
-    if (!activeSeries || !tradeData || !projectionContext) return null;
-    if (tradeData.trades.length === 0 || activeSeries.bars.length === 0) return null;
-    const projected = projectTrades(tradeData.trades, {
-      ...projectionContext,
-      bars: activeSeries.bars,
-    });
+    if (!activeSeries || !tradeData) return null;
+    if (tradeEntries.length === 0 || activeSeries.bars.length === 0) return null;
     const lastClose = activeSeries.bars[activeSeries.bars.length - 1]!.close;
-    return buildPositionSummary(projected, lastClose, tradeData.corporateEventDates);
-  }, [activeSeries, tradeData, projectionContext]);
+    return buildPositionSummary(
+      tradeEntries.map((e) => ({
+        side: e.side,
+        quantity: e.trade.quantity,
+        chartPrice: e.chartPrice,
+        tradeDate: e.trade.tradeDate,
+      })),
+      lastClose,
+      tradeData.corporateEventDates
+    );
+  }, [activeSeries, tradeData, tradeEntries]);
 
   const headerStats = React.useMemo(
     () => buildHeaderStats(activeSeries?.bars ?? [], displayedBars),
