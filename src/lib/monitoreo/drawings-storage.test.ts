@@ -56,4 +56,10 @@ describe("serializeDrawings / parseDrawings", () => {
     expect(parseDrawings(JSON.stringify({ a: 1 }))).toEqual([]);
     expect(parseDrawings(JSON.stringify([null, 3, { name: "segment" }]))).toEqual([]);
   });
+
+  it("never persists the ephemeral measure ruler", () => {
+    const measure = { name: "measure", points: [{ timestamp: 1, value: 1 }, { timestamp: 2, value: 2 }] };
+    expect(parseDrawings(serializeDrawings([measure]))).toEqual([]);
+    expect(parseDrawings(JSON.stringify([measure]))).toEqual([]);
+  });
 });
