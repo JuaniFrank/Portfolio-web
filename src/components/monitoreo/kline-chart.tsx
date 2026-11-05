@@ -24,6 +24,12 @@ import { markerGeometry, type MarkerGeometry } from "@/lib/monitoreo/marker-geom
 import { getBrowserStorage, readStoredString, writeStoredString } from "@/lib/ui/safe-storage";
 import { cn } from "@/lib/utils";
 import { DrawingToolbar, type MagnetMode } from "./drawing-toolbar";
+import {
+  MEASURE_GROUP,
+  MEASURE_OVERLAY_NAME,
+  measureOverlayTemplate,
+  type MeasureExtendData,
+} from "./measure-overlay";
 import { formatCurrency, formatPercent, formatTradingDate, formatVolume } from "./format";
 
 /** Fixed id of KLineChart's main candle pane (see klinecharts' internal `PaneIdConstants`). */
@@ -308,9 +314,59 @@ export function KLineChart({
     setActiveTool(null);
   }, []);
 
+  // --- Measure ruler: ephemeral overlay, its own group so it is never persisted -------------
+  const [measureActive, setMeasureActive] = React.useState(false);
+  const measureIdRef = React.useRef<string | null>(null);
+  const measureDoneRef = React.useRef(false);
+  const activeToolRef = React.useRef<DrawingToolName | null>(null);
+  const currencyRef = React.useRef<MonitoringCurrency>(currency);
+
+  const removeMeasure = React.useCallback(() => {
+    const id = measureIdRef.current;
+    measureIdRef.current = null;
+    measureDoneRef.current = false;
+    setMeasureActive(false);
+    if (id) chartRef.current?.removeOverlay({ id });
+  }, []);
+
+  const startMeasure = React.useCallback(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    removeMeasure();
+    const id = chart.createOverlay({
+      name: MEASURE_OVERLAY_NAME,
+      groupId: MEASURE_GROUP,
+      mode: magnetRef.current,
+      extendData: { currency: currencyRef.current } satisfies MeasureExtendData,
+      onDrawEnd: () => {
+        measureDoneRef.current = true;
+        setMeasureActive(false);
+      },
+      onRemoved: ({ overlay }) => {
+        if (measureIdRef.current === overlay.id) {
+          measureIdRef.current = null;
+          measureDoneRef.current = false;
+          setMeasureActive(false);
+        }
+      },
+    });
+    measureIdRef.current = typeof id === "string" ? id : null;
+    setMeasureActive(measureIdRef.current !== null);
+  }, [removeMeasure]);
+
+  const toggleMeasure = () => {
+    if (measureActive) {
+      removeMeasure();
+      return;
+    }
+    cancelDrawing();
+    startMeasure();
+  };
+
   const startDrawing = (tool: DrawingToolName | null) => {
     const chart = chartRef.current;
     cancelDrawing();
+    removeMeasure();
     if (!chart || tool === null) return;
     let extendData: string | undefined;
     if (tool === "simpleAnnotation") {
@@ -376,6 +432,60 @@ export function KLineChart({
     }
   }, [drawingsKey, chartReady, overlayHandlers]);
 
+  // Shift+click starts a measure (cursor tool only); a click outside a finished measure removes it.
+  React.useEffect(() => {
+    activeToolRef.current = activeTool;
+    currencyRef.current = currency;
+  }, [activeTool, currency]);
+
+  React.useEffect(() => {
+    if (!chartReady) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      const chart = chartRef.current;
+      const container = containerRef.current;
+      const target = event.target as Node | null;
+      if (!chart || !container || !target) return;
+      const insideChart = container.contains(target);
+
+      if (event.shiftKey && insideChart && activeToolRef.current === null && !drawingIdRef.current) {
+        startMeasure();
+        return;
+      }
+      if (measureIdRef.current && measureDoneRef.current) {
+        // Keep it when the click lands on the measured rectangle (dragging its handles).
+        const overlay = chart.getOverlays({ id: measureIdRef.current })[0];
+        const rect = container.getBoundingClientRect();
+        const px = chart.convertToPixel(
+          (overlay?.points ?? []).filter(
+            (p): p is { timestamp: number; value: number } =>
+              typeof p.timestamp === "number" && typeof p.value === "number"
+          ),
+          { paneId: MAIN_PANE_ID }
+        );
+        const [p0, p1] = Array.isArray(px) ? px : [px];
+        if (insideChart && p0 && p1 && p0.x !== undefined && p0.y !== undefined && p1.x !== undefined && p1.y !== undefined) {
+          const x = event.clientX - rect.left;
+          const y = event.clientY - rect.top;
+          const pad = 8;
+          const inX = x >= Math.min(p0.x, p1.x) - pad && x <= Math.max(p0.x, p1.x) + pad;
+          const inY = y >= Math.min(p0.y, p1.y) - pad && y <= Math.max(p0.y, p1.y) + pad;
+          if (inX && inY) return;
+        }
+        removeMeasure();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [chartReady, startMeasure, removeMeasure]);
+
+  // A different view (range/currency) or ticker invalidates the measured values.
+  // (The overlay's own `onRemoved` resets the measure state.)
+  React.useEffect(() => {
+    const id = measureIdRef.current;
+    if (id) chartRef.current?.removeOverlay({ id });
+  }, [drawingsKey, currency]);
+
   // --- Fullscreen (Fullscreen API, with a fixed-position fallback) ---------------------------
   const [nativeFullscreen, setNativeFullscreen] = React.useState(false);
   const [pseudoFullscreen, setPseudoFullscreen] = React.useState(false);
@@ -399,13 +509,14 @@ export function KLineChart({
         event.preventDefault();
         chartRef.current?.removeOverlay({ id: selectedIdRef.current });
       } else if (event.key === "Escape") {
-        if (drawingIdRef.current) cancelDrawing();
+        if (measureIdRef.current) removeMeasure();
+        else if (drawingIdRef.current) cancelDrawing();
         else if (pseudoFullscreen) setPseudoFullscreen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [cancelDrawing, pseudoFullscreen]);
+  }, [cancelDrawing, removeMeasure, pseudoFullscreen]);
 
   const toggleFullscreen = async () => {
     const el = rootRef.current;
@@ -547,8 +658,9 @@ export function KLineChart({
     let disposed = false;
     let chart: Chart | null = null;
 
-    import("klinecharts").then(({ init }) => {
+    import("klinecharts").then(({ init, registerOverlay }) => {
       if (disposed || !container) return;
+      registerOverlay(measureOverlayTemplate);
 
       chart = init(container, { styles: buildDarkStyles(chartType) });
       if (!chart) return;
@@ -585,8 +697,11 @@ export function KLineChart({
       setHovered(null);
       setHasSelection(false);
       setActiveTool(null);
+      setMeasureActive(false);
       selectedIdRef.current = null;
       drawingIdRef.current = null;
+      measureIdRef.current = null;
+      measureDoneRef.current = false;
       const current = chart;
       if (current) {
         current.unsubscribeAction("onCrosshairChange", handleCrosshairChange);
@@ -877,6 +992,8 @@ export function KLineChart({
           activeTool={activeTool}
           magnet={magnet}
           hasSelection={hasSelection}
+          measureActive={measureActive}
+          onToggleMeasure={toggleMeasure}
           onSelectTool={startDrawing}
           onCycleMagnet={cycleMagnet}
           onDeleteSelected={deleteSelected}
@@ -966,7 +1083,7 @@ export function KLineChart({
                 type="button"
                 className={cn(
                   "absolute flex items-center justify-center",
-                  activeTool === null ? "pointer-events-auto" : "pointer-events-none"
+                  activeTool === null && !measureActive ? "pointer-events-auto" : "pointer-events-none"
                 )}
                 style={{
                   left: x,
