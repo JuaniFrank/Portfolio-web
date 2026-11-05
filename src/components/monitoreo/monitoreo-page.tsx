@@ -5,23 +5,35 @@ import {
   Activity,
   AlertCircle,
   CandlestickChart,
-  CheckCircle2,
-  CloudDownload,
   Info,
   LineChart,
   Loader2,
+  PanelRightClose,
+  PanelRightOpen,
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import { usePathname } from "next/navigation";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { fetchSeries, fetchTrades, postHistory } from "@/lib/monitoreo/activos-client";
+import { EMPTY_TRADE_MARKER_DATA, type TradeMarkerData } from "@/lib/monitoreo/trade-marker-data";
 import {
-  getInstrumentTradeMarkersAction,
-  getMonitoringSeriesAction,
-  loadMonitoringHistoryAction,
-} from "@/app/actions/monitoreo";
-import { buildTradeMarkers, type TradeMarker, type TradeMarkerInput } from "@/lib/monitoreo/trade-markers";
+  buildActivosSearch,
+  sortInstrumentsPortfolioFirst,
+} from "@/lib/monitoreo/activos-selection";
+import { buildHeaderStats } from "@/lib/monitoreo/asset-stats";
+import { drawingsStorageKey } from "@/lib/monitoreo/drawings-storage";
+import { useStoredBoolean } from "@/lib/ui/use-stored-boolean";
+import { shouldLoadHistory } from "@/lib/monitoreo/history-policy";
+import { filterBarsByRangeFromLast } from "@/lib/monitoreo/series";
+import { isSeriesAdjusted } from "@/lib/monitoreo/trade-projection";
+import {
+  buildPositionSummary,
+  buildTradeEntries,
+  projectTrades,
+  type TradeEntry,
+  type TradeMarker,
+} from "@/lib/monitoreo/trade-markers";
 import type {
   MonitoringBootstrapData,
   MonitoringChartType,
@@ -30,23 +42,47 @@ import type {
   MonitoringSeries,
   UiMonitoringSeriesKind,
 } from "@/lib/monitoreo/types";
+import { AssetHeaderStats } from "./asset-header-stats";
 import { AssetSelector } from "./asset-selector";
 import { formatTradingDate } from "./format";
+import type { ChartFocusRequest } from "./kline-chart";
+import { PositionPanel } from "./position-panel";
+import { TradesList } from "./trades-list";
 
 // klinecharts is heavy and only paints once a series is loaded: code-split it (client-only).
 const KLineChart = dynamic(() => import("./kline-chart").then((m) => m.KLineChart), {
   ssr: false,
-  loading: () => <Skeleton className="w-full" style={{ height: 440 }} />,
+  loading: () => <Skeleton className="h-full min-h-[320px] w-full" />,
 });
+
+const RANGES: MonitoringRange[] = ["1M", "3M", "6M", "1Y", "ALL"];
 
 interface MonitoreoPageProps {
   initialData: MonitoringBootstrapData;
 }
 
+function currencyForKind(kind: UiMonitoringSeriesKind): MonitoringCurrency {
+  return kind === "cedear-underlying" ? "USD" : "ARS";
+}
+
+const seriesKey = (instrumentId: string, kind: UiMonitoringSeriesKind) => `${instrumentId}:${kind}`;
+
 export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
-  const { instruments, selectedInstrumentId: initialSelectedId, initialSeries } = initialData;
+  const {
+    instruments,
+    selectedInstrumentId: initialSelectedId,
+    selectedKind: initialKind,
+    initialSeries,
+  } = initialData;
+  const pathname = usePathname();
+
+  const sortedInstruments = React.useMemo(
+    () => sortInstrumentsPortfolioFirst(instruments),
+    [instruments]
+  );
 
   const [selectedId, setSelectedId] = React.useState<string | null>(initialSelectedId);
+  // Always the FULL series ("ALL"); the displayed range is derived client-side below.
   const [series, setSeries] = React.useState<MonitoringSeries | null>(initialSeries);
 
   const selectedInstrument = React.useMemo(
@@ -54,44 +90,47 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
     [instruments, selectedId]
   );
 
-  const [currency, setCurrency] = React.useState<MonitoringCurrency>(
-    initialSeries?.currency ?? (selectedInstrument?.isCedear ? "USD" : "ARS")
-  );
+  const [kind, setKind] = React.useState<UiMonitoringSeriesKind>(initialKind);
+  const currency = currencyForKind(kind);
   const [range, setRange] = React.useState<MonitoringRange>("ALL");
-  const [chartType, setChartType] = React.useState<MonitoringChartType>("line");
-  const [kind, setKind] = React.useState<UiMonitoringSeriesKind>(
-    initialSeries?.kind ?? (selectedInstrument?.isCedear ? "cedear-underlying" : "native")
-  );
+  const [chartType, setChartType] = React.useState<MonitoringChartType>("candles");
+  const [tradesCollapsed, setTradesCollapsed] = useStoredBoolean("activos:trades-collapsed", false);
 
   const [isPending, startTransition] = React.useTransition();
-  const [isLoadingHistory, setIsLoadingHistory] = React.useState(false);
+  // Latest-wins guard for the cached-series fetch triggered by selection changes.
+  const seriesRequestRef = React.useRef(0);
+  // Series that already got their full history this session, and keys with a request in flight.
+  const loadedSeriesRef = React.useRef(new Map<string, MonitoringSeries>());
+  const requestedHistoryRef = React.useRef(new Set<string>());
+  const [failedHistoryKeys, setFailedHistoryKeys] = React.useState<ReadonlySet<string>>(new Set());
+  const [todayIso] = React.useState(() => new Date().toISOString().slice(0, 10));
 
-  // Trades + corporate event dates for the selected instrument, feeding the chart's markers.
-  const [tradeData, setTradeData] = React.useState<{
-    trades: TradeMarkerInput[];
-    corporateEventDates: string[];
-  } | null>(null);
+  // Trades + corporate event dates for the selected instrument, feeding markers and position.
+  const [tradeData, setTradeData] = React.useState<TradeMarkerData | null>(null);
+  // Marker highlighted from the chart or the trades list, and the list's "scroll to" request.
+  const [activeMarkerId, setActiveMarkerId] = React.useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = React.useState<ChartFocusRequest | null>(null);
 
-  // Reset stale trade data synchronously when the instrument changes, before the fetch effect
-  // below resolves — "adjusting state during render" (see React docs), not a setState-in-effect,
-  // so a different instrument's markers never briefly render against the new one's bars.
+  // Reset stale per-instrument state synchronously when the instrument changes, before the fetch
+  // effect below resolves — "adjusting state during render" (see React docs), not a
+  // setState-in-effect, so a different instrument's markers never briefly render against the
+  // new one's bars.
   const [tradeDataInstrumentId, setTradeDataInstrumentId] = React.useState(selectedId);
   if (selectedId !== tradeDataInstrumentId) {
     setTradeDataInstrumentId(selectedId);
     setTradeData(null);
+    setActiveMarkerId(null);
+    setFocusRequest(null);
   }
 
   React.useEffect(() => {
     if (!selectedId) return;
 
     let cancelled = false;
-    getInstrumentTradeMarkersAction({ instrumentId: selectedId }).then((res) => {
+    // Degrades to "no trades" on any failure (fetchTrades never throws).
+    fetchTrades(selectedId).then((res) => {
       if (cancelled) return;
-      if ("error" in res) {
-        setTradeData({ trades: [], corporateEventDates: [] });
-        return;
-      }
-      setTradeData(res);
+      setTradeData("error" in res ? EMPTY_TRADE_MARKER_DATA : res);
     });
 
     return () => {
@@ -99,111 +138,185 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
     };
   }, [selectedId]);
 
-  const tradeMarkers: TradeMarker[] = React.useMemo(() => {
-    if (!series || !tradeData) return [];
-    return buildTradeMarkers(
-      tradeData.trades,
-      series.bars,
-      { kind: series.kind, currency: series.currency },
-      tradeData.corporateEventDates
-    );
-  }, [series, tradeData]);
+  // The series is only usable when it belongs to the current selection (a switch is in flight
+  // otherwise, and the previous instrument's bars must not render against the new one).
+  const activeSeries =
+    series && series.instrumentId === selectedId && series.kind === kind ? series : null;
+  const historyKey = selectedId ? seriesKey(selectedId, kind) : "";
+  const needsHistory = activeSeries !== null && shouldLoadHistory(activeSeries, todayIso);
+  const historyLoading = needsHistory && !failedHistoryKeys.has(historyKey);
 
-  // Fetch series on parameter changes
-  const fetchSeries = React.useCallback(
-    (
-      instId: string,
-      targetCurrency: MonitoringCurrency,
-      targetRange: MonitoringRange,
-      targetChartType: MonitoringChartType,
-      targetKind: UiMonitoringSeriesKind
-    ) => {
-      startTransition(async () => {
-        const res = await getMonitoringSeriesAction({
-          instrumentId: instId,
-          currency: targetCurrency,
-          range: targetRange,
-          chartType: targetChartType,
-          kind: targetKind,
-        });
+  // Auto history: the cached series renders immediately; when its coverage is insufficient the
+  // full history loads in the background (once per instrument+kind per page session).
+  React.useEffect(() => {
+    if (!needsHistory || !selectedId) return;
+    const requested = requestedHistoryRef.current;
+    if (requested.has(historyKey)) return;
+    requested.add(historyKey);
 
-        if ("error" in res) {
-          toast.error(res.error);
-        } else {
-          setSeries(res);
-        }
-      });
-    },
-    []
+    let cancelled = false;
+    let settled = false;
+
+    postHistory({
+      instrumentId: selectedId,
+      currency: currencyForKind(kind),
+      range: "ALL",
+      chartType: "candles",
+      kind,
+    }).then((res) => {
+      if (cancelled) return; // the user switched instrument meanwhile
+      settled = true;
+      if ("error" in res) {
+        setFailedHistoryKeys((prev) => new Set(prev).add(historyKey));
+        return;
+      }
+      loadedSeriesRef.current.set(historyKey, res);
+      setSeries(res);
+    });
+
+    return () => {
+      cancelled = true;
+      // An aborted request may be retried when the user comes back to this instrument.
+      if (!settled) requested.delete(historyKey);
+    };
+  }, [needsHistory, historyKey, selectedId, kind]);
+
+  const displayedBars = React.useMemo(
+    () => (activeSeries ? filterBarsByRangeFromLast(activeSeries.bars, range) : []),
+    [activeSeries, range]
   );
 
-  // Handle instrument selection
-  const handleSelectInstrument = (id: string) => {
-    const inst = instruments.find((i) => i.id === id);
+  const projectionContext = React.useMemo(
+    () =>
+      activeSeries && tradeData
+        ? {
+            kind: activeSeries.kind,
+            currency: activeSeries.currency,
+            nativeArsCloses: tradeData.nativeArsCloses,
+            cclByDate: tradeData.cclByDate,
+            seriesAdjusted: isSeriesAdjusted(activeSeries),
+            corporateEventDates: tradeData.corporateEventDates,
+          }
+        : null,
+    [activeSeries, tradeData]
+  );
+
+  // Every trade against the FULL bars (feeds the list, including trades with no bar to anchor
+  // to); the chart only gets the anchored ones inside the displayed range.
+  const tradeEntries: TradeEntry[] = React.useMemo(() => {
+    if (!activeSeries || !tradeData || !projectionContext) return [];
+    return buildTradeEntries(
+      tradeData.trades,
+      activeSeries.bars,
+      projectionContext,
+      tradeData.corporateEventDates
+    );
+  }, [activeSeries, tradeData, projectionContext]);
+
+  const chartMarkers = React.useMemo(() => {
+    const first = displayedBars[0];
+    if (!first) return [];
+    return tradeEntries.filter(
+      (e): e is TradeMarker => e.barTime !== null && e.barTime >= first.time
+    );
+  }, [tradeEntries, displayedBars]);
+
+  const position = React.useMemo(() => {
+    if (!activeSeries || !tradeData || !projectionContext) return null;
+    if (tradeData.trades.length === 0 || activeSeries.bars.length === 0) return null;
+    const projected = projectTrades(tradeData.trades, {
+      ...projectionContext,
+      bars: activeSeries.bars,
+    });
+    const lastClose = activeSeries.bars[activeSeries.bars.length - 1]!.close;
+    return buildPositionSummary(projected, lastClose, tradeData.corporateEventDates);
+  }, [activeSeries, tradeData, projectionContext]);
+
+  const headerStats = React.useMemo(
+    () => buildHeaderStats(activeSeries?.bars ?? [], displayedBars),
+    [activeSeries, displayedBars]
+  );
+
+  const syncUrl = (instrumentId: string, nextKind: UiMonitoringSeriesKind) => {
+    const inst = instruments.find((i) => i.id === instrumentId);
     if (!inst) return;
-
-    setSelectedId(id);
-    const newKind: UiMonitoringSeriesKind = inst.isCedear ? "cedear-underlying" : "native";
-    const newCurrency: MonitoringCurrency = inst.isCedear ? "USD" : "ARS";
-
-    setKind(newKind);
-    setCurrency(newCurrency);
-
-    fetchSeries(id, newCurrency, range, chartType, newKind);
+    // Documented integration (docs 04-linking-and-navigating.md, "Using the native History API"):
+    // Next patches `replaceState`/`pushState` and syncs `usePathname`/`useSearchParams`. Data is
+    // fetched through route handlers, not server actions, so the router's RESTORE for this call
+    // has no queued action to orphan, and the saved history entry stays correct for Back.
+    window.history.replaceState(
+      null,
+      "",
+      `${pathname}${buildActivosSearch(inst.ticker, nextKind, inst.isCedear)}`
+    );
   };
 
-  // Handle CEDEAR mode toggle
-  const handleToggleCedearMode = (targetKind: UiMonitoringSeriesKind) => {
-    if (!selectedId) return;
-    const targetCurrency: MonitoringCurrency =
-      targetKind === "cedear-underlying" ? "USD" : "ARS";
-
-    setKind(targetKind);
-    setCurrency(targetCurrency);
-    fetchSeries(selectedId, targetCurrency, range, chartType, targetKind);
-  };
-
-  // Handle range change
-  const handleRangeChange = (newRange: MonitoringRange) => {
-    if (!selectedId) return;
-    setRange(newRange);
-    fetchSeries(selectedId, currency, newRange, chartType, kind);
-  };
-
-  // Handle chart type toggle
-  const handleChartTypeChange = (newType: MonitoringChartType) => {
-    setChartType(newType);
-    if (series) {
-      setSeries({ ...series, chartType: newType });
+  // Show the (already loaded or cached) series of an instrument+kind. Full histories fetched
+  // earlier this session are reused as-is; otherwise the server returns the cached series.
+  const showSeries = (instrumentId: string, nextKind: UiMonitoringSeriesKind) => {
+    const requestId = ++seriesRequestRef.current;
+    const loaded = loadedSeriesRef.current.get(seriesKey(instrumentId, nextKind));
+    if (loaded) {
+      setSeries(loaded);
+      return;
     }
-  };
 
-  // Handle Load Full History action
-  const handleLoadHistory = async () => {
-    if (!selectedId || isLoadingHistory) return;
-
-    setIsLoadingHistory(true);
-    try {
-      const res = await loadMonitoringHistoryAction({
-        instrumentId: selectedId,
-        currency,
-        range,
-        chartType,
-        kind,
+    startTransition(async () => {
+      const res = await fetchSeries({
+        instrumentId,
+        currency: currencyForKind(nextKind),
+        range: "ALL",
+        chartType: "candles",
+        kind: nextKind,
       });
+      if (requestId !== seriesRequestRef.current) return; // a newer selection superseded this one
 
       if ("error" in res) {
         toast.error(res.error);
       } else {
         setSeries(res);
-        toast.success(`Histórico cargado (${res.bars.length} ruedas)`);
       }
-    } catch {
-      toast.error("Error al cargar el histórico");
-    } finally {
-      setIsLoadingHistory(false);
-    }
+    });
   };
+
+  const handleSelectInstrument = (id: string) => {
+    const inst = instruments.find((i) => i.id === id);
+    if (!inst) return;
+    const nextKind: UiMonitoringSeriesKind = inst.isCedear ? "cedear-underlying" : "native";
+
+    setSelectedId(id);
+    setKind(nextKind);
+    showSeries(id, nextKind);
+    syncUrl(id, nextKind);
+  };
+
+  const handleToggleCedearMode = (targetKind: UiMonitoringSeriesKind) => {
+    if (!selectedId || targetKind === kind) return;
+    setKind(targetKind);
+    showSeries(selectedId, targetKind);
+    syncUrl(selectedId, targetKind);
+  };
+
+  const handleSelectTrade = (id: string) => {
+    setActiveMarkerId(id);
+    // A trade older than the selected range has no marker on the chart: widen the range first.
+    if (!chartMarkers.some((m) => m.id === id)) setRange("ALL");
+    setFocusRequest((prev) => ({ id, seq: (prev?.seq ?? 0) + 1 }));
+  };
+
+  // Range shortcuts: 1 / 3 / 6 / Y / A (ignored while typing or with modifiers).
+  React.useEffect(() => {
+    const byKey: Record<string, MonitoringRange> = { "1": "1M", "3": "3M", "6": "6M", y: "1Y", a: "ALL" };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      const next = byKey[event.key.toLowerCase()];
+      if (next) setRange(next);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   if (instruments.length === 0) {
     return (
@@ -212,256 +325,249 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
         <h2 className="text-xl font-semibold text-zinc-100">Sin catálogo de activos disponible</h2>
         <p className="mt-2 text-sm text-zinc-400 max-w-md">
           No se encontraron instrumentos BYMA activos sincronizados. Ejecutá la sincronización de
-          catálogo para habilitar el monitoreo.
+          catálogo para habilitar esta sección.
         </p>
       </div>
     );
   }
 
-  const historyStatus = series?.historyStatus ?? "not-requested";
   const isCedear = selectedInstrument?.isCedear ?? false;
+  const scaleLabel = kind === "cedear-underlying" ? "Equivalente subyacente" : "Equivalente en el gráfico";
+  const showTradesList = tradeEntries.length > 0;
+  const tradesVisible = showTradesList && !tradesCollapsed;
+  const unavailable = activeSeries?.historyStatus === "unavailable" || failedHistoryKeys.has(historyKey);
+
+  const segmentButton = (active: boolean) =>
+    `rounded-md px-2.5 py-1 font-medium transition-colors ${
+      active ? "bg-zinc-800 text-zinc-50 shadow-sm" : "text-zinc-400 hover:text-zinc-200"
+    }`;
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Page Header */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-zinc-100">Monitoreo de Mercado</h1>
-          <p className="text-sm text-zinc-400">
-            Análisis técnico OHLCV y cotizaciones en tiempo real del catálogo BYMA
+    <div className="flex flex-col gap-3 lg:h-[calc(100dvh-6.5rem)] lg:min-h-[560px]">
+      {/* Compact toolbar: title, selector, asset info, modes, range, chart type */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <h1 className="text-lg font-bold tracking-tight text-zinc-100">Activos</h1>
+        <AssetSelector
+          instruments={sortedInstruments}
+          selectedId={selectedId}
+          onSelect={handleSelectInstrument}
+          disabled={isPending}
+        />
+
+        <div className="min-w-0 leading-tight">
+          <p className="truncate text-sm font-semibold text-zinc-100">
+            {selectedInstrument?.ticker}
+            <span className="ml-2 font-normal text-zinc-400">{selectedInstrument?.name}</span>
+          </p>
+          <p className="truncate text-[11px] text-zinc-500">
+            {selectedInstrument?.type === "CEDEAR" ? (
+              <>
+                CEDEAR BYMA • Subyacente:{" "}
+                <span className="font-mono text-zinc-300">
+                  {selectedInstrument.underlyingTicker || "—"}
+                </span>
+              </>
+            ) : (
+              "Acción Local BYMA"
+            )}
           </p>
         </div>
 
-        {/* Global Controls: Asset Selector */}
-        <div className="flex items-center gap-3">
-          <AssetSelector
-            instruments={instruments}
-            selectedId={selectedId}
-            onSelect={handleSelectInstrument}
-            disabled={isPending}
-          />
+        {isCedear && (
+          <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => handleToggleCedearMode("cedear-underlying")}
+              disabled={isPending}
+              className={segmentButton(kind === "cedear-underlying")}
+            >
+              USD subyacente
+            </button>
+            <button
+              type="button"
+              onClick={() => handleToggleCedearMode("native")}
+              disabled={isPending}
+              className={segmentButton(kind === "native")}
+            >
+              ARS CEDEAR
+            </button>
+          </div>
+        )}
+
+        {historyLoading && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900/80 px-2.5 py-1 text-xs text-zinc-400">
+            <Loader2 className="h-3 w-3 animate-spin text-teal-400" />
+            Actualizando histórico…
+          </span>
+        )}
+        {!historyLoading && unavailable && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900/80 px-2.5 py-1 text-xs text-zinc-500">
+            <AlertCircle className="h-3 w-3" />
+            Sin histórico disponible
+          </span>
+        )}
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div
+            className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs"
+            title="Atajos: 1, 3, 6, Y, A"
+          >
+            {RANGES.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRange(r)}
+                className={`rounded-md px-2 py-1 font-medium transition-colors ${
+                  range === r
+                    ? "bg-teal-950 text-teal-300 border border-teal-800/60 shadow-sm"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs">
+            <button
+              type="button"
+              title="Gráfico de Línea"
+              onClick={() => setChartType("line")}
+              className={`rounded-md p-1.5 transition-colors ${
+                chartType === "line" ? "bg-zinc-800 text-teal-400" : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              <LineChart className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              title="Gráfico de Velas Japonesas"
+              onClick={() => setChartType("candles")}
+              className={`rounded-md p-1.5 transition-colors ${
+                chartType === "candles" ? "bg-zinc-800 text-teal-400" : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              <CandlestickChart className="h-4 w-4" />
+            </button>
+          </div>
+
+          {showTradesList && (
+            <button
+              type="button"
+              onClick={() => setTradesCollapsed(!tradesCollapsed)}
+              aria-pressed={!tradesCollapsed}
+              title={tradesCollapsed ? "Mostrar tus operaciones" : "Ocultar tus operaciones"}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/90 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:text-zinc-100"
+            >
+              {tradesCollapsed ? (
+                <PanelRightOpen className="h-4 w-4" />
+              ) : (
+                <PanelRightClose className="h-4 w-4" />
+              )}
+              Operaciones
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Main Analysis Card */}
-      <Card className="border-zinc-800 bg-zinc-950/70 shadow-sm backdrop-blur">
-        <CardHeader className="border-b border-zinc-800/80 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            {/* Asset Title & Modes */}
-            <div className="flex flex-wrap items-center gap-3">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-lg font-bold text-zinc-100">
-                  {selectedInstrument?.ticker}
-                  <span className="text-sm font-normal text-zinc-400">
-                    — {selectedInstrument?.name}
-                  </span>
-                </CardTitle>
-                <CardDescription className="text-xs text-zinc-500">
-                  {selectedInstrument?.type === "CEDEAR" ? (
-                    <>
-                      CEDEAR BYMA • Subyacente:{" "}
-                      <span className="font-mono text-zinc-300">
-                        {selectedInstrument.underlyingTicker || "—"}
-                      </span>
-                    </>
-                  ) : (
-                    "Acción Local BYMA"
-                  )}
-                </CardDescription>
-              </div>
-
-              {/* CEDEAR Currency Switcher */}
-              {isCedear && (
-                <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => handleToggleCedearMode("cedear-underlying")}
-                    disabled={isPending}
-                    className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
-                      kind === "cedear-underlying"
-                        ? "bg-zinc-800 text-zinc-50 shadow-sm"
-                        : "text-zinc-400 hover:text-zinc-200"
-                    }`}
-                  >
-                    USD subyacente
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleToggleCedearMode("native")}
-                    disabled={isPending}
-                    className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
-                      kind === "native"
-                        ? "bg-zinc-800 text-zinc-50 shadow-sm"
-                        : "text-zinc-400 hover:text-zinc-200"
-                    }`}
-                  >
-                    ARS CEDEAR
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Range, Chart Type & History Action Controls */}
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Range Buttons */}
-              <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs">
-                {(["1M", "3M", "6M", "1Y", "ALL"] as MonitoringRange[]).map((r) => (
-                  <button
-                    key={r}
-                    type="button"
-                    onClick={() => handleRangeChange(r)}
-                    disabled={isPending}
-                    className={`rounded-md px-2 py-1 font-medium transition-colors ${
-                      range === r
-                        ? "bg-teal-950 text-teal-300 border border-teal-800/60 shadow-sm"
-                        : "text-zinc-400 hover:text-zinc-200"
-                    }`}
-                  >
-                    {r}
-                  </button>
-                ))}
-              </div>
-
-              {/* Chart Type Toggle */}
-              <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs">
-                <button
-                  type="button"
-                  title="Gráfico de Línea"
-                  onClick={() => handleChartTypeChange("line")}
-                  className={`rounded-md p-1.5 transition-colors ${
-                    chartType === "line"
-                      ? "bg-zinc-800 text-teal-400"
-                      : "text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  <LineChart className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  title="Gráfico de Velas Japonesas"
-                  onClick={() => handleChartTypeChange("candles")}
-                  className={`rounded-md p-1.5 transition-colors ${
-                    chartType === "candles"
-                      ? "bg-zinc-800 text-teal-400"
-                      : "text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  <CandlestickChart className="h-4 w-4" />
-                </button>
-              </div>
-
-              {/* Cargar Histórico Button */}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleLoadHistory}
-                disabled={
-                  isLoadingHistory ||
-                  isPending ||
-                  historyStatus === "loaded" ||
-                  historyStatus === "unavailable"
-                }
-                className="h-8 border-zinc-700 bg-zinc-900 text-xs text-zinc-100 hover:bg-zinc-800"
-              >
-                {isLoadingHistory ? (
-                  <>
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin text-teal-400" />
-                    Cargando...
-                  </>
-                ) : historyStatus === "loaded" ? (
-                  <>
-                    <CheckCircle2 className="mr-1.5 h-3.5 w-3.5 text-emerald-400" />
-                    Histórico disponible
-                  </>
-                ) : historyStatus === "unavailable" ? (
-                  <>
-                    <AlertCircle className="mr-1.5 h-3.5 w-3.5 text-zinc-500" />
-                    Sin cobertura
-                  </>
-                ) : (
-                  <>
-                    <CloudDownload className="mr-1.5 h-3.5 w-3.5 text-teal-400" />
-                    Cargar histórico
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-
-        <CardContent className="p-4">
-          {/* Status Notices */}
-          {historyStatus === "live-fallback" && (
-            <div className="mb-4 flex items-center gap-2.5 rounded-lg border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
-              <Info className="h-4 w-4 shrink-0 text-amber-400" />
-              <span>
-                Mostrando cotización instantánea live de Data912. Hacé clic en{" "}
-                <strong>Cargar histórico</strong> para consultar y visualizar la serie histórica completa.
-              </span>
-            </div>
+      {/* Stats strip */}
+      {activeSeries && (
+        <div className="flex flex-wrap gap-2">
+          <AssetHeaderStats stats={headerStats} currency={currency} range={range} />
+          {position && (
+            <PositionPanel
+              summary={position}
+              tradesCount={tradeData?.trades.length ?? 0}
+              currency={currency}
+            />
           )}
+        </div>
+      )}
 
-          {series?.dataQuality.warning && (
-            <div className="mb-4 flex items-center gap-2.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-400">
-              <Info className="h-4 w-4 shrink-0 text-zinc-400" />
-              <span>{series.dataQuality.warning}</span>
-            </div>
-          )}
+      {activeSeries?.dataQuality.warning && (
+        <div className="flex items-center gap-2.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 text-xs text-zinc-400">
+          <Info className="h-4 w-4 shrink-0 text-zinc-400" />
+          <span>{activeSeries.dataQuality.warning}</span>
+        </div>
+      )}
 
-          {/* Chart View */}
+      {/* Chart (fills the remaining viewport height on desktop) + trades list */}
+      <div
+        className={
+          tradesVisible
+            ? "grid min-h-0 gap-3 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-[minmax(0,1fr)]"
+            : "grid min-h-0 gap-3 lg:flex-1 lg:grid-rows-[minmax(0,1fr)]"
+        }
+      >
+        <div className="h-[520px] min-h-0 min-w-0 lg:h-auto">
           {isPending ? (
-            <div className="flex h-[420px] w-full items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950/40">
+            <div className="flex h-full min-h-[320px] w-full items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950/40">
               <div className="flex flex-col items-center gap-2 text-zinc-400">
                 <Loader2 className="h-6 w-6 animate-spin text-teal-500" />
-                <span className="text-xs">Actualizando serie de mercado...</span>
+                <span className="text-xs">Cargando serie de mercado...</span>
               </div>
+            </div>
+          ) : displayedBars.length === 0 ? (
+            <div className="flex h-full min-h-[320px] w-full flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40 p-6 text-center">
+              {historyLoading ? (
+                <>
+                  <Loader2 className="mb-2 h-6 w-6 animate-spin text-teal-500" />
+                  <p className="text-sm font-medium text-zinc-300">Buscando el histórico…</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium text-zinc-300">
+                    Sin precios disponibles para {selectedInstrument?.ticker}
+                  </p>
+                  <p className="max-w-sm text-xs text-zinc-500">
+                    No encontramos cotizaciones para este activo
+                    {isCedear && kind === "cedear-underlying" ? " en su versión subyacente" : ""}.
+                    {isCedear ? " Probá con la otra vista o " : " Probá "}
+                    con otro activo.
+                  </p>
+                </>
+              )}
             </div>
           ) : (
             <KLineChart
-              bars={series?.bars ?? []}
+              bars={displayedBars}
               chartType={chartType}
               currency={currency}
               ticker={selectedInstrument?.ticker ?? "—"}
-              height={440}
-              markers={tradeMarkers}
+              drawingsKey={drawingsStorageKey(selectedInstrument?.ticker ?? "", kind)}
+              markers={chartMarkers}
+              avgCost={position?.avgCost ?? null}
+              activeMarkerId={activeMarkerId}
+              onMarkerHover={setActiveMarkerId}
+              focusRequest={focusRequest}
+              scaleLabel={scaleLabel}
             />
           )}
+        </div>
 
-          {/* Metadata Footer */}
-          {series && (
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800/60 pt-3 text-xs text-zinc-500">
-              <div className="flex flex-wrap items-center gap-4">
-                <div>
-                  <span>Proveedor: </span>
-                  <strong className="text-zinc-300 uppercase">{series.provider}</strong>
-                </div>
-                <div>
-                  <span>Source: </span>
-                  <strong className="text-zinc-300 font-mono">{series.source}</strong>
-                </div>
-                <div>
-                  <span>Ajuste: </span>
-                  <strong className="text-zinc-300">{series.adjustmentPolicy}</strong>
-                </div>
-              </div>
+        {tradesVisible && (
+          <div className="h-[320px] min-h-0 lg:h-auto">
+            <TradesList
+              entries={tradeEntries}
+              chartCurrency={currency}
+              scaleLabel={scaleLabel}
+              activeId={activeMarkerId}
+              onHover={setActiveMarkerId}
+              onSelect={handleSelectTrade}
+            />
+          </div>
+        )}
+      </div>
 
-              <div className="flex items-center gap-4">
-                <div>
-                  <span>Rango cubierto: </span>
-                  <strong className="text-zinc-300">
-                    {formatTradingDate(series.firstDate)} — {formatTradingDate(series.lastDate)}
-                  </strong>
-                </div>
-                <div>
-                  <span>Ruedas: </span>
-                  <strong className="text-zinc-300 font-mono">{series.bars.length}</strong>
-                </div>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* Compact metadata */}
+      {activeSeries && (
+        <p className="truncate text-[11px] leading-relaxed text-zinc-500">
+          Fuente: <span className="uppercase">{activeSeries.provider}</span> ·{" "}
+          <span className="font-mono">{activeSeries.source}</span> · Ajuste:{" "}
+          {activeSeries.adjustmentPolicy} · {formatTradingDate(activeSeries.firstDate)} —{" "}
+          {formatTradingDate(activeSeries.lastDate)} · {activeSeries.bars.length} ruedas
+        </p>
+      )}
     </div>
   );
 }
