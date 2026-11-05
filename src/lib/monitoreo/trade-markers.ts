@@ -1,4 +1,9 @@
-import { projectTradePrice, type ProjectionMethod, type TradeProjectionContext } from "./trade-projection";
+import {
+  prepareProjection,
+  projectPreparedTradePrice,
+  type ProjectionMethod,
+  type TradeProjectionContext,
+} from "./trade-projection";
 import type { MonitoringBar } from "./types";
 
 export type TradeSide = "BUY" | "SELL";
@@ -109,9 +114,10 @@ export function projectTrades(
   trades: TradeMarkerInput[],
   ctx: TradeProjectionContext
 ): ProjectedTrade[] {
+  const prepared = prepareProjection(ctx);
   return trades
     .map((trade) => {
-      const { chartPrice, method } = projectTradePrice(trade, ctx);
+      const { chartPrice, method } = projectPreparedTradePrice(trade, prepared);
       return {
         id: trade.id,
         tradeDate: trade.tradeDate,

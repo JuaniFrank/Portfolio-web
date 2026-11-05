@@ -1,3 +1,4 @@
+import { TimeSeries } from "@/lib/rendimientos/price-series";
 import type { MonitoringBar, MonitoringCurrency, UiMonitoringSeriesKind } from "./types";
 
 export type ProjectionMethod = "direct" | "ccl" | "underlying-factor";
@@ -46,35 +47,48 @@ export const PROJECTION_LOOKBACK_DAYS = 5;
 const MISSING: TradeProjection = { chartPrice: null, method: null };
 const DAY_MS = 24 * 3600 * 1000;
 
-function daysBetween(earlier: string, later: string): number {
-  return (Date.parse(`${later}T00:00:00Z`) - Date.parse(`${earlier}T00:00:00Z`)) / DAY_MS;
+function utcDay(day: string): Date {
+  return new Date(`${day}T00:00:00Z`);
 }
 
 /**
- * Latest entry with date <= `date` and within the lookback window. Assumes `items` is sorted
- * ascending by date (binary search).
+ * A projection context with its lookup series built once, so projecting many trades doesn't
+ * rebuild them per trade. Build it with `prepareProjection`.
  */
-function asOf<T>(
-  items: T[],
-  getDate: (item: T) => string,
-  date: string,
-  lookbackDays = PROJECTION_LOOKBACK_DAYS
-): T | null {
-  let lo = 0;
-  let hi = items.length - 1;
-  let found = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (getDate(items[mid]!) <= date) {
-      found = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  if (found < 0) return null;
-  const item = items[found]!;
-  return daysBetween(getDate(item), date) <= lookbackDays ? item : null;
+export type PreparedProjection = {
+  kind: UiMonitoringSeriesKind;
+  currency: MonitoringCurrency;
+  seriesAdjusted: boolean;
+  corporateEventDates: string[];
+  bars: TimeSeries;
+  nativeArsCloses: TimeSeries;
+  ccl: TimeSeries;
+};
+
+export function prepareProjection(ctx: TradeProjectionContext): PreparedProjection {
+  return {
+    kind: ctx.kind,
+    currency: ctx.currency,
+    seriesAdjusted: ctx.seriesAdjusted ?? false,
+    corporateEventDates: ctx.corporateEventDates ?? [],
+    bars: new TimeSeries(ctx.bars.map((b) => ({ date: utcDay(b.time), value: b.close }))),
+    nativeArsCloses: new TimeSeries(
+      ctx.nativeArsCloses.map((c) => ({ date: utcDay(c.date), value: c.close }))
+    ),
+    ccl: new TimeSeries(ctx.cclByDate.map((r) => ({ date: utcDay(r.date), value: r.rate }))),
+  };
+}
+
+/**
+ * Value of the latest point on or before `day`, only if it is at most
+ * `PROJECTION_LOOKBACK_DAYS` old: a stale bar or rate would place the trade at the wrong height.
+ */
+function valueAsOf(series: TimeSeries, day: string): number | null {
+  const target = utcDay(day);
+  const hit = series.asOf(target);
+  if (!hit) return null;
+  const ageDays = (target.getTime() - hit.date.getTime()) / DAY_MS;
+  return ageDays <= PROJECTION_LOOKBACK_DAYS ? hit.value : null;
 }
 
 function isPositive(n: number | undefined | null): n is number {
@@ -84,21 +98,29 @@ function isPositive(n: number | undefined | null): n is number {
 /**
  * Project a trade's price into the scale of the displayed series so it can be drawn at the
  * right height on the chart. Anything that can't be projected reliably yields `chartPrice: null`.
+ * For many trades, prepare the context once and use `projectPreparedTradePrice`.
  */
 export function projectTradePrice(
   trade: TradeProjectionInput,
   ctx: TradeProjectionContext
 ): TradeProjection {
+  return projectPreparedTradePrice(trade, prepareProjection(ctx));
+}
+
+export function projectPreparedTradePrice(
+  trade: TradeProjectionInput,
+  ctx: PreparedProjection
+): TradeProjection {
   if (!isPositive(trade.price)) return MISSING;
 
   if (ctx.kind === "native") {
-    if (ctx.seriesAdjusted && (ctx.corporateEventDates ?? []).some((d) => d > trade.tradeDate)) {
+    if (ctx.seriesAdjusted && ctx.corporateEventDates.some((d) => d > trade.tradeDate)) {
       return MISSING;
     }
     if (trade.currencyCode === ctx.currency) {
       return { chartPrice: trade.price, method: "direct" };
     }
-    const rate = asOf(ctx.cclByDate, (r) => r.date, trade.tradeDate)?.rate;
+    const rate = valueAsOf(ctx.ccl, trade.tradeDate);
     if (!isPositive(rate)) return MISSING;
     if (ctx.currency === "ARS" && trade.currencyCode === "USD") {
       return { chartPrice: trade.price * rate, method: "ccl" };
@@ -114,15 +136,15 @@ export function projectTradePrice(
     if (trade.currencyCode === "ARS") {
       priceArs = trade.price;
     } else if (trade.currencyCode === "USD") {
-      const rate = asOf(ctx.cclByDate, (r) => r.date, trade.tradeDate)?.rate;
+      const rate = valueAsOf(ctx.ccl, trade.tradeDate);
       if (!isPositive(rate)) return MISSING;
       priceArs = trade.price * rate;
     } else {
       return MISSING;
     }
 
-    const underlying = asOf(ctx.bars, (b) => b.time, trade.tradeDate)?.close;
-    const cedear = asOf(ctx.nativeArsCloses, (c) => c.date, trade.tradeDate)?.close;
+    const underlying = valueAsOf(ctx.bars, trade.tradeDate);
+    const cedear = valueAsOf(ctx.nativeArsCloses, trade.tradeDate);
     if (!isPositive(underlying) || !isPositive(cedear)) return MISSING;
     return { chartPrice: priceArs * (underlying / cedear), method: "underlying-factor" };
   }
