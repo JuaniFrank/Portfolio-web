@@ -1,18 +1,17 @@
 import { redirect } from "next/navigation";
-import { loadMonitoringBootstrap } from "@/lib/monitoreo/load-bootstrap";
-import { MonitoreoPage } from "@/components/monitoreo/monitoreo-page";
 
-export const metadata = {
-  title: "Monitoreo | Portafolio",
-  description: "Monitoreo y análisis técnico de precios de mercado",
-};
-
-export default async function MonitoreoRoutePage() {
-  const data = await loadMonitoringBootstrap();
-
-  if ("error" in data) {
-    redirect("/login");
+/** Legacy route: `/monitoreo` now lives at `/activos`; the query string is preserved. */
+export default async function MonitoreoRedirectPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  const params = await searchParams;
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (Array.isArray(value)) value.forEach((v) => query.append(key, v));
+    else if (value !== undefined) query.set(key, value);
   }
-
-  return <MonitoreoPage initialData={data} />;
+  const qs = query.toString();
+  redirect(qs ? `/activos?${qs}` : "/activos");
 }
