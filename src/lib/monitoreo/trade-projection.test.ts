@@ -146,3 +146,44 @@ describe("monitoreo/trade-projection", () => {
     });
   });
 });
+
+describe("monitoreo/trade-projection with adjustment events", () => {
+  const events = [{ effectiveDate: "2026-04-01", ratio: 3 }];
+  const ctx: TradeProjectionContext = {
+    kind: "native",
+    currency: "ARS",
+    bars: [],
+    nativeArsCloses: [],
+    cclByDate: [{ date: "2026-03-09", rate: 1000 }],
+    adjustmentEvents: events,
+    // would block the trade under the legacy gating
+    seriesAdjusted: true,
+    corporateEventDates: ["2026-04-01"],
+  };
+  const trade = { tradeDate: "2026-03-09", price: 900, currencyCode: "ARS" };
+
+  it("divides the trade price by the ratio of later events instead of blocking", () => {
+    expect(projectTradePrice(trade, ctx)).toEqual({ chartPrice: 300, method: "direct" });
+  });
+
+  it("leaves trades on or after the event untouched", () => {
+    expect(projectTradePrice({ ...trade, tradeDate: "2026-04-01" }, ctx)).toEqual({
+      chartPrice: 900,
+      method: "direct",
+    });
+  });
+
+  it("adjusts before converting currency", () => {
+    expect(projectTradePrice({ ...trade, price: 9, currencyCode: "USD" }, ctx)).toEqual({
+      chartPrice: 3000,
+      method: "ccl",
+    });
+  });
+
+  it("without adjustment events the legacy gating still applies", () => {
+    expect(projectTradePrice(trade, { ...ctx, adjustmentEvents: undefined })).toEqual({
+      chartPrice: null,
+      method: null,
+    });
+  });
+});

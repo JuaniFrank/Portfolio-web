@@ -1,5 +1,6 @@
+import { adjustmentFactorAfter } from "./split-adjustment";
 import { TimeSeries } from "@/lib/rendimientos/price-series";
-import type { MonitoringBar, MonitoringCurrency, UiMonitoringSeriesKind } from "./types";
+import type { AdjustmentEvent, MonitoringBar, MonitoringCurrency, UiMonitoringSeriesKind } from "./types";
 
 export type ProjectionMethod = "direct" | "ccl" | "underlying-factor";
 
@@ -27,6 +28,13 @@ export type TradeProjectionContext = {
   seriesAdjusted?: boolean;
   /** Corporate event effective dates (YYYY-MM-DD) of the instrument */
   corporateEventDates?: string[];
+  /**
+   * When defined, the displayed native series is on the post-event scale (adjusted by us or by
+   * the provider): trade prices are divided by the ratio of the events after the trade
+   * (same rule as `applyEventsToTrade`) and `seriesAdjusted`/`corporateEventDates` gating is
+   * not applied. Undefined keeps the legacy behavior for raw series.
+   */
+  adjustmentEvents?: AdjustmentEvent[];
 };
 
 /** Whether a series' bars are rewritten retroactively for corporate events. */
@@ -60,6 +68,7 @@ export type PreparedProjection = {
   currency: MonitoringCurrency;
   seriesAdjusted: boolean;
   corporateEventDates: string[];
+  adjustmentEvents: AdjustmentEvent[] | undefined;
   bars: TimeSeries;
   nativeArsCloses: TimeSeries;
   ccl: TimeSeries;
@@ -71,6 +80,7 @@ export function prepareProjection(ctx: TradeProjectionContext): PreparedProjecti
     currency: ctx.currency,
     seriesAdjusted: ctx.seriesAdjusted ?? false,
     corporateEventDates: ctx.corporateEventDates ?? [],
+    adjustmentEvents: ctx.adjustmentEvents,
     bars: new TimeSeries(ctx.bars.map((b) => ({ date: utcDay(b.time), value: b.close }))),
     nativeArsCloses: new TimeSeries(
       ctx.nativeArsCloses.map((c) => ({ date: utcDay(c.date), value: c.close }))
@@ -114,19 +124,22 @@ export function projectPreparedTradePrice(
   if (!isPositive(trade.price)) return MISSING;
 
   if (ctx.kind === "native") {
-    if (ctx.seriesAdjusted && ctx.corporateEventDates.some((d) => d > trade.tradeDate)) {
+    let price = trade.price;
+    if (ctx.adjustmentEvents) {
+      price = trade.price / adjustmentFactorAfter(trade.tradeDate, ctx.adjustmentEvents);
+    } else if (ctx.seriesAdjusted && ctx.corporateEventDates.some((d) => d > trade.tradeDate)) {
       return MISSING;
     }
     if (trade.currencyCode === ctx.currency) {
-      return { chartPrice: trade.price, method: "direct" };
+      return { chartPrice: price, method: "direct" };
     }
     const rate = valueAsOf(ctx.ccl, trade.tradeDate);
     if (!isPositive(rate)) return MISSING;
     if (ctx.currency === "ARS" && trade.currencyCode === "USD") {
-      return { chartPrice: trade.price * rate, method: "ccl" };
+      return { chartPrice: price * rate, method: "ccl" };
     }
     if (ctx.currency === "USD" && trade.currencyCode === "ARS") {
-      return { chartPrice: trade.price / rate, method: "ccl" };
+      return { chartPrice: price / rate, method: "ccl" };
     }
     return MISSING;
   }
