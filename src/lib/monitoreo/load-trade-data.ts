@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { DATA912_EOD_SOURCE, YAHOO_EOD_SOURCE } from "@/lib/market/provider-routing";
 import { selectPointsInWindows, tradeQueryBounds } from "@/lib/monitoreo/ccl-windows";
+import { toAdjustmentEvents } from "@/lib/monitoreo/split-adjustment";
 import { EMPTY_TRADE_MARKER_DATA, type TradeMarkerData } from "@/lib/monitoreo/trade-marker-data";
 import type { TradeMarkerInput } from "@/lib/monitoreo/trade-markers";
 
@@ -49,7 +50,7 @@ export async function loadInstrumentTradeData(
         instrumentId,
         instrument: { transactions: { some: { portfolio: { userId } } } },
       },
-      select: { effectiveDate: true },
+      select: { effectiveDate: true, eventType: true, numerator: true, denominator: true },
     }),
   ]);
 
@@ -65,11 +66,20 @@ export async function loadInstrumentTradeData(
   }));
 
   const corporateEventDates = eventRows.map((e) => isoDay(e.effectiveDate));
+  const corporateEvents = toAdjustmentEvents(
+    eventRows.map((e) => ({
+      instrumentId,
+      eventType: e.eventType,
+      effectiveDate: isoDay(e.effectiveDate),
+      numerator: e.numerator.toString(),
+      denominator: e.denominator.toString(),
+    }))
+  ).sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate));
 
   const tradeDates = [...new Set(trades.map((t) => t.tradeDate))];
   const bounds = tradeQueryBounds(tradeDates, PROJECTION_WINDOW_DAYS);
   if (!bounds) {
-    return { trades, corporateEventDates, nativeArsCloses: [], cclByDate: [] };
+    return { trades, corporateEventDates, corporateEvents, nativeArsCloses: [], cclByDate: [] };
   }
   const from = startOfDayUtc(bounds.from);
   const to = startOfDayUtc(bounds.to);
@@ -122,5 +132,5 @@ export async function loadInstrumentTradeData(
     PROJECTION_WINDOW_DAYS
   );
 
-  return { trades, corporateEventDates, nativeArsCloses, cclByDate };
+  return { trades, corporateEventDates, corporateEvents, nativeArsCloses, cclByDate };
 }

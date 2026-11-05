@@ -1,4 +1,5 @@
 import type { TradeMarkerInput } from "@/lib/monitoreo/trade-markers";
+import type { AdjustmentEvent } from "@/lib/monitoreo/types";
 
 /**
  * Trades (BUY/SELL only) and corporate event dates for one instrument, scoped to the
@@ -9,6 +10,8 @@ import type { TradeMarkerInput } from "@/lib/monitoreo/trade-markers";
 export type TradeMarkerData = {
   trades: TradeMarkerInput[];
   corporateEventDates: string[];
+  /** The same events with their price ratio (ticker changes and degenerate ratios excluded) */
+  corporateEvents: AdjustmentEvent[];
   /** The instrument's own ARS EOD closes around the trade dates (sorted, deduped) */
   nativeArsCloses: { date: string; close: number }[];
   /** CCL rates around the trade dates (sorted, deduped) */
@@ -19,6 +22,7 @@ export type TradeMarkerData = {
 export const EMPTY_TRADE_MARKER_DATA: TradeMarkerData = {
   trades: [],
   corporateEventDates: [],
+  corporateEvents: [],
   nativeArsCloses: [],
   cclByDate: [],
 };
