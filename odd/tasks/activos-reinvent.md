@@ -113,3 +113,8 @@ Turn `/monitoreo` into an asset page ("Activos") where picking a ticker immediat
 - R8 `palette-toggle.tsx`: unknown stored palette reads "Paleta: personalizada (cambiar a <first>)".
 - Dedup: `EMPTY_TRADE_MARKER_DATA` exported constant, used by the loader and the page.
 - Checks: `pnpm test` 88 files / 966 tests passed; `npx tsc --noEmit` clean; `npm run lint` 0 errors / 11 warnings; unauthenticated curl on the 3 handlers -> 401 each (JSON).
+
+### Follow-up optimizations (2026-11-05)
+- Position summary now reuses `tradeEntries` projections instead of calling `projectTrades` again (`monitoreo-page.tsx`).
+- `trade-projection.ts`: local binary-search `asOf` replaced by `TimeSeries.asOf` (`src/lib/rendimientos/price-series.ts`) with the 5-day lookback checked on the hit date; new `prepareProjection` builds the lookup series once per `projectTrades` call (`projectPreparedTradePrice`). Behavior-preserving refactor under the existing tests.
+- Checks: `pnpm test` 966/966, `tsc` clean, lint 0 errors / 11 warnings.
