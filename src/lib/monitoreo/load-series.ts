@@ -7,6 +7,8 @@ import {
   YAHOO_UNDERLYING_EOD_SOURCE,
 } from "@/lib/market/provider-routing";
 import { loadCachedMonitoringBars, loadExternalLatestQuote } from "@/lib/monitoreo/data";
+import { adjustSeriesForRead } from "@/lib/monitoreo/load-adjustment";
+import { underlyingSplitSymbol } from "@/lib/monitoreo/split-adjustment";
 import { buildMonitoringSeries, filterBarsByRange } from "@/lib/monitoreo/series";
 import type {
   MonitoringChartType,
@@ -23,6 +25,8 @@ export type MonitoringSeriesInput = {
   range: MonitoringRange;
   chartType: MonitoringChartType;
   kind: UiMonitoringSeriesKind;
+  /** Split-adjusted (default) or as stored; ignored when the server switch is off */
+  adjusted?: boolean;
 };
 
 export async function fetchMonitoringSeries(
@@ -79,7 +83,20 @@ export async function fetchMonitoringSeries(
     }
   }
 
-  const filteredBars = filterBarsByRange(bars, input.range);
+  // Adjust a copy at read time (the cache keeps what the provider sent). The single live quote
+  // of the fallback is today's bar: nothing to adjust.
+  const adjustment =
+    historyStatus === "live-fallback"
+      ? null
+      : await adjustSeriesForRead({
+          instrumentId: instrument.id,
+          externalSymbol: underlyingSplitSymbol(instrument),
+          source: effectiveSource,
+          bars,
+          adjusted: input.adjusted ?? true,
+        });
+
+  const filteredBars = filterBarsByRange(adjustment?.bars ?? bars, input.range);
 
   return buildMonitoringSeries({
     instrumentId: instrument.id,
@@ -91,6 +108,9 @@ export async function fetchMonitoringSeries(
     provider: effectiveProvider,
     source: effectiveSource,
     historyStatus,
+    adjustmentPolicy: adjustment?.policy,
+    adjustmentEvents: adjustment?.events,
+    warning: adjustment?.warning,
     bars: filteredBars,
   });
 }

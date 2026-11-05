@@ -5,6 +5,8 @@ import {
   persistMissingRecentBars,
 } from "@/lib/monitoreo/data";
 import type { ParsedSeriesInput } from "@/lib/monitoreo/api-schemas";
+import { adjustSeriesForRead } from "@/lib/monitoreo/load-adjustment";
+import { underlyingSplitSymbol } from "@/lib/monitoreo/split-adjustment";
 import {
   buildMonitoringSeries,
   filterBarsByRange,
@@ -43,6 +45,15 @@ export async function loadMonitoringHistory(
     }
   }
 
+  // Persisted raw above; the page gets an adjusted copy (see `split-adjustment.ts`).
+  const adjustment = await adjustSeriesForRead({
+    instrumentId: instrument.id,
+    externalSymbol: underlyingSplitSymbol(instrument),
+    source: external.source,
+    bars: allBars,
+    adjusted: input.adjusted,
+  });
+
   const historyStatus: MonitoringHistoryStatus = allBars.length > 0 ? "loaded" : "unavailable";
 
   return buildMonitoringSeries({
@@ -55,6 +66,9 @@ export async function loadMonitoringHistory(
     provider: external.provider,
     source: external.source,
     historyStatus,
-    bars: filterBarsByRange(allBars, input.range),
+    adjustmentPolicy: adjustment.policy,
+    adjustmentEvents: adjustment.events,
+    warning: adjustment.warning,
+    bars: filterBarsByRange(adjustment.bars, input.range),
   });
 }
