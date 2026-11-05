@@ -6,6 +6,7 @@ import {
   MessageSquareText,
   Minus,
   MousePointer2,
+  Ruler,
   MoveUpRight,
   Rows3,
   Slash,
@@ -37,6 +38,8 @@ const MAGNET_LABEL: Record<MagnetMode, string> = {
 
 interface DrawingToolbarProps {
   activeTool: DrawingToolName | null;
+  measureActive: boolean;
+  onToggleMeasure: () => void;
   magnet: MagnetMode;
   hasSelection: boolean;
   onSelectTool: (tool: DrawingToolName | null) => void;
@@ -82,6 +85,8 @@ function ToolButton({
 /** Compact vertical toolbar for klinecharts overlays, placed on the chart's left edge. */
 export function DrawingToolbar({
   activeTool,
+  measureActive,
+  onToggleMeasure,
   magnet,
   hasSelection,
   onSelectTool,
@@ -96,7 +101,7 @@ export function DrawingToolbar({
       aria-label="Herramientas de dibujo"
       aria-orientation="vertical"
     >
-      <ToolButton label="Cursor" active={activeTool === null} onClick={() => onSelectTool(null)}>
+      <ToolButton label="Cursor" active={activeTool === null && !measureActive} onClick={() => onSelectTool(null)}>
         <MousePointer2 className="h-4 w-4" />
       </ToolButton>
       <div className="my-1 h-px w-5 bg-zinc-800" />
@@ -105,6 +110,9 @@ export function DrawingToolbar({
           <Icon className="h-4 w-4" />
         </ToolButton>
       ))}
+      <ToolButton label="Medir (o Shift + clic en el gráfico)" active={measureActive} onClick={onToggleMeasure}>
+        <Ruler className="h-4 w-4" />
+      </ToolButton>
       <div className="my-1 h-px w-5 bg-zinc-800" />
       <ToolButton label={MAGNET_LABEL[magnet]} active={magnet !== "normal"} onClick={onCycleMagnet}>
         <span className="relative">
