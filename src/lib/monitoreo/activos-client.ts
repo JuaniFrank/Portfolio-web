@@ -39,9 +39,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<ApiResult<T>
 }
 
 export function fetchSeries(input: SeriesInput): Promise<ApiResult<MonitoringSeries>> {
-  const params = new URLSearchParams(
-    Object.entries(input).filter((e): e is [string, string] => typeof e[1] === "string")
-  );
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value === "string") params.set(key, value);
+    else if (typeof value === "boolean") params.set(key, value ? "1" : "0");
+  }
   return request(`/api/activos/series?${params.toString()}`);
 }
 

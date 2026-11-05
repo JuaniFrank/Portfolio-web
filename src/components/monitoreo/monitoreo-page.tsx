@@ -27,6 +27,7 @@ import { useStoredBoolean } from "@/lib/ui/use-stored-boolean";
 import { shouldLoadHistory } from "@/lib/monitoreo/history-policy";
 import { filterBarsByRangeFromLast } from "@/lib/monitoreo/series";
 import { isSeriesAdjusted } from "@/lib/monitoreo/trade-projection";
+import { adjustmentPolicyLabel, resolveTradeAdjustment } from "@/lib/monitoreo/split-adjustment";
 import {
   buildPositionSummary,
   buildTradeEntries,
@@ -64,7 +65,8 @@ function currencyForKind(kind: UiMonitoringSeriesKind): MonitoringCurrency {
   return kind === "cedear-underlying" ? "USD" : "ARS";
 }
 
-const seriesKey = (instrumentId: string, kind: UiMonitoringSeriesKind) => `${instrumentId}:${kind}`;
+const seriesKey = (instrumentId: string, kind: UiMonitoringSeriesKind, adjusted: boolean) =>
+  `${instrumentId}:${kind}:${adjusted ? "adj" : "raw"}`;
 
 export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
   const {
@@ -72,6 +74,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
     selectedInstrumentId: initialSelectedId,
     selectedKind: initialKind,
     initialSeries,
+    splitAdjustmentEnabled,
   } = initialData;
   const pathname = usePathname();
 
@@ -93,6 +96,8 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
   const currency = currencyForKind(kind);
   const [range, setRange] = React.useState<MonitoringRange>("ALL");
   const [chartType, setChartType] = React.useState<MonitoringChartType>("candles");
+  // "Ajustado / Sin ajustar": sent to the server, which ignores it when its switch is off.
+  const [adjusted, setAdjusted] = React.useState(true);
   const [tradesCollapsed, setTradesCollapsed] = useStoredBoolean("activos:trades-collapsed", false);
 
   const [isPending, startTransition] = React.useTransition();
@@ -141,7 +146,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
   // otherwise, and the previous instrument's bars must not render against the new one).
   const activeSeries =
     series && series.instrumentId === selectedId && series.kind === kind ? series : null;
-  const historyKey = selectedId ? seriesKey(selectedId, kind) : "";
+  const historyKey = selectedId ? seriesKey(selectedId, kind, adjusted) : "";
   const needsHistory = activeSeries !== null && shouldLoadHistory(activeSeries, todayIso);
   const historyLoading = needsHistory && !failedHistoryKeys.has(historyKey);
 
@@ -162,6 +167,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
       range: "ALL",
       chartType: "candles",
       kind,
+      adjusted,
     }).then((res) => {
       if (cancelled) return; // the user switched instrument meanwhile
       settled = true;
@@ -178,16 +184,23 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
       // An aborted request may be retried when the user comes back to this instrument.
       if (!settled) requested.delete(historyKey);
     };
-  }, [needsHistory, historyKey, selectedId, kind]);
+  }, [needsHistory, historyKey, selectedId, kind, adjusted]);
 
   const displayedBars = React.useMemo(
     () => (activeSeries ? filterBarsByRangeFromLast(activeSeries.bars, range) : []),
     [activeSeries, range]
   );
 
+  // Adjusted series (ours or the provider's): trade prices follow the bars' scale and a later
+  // corporate event no longer blocks comparability. Raw series keep the legacy gating.
+  const tradeAdjustment = React.useMemo(
+    () => (activeSeries && tradeData ? resolveTradeAdjustment(activeSeries, tradeData) : null),
+    [activeSeries, tradeData]
+  );
+
   const projectionContext = React.useMemo(
     () =>
-      activeSeries && tradeData
+      activeSeries && tradeData && tradeAdjustment
         ? {
             kind: activeSeries.kind,
             currency: activeSeries.currency,
@@ -195,22 +208,23 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
             cclByDate: tradeData.cclByDate,
             seriesAdjusted: isSeriesAdjusted(activeSeries),
             corporateEventDates: tradeData.corporateEventDates,
+            adjustmentEvents: tradeAdjustment.adjustmentEvents,
           }
         : null,
-    [activeSeries, tradeData]
+    [activeSeries, tradeData, tradeAdjustment]
   );
 
   // Every trade against the FULL bars (feeds the list, including trades with no bar to anchor
   // to); the chart only gets the anchored ones inside the displayed range.
   const tradeEntries: TradeEntry[] = React.useMemo(() => {
-    if (!activeSeries || !tradeData || !projectionContext) return [];
+    if (!activeSeries || !tradeData || !projectionContext || !tradeAdjustment) return [];
     return buildTradeEntries(
       tradeData.trades,
       activeSeries.bars,
       projectionContext,
-      tradeData.corporateEventDates
+      tradeAdjustment.gatingEventDates
     );
-  }, [activeSeries, tradeData, projectionContext]);
+  }, [activeSeries, tradeData, projectionContext, tradeAdjustment]);
 
   const chartMarkers = React.useMemo(() => {
     const first = displayedBars[0];
@@ -222,7 +236,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
 
   // Reuses the projection already done for `tradeEntries` (same full bars and context).
   const position = React.useMemo(() => {
-    if (!activeSeries || !tradeData) return null;
+    if (!activeSeries || !tradeData || !tradeAdjustment) return null;
     if (tradeEntries.length === 0 || activeSeries.bars.length === 0) return null;
     const lastClose = activeSeries.bars[activeSeries.bars.length - 1]!.close;
     return buildPositionSummary(
@@ -233,9 +247,11 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
         tradeDate: e.trade.tradeDate,
       })),
       lastClose,
-      tradeData.corporateEventDates
+      tradeAdjustment.gatingEventDates,
+      // Trade prices are divided by later events only on native series: bring quantities along.
+      activeSeries.kind === "native" ? tradeAdjustment.adjustmentEvents : undefined
     );
-  }, [activeSeries, tradeData, tradeEntries]);
+  }, [activeSeries, tradeData, tradeAdjustment, tradeEntries]);
 
   const headerStats = React.useMemo(
     () => buildHeaderStats(activeSeries?.bars ?? [], displayedBars),
@@ -258,9 +274,13 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
 
   // Show the (already loaded or cached) series of an instrument+kind. Full histories fetched
   // earlier this session are reused as-is; otherwise the server returns the cached series.
-  const showSeries = (instrumentId: string, nextKind: UiMonitoringSeriesKind) => {
+  const showSeries = (
+    instrumentId: string,
+    nextKind: UiMonitoringSeriesKind,
+    nextAdjusted: boolean = adjusted
+  ) => {
     const requestId = ++seriesRequestRef.current;
-    const loaded = loadedSeriesRef.current.get(seriesKey(instrumentId, nextKind));
+    const loaded = loadedSeriesRef.current.get(seriesKey(instrumentId, nextKind, nextAdjusted));
     if (loaded) {
       setSeries(loaded);
       return;
@@ -273,6 +293,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
         range: "ALL",
         chartType: "candles",
         kind: nextKind,
+        adjusted: nextAdjusted,
       });
       if (requestId !== seriesRequestRef.current) return; // a newer selection superseded this one
 
@@ -300,6 +321,15 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
     setKind(targetKind);
     showSeries(selectedId, targetKind);
     syncUrl(selectedId, targetKind);
+  };
+
+  const handleToggleAdjusted = (next: boolean) => {
+    if (!selectedId || next === adjusted) return;
+    setAdjusted(next);
+    // Drop the displayed series so the previous basis never renders (or auto-loads history)
+    // while the other one is in flight.
+    setSeries(null);
+    showSeries(selectedId, kind, next);
   };
 
   const handleSelectTrade = (id: string) => {
@@ -432,6 +462,29 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
               </button>
             ))}
           </div>
+
+          {splitAdjustmentEnabled && (
+            <div
+              className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs"
+              title="Ajusta los precios históricos por splits para que sean comparables"
+            >
+              {([true, false] as const).map((value) => (
+                <button
+                  key={String(value)}
+                  type="button"
+                  aria-pressed={adjusted === value}
+                  onClick={() => handleToggleAdjusted(value)}
+                  className={`rounded-md px-2 py-1 font-medium transition-colors ${
+                    adjusted === value
+                      ? "bg-teal-950 text-teal-300 border border-teal-800/60 shadow-sm"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  {value ? "Ajustado" : "Sin ajustar"}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs">
             <button
@@ -569,7 +622,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
         <p className="truncate text-[11px] leading-relaxed text-zinc-500">
           Fuente: <span className="uppercase">{activeSeries.provider}</span> ·{" "}
           <span className="font-mono">{activeSeries.source}</span> · Ajuste:{" "}
-          {activeSeries.adjustmentPolicy} · {formatTradingDate(activeSeries.firstDate)} —{" "}
+          {adjustmentPolicyLabel(activeSeries.adjustmentPolicy)} · {formatTradingDate(activeSeries.firstDate)} —{" "}
           {formatTradingDate(activeSeries.lastDate)} · {activeSeries.bars.length} ruedas
         </p>
       )}
