@@ -14,7 +14,7 @@ function subscribeToNothing() {
   return () => {};
 }
 
-export function ThemeToggle({ className }: { className?: string }) {
+export function ThemeToggle({ className, collapsed = false }: { className?: string; collapsed?: boolean }) {
   const { resolvedTheme, setTheme } = useTheme();
   const mounted = useSyncExternalStore(
     subscribeToNothing,
@@ -30,9 +30,12 @@ export function ThemeToggle({ className }: { className?: string }) {
       variant="ghost"
       size="sm"
       className={cn(
-        "w-full justify-start gap-2 px-3 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-900/70 dark:hover:text-zinc-50",
+        "min-h-10 w-full justify-start gap-2 px-3 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-900/70 dark:hover:text-zinc-50",
+        collapsed && "justify-center px-0",
         className
       )}
+      title={collapsed ? (isDark ? "Modo claro" : "Modo oscuro") : undefined}
+      aria-label={collapsed ? (isDark ? "Modo claro" : "Modo oscuro") : undefined}
       disabled={!mounted}
       onClick={() => setTheme(isDark ? "light" : "dark")}
     >
@@ -40,18 +43,18 @@ export function ThemeToggle({ className }: { className?: string }) {
         isDark ? (
           <>
             <Sun className="h-4 w-4 text-zinc-400" />
-            Modo claro
+            {!collapsed && "Modo claro"}
           </>
         ) : (
           <>
             <Moon className="h-4 w-4 text-zinc-500" />
-            Modo oscuro
+            {!collapsed && "Modo oscuro"}
           </>
         )
       ) : (
         <>
           <Sun className="h-4 w-4 text-zinc-400" />
-          Tema
+          {!collapsed && "Tema"}
         </>
       )}
     </Button>
