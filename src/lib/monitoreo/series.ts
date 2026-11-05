@@ -1,4 +1,5 @@
 import type {
+  AdjustmentEvent,
   MonitoringAdjustmentPolicy,
   MonitoringBar,
   MonitoringCurrency,
@@ -247,13 +248,18 @@ export function buildMonitoringSeries(opts: {
   provider: MonitoringSeries["provider"];
   source: string;
   adjustmentPolicy?: MonitoringAdjustmentPolicy;
+  adjustmentEvents?: AdjustmentEvent[];
+  /** Extra data-quality warning (joined with the computed ones) */
+  warning?: string | null;
   historyStatus: MonitoringHistoryStatus;
   bars: MonitoringBar[];
   missingCclDays?: number;
 }): MonitoringSeries {
   const sortedBars = dedupeAndSortBars(opts.bars);
   const { lastValue, changePct } = calculateChangePct(sortedBars);
-  const dataQuality = calculateDataQuality(sortedBars, opts.missingCclDays ?? 0);
+  const computedQuality = calculateDataQuality(sortedBars, opts.missingCclDays ?? 0);
+  const warning = [computedQuality.warning, opts.warning].filter(Boolean).join(" • ") || null;
+  const dataQuality = { ...computedQuality, warning };
 
   return {
     instrumentId: opts.instrumentId,
@@ -265,6 +271,7 @@ export function buildMonitoringSeries(opts: {
     provider: opts.provider,
     source: opts.source,
     adjustmentPolicy: opts.adjustmentPolicy ?? "raw",
+    adjustmentEvents: opts.adjustmentEvents ?? [],
     historyStatus: opts.historyStatus,
     bars: sortedBars,
     firstDate: sortedBars[0]?.time ?? null,

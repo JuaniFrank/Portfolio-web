@@ -16,7 +16,21 @@ export type MonitoringSeriesKind =
  * internal quote-refresh routing concept only (T-30), never user-selectable. */
 export type UiMonitoringSeriesKind = Exclude<MonitoringSeriesKind, "spot">;
 export type MonitoringChartType = "line" | "candles";
-export type MonitoringAdjustmentPolicy = "raw" | "split-adjusted";
+/**
+ * How the bars relate to corporate events:
+ * - "raw": as stored, nominal of each day.
+ * - "split-adjusted": we rewrote the bars at read time (see `adjustmentEvents`).
+ * - "provider-adjusted": the provider (Yahoo) already rewrote them; we never touch them.
+ */
+export type MonitoringAdjustmentPolicy = "raw" | "split-adjusted" | "provider-adjusted";
+
+/** A corporate event reduced to what price adjustment needs: price scales by `1 / ratio` before it. */
+export type AdjustmentEvent = {
+  /** YYYY-MM-DD */
+  effectiveDate: string;
+  /** numerator / denominator */
+  ratio: number;
+};
 export type MonitoringCacheCoverage = "none" | "partial" | "two-years";
 export type MonitoringHistoryStatus =
   | "cached"
@@ -62,6 +76,8 @@ export type MonitoringSeries = {
   provider: "data912" | "yahoo" | "fmp" | "derived";
   source: string;
   adjustmentPolicy: MonitoringAdjustmentPolicy;
+  /** Events whose math we applied to `bars` (non-empty only when policy is "split-adjusted") */
+  adjustmentEvents: AdjustmentEvent[];
   historyStatus: MonitoringHistoryStatus;
   bars: MonitoringBar[];
   firstDate: string | null;
@@ -84,4 +100,6 @@ export type MonitoringBootstrapData = {
   selectedKind: UiMonitoringSeriesKind;
   selectedCurrency: MonitoringCurrency;
   initialSeries: MonitoringSeries | null;
+  /** Server switch (ACTIVOS_SPLIT_ADJUSTMENT): false hides the "Ajustado" toggle */
+  splitAdjustmentEnabled: boolean;
 };

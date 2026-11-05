@@ -1,5 +1,6 @@
 import { getCurrentUser } from "@/lib/auth";
 import { listMonitoringInstruments } from "@/lib/monitoreo/data";
+import { isSplitAdjustmentEnabled } from "@/lib/monitoreo/split-adjustment-config";
 import { fetchMonitoringSeries } from "@/lib/monitoreo/load-series";
 import { resolveInitialSelection, type ActivosView } from "@/lib/monitoreo/activos-selection";
 import type { MonitoringBootstrapData } from "@/lib/monitoreo/types";
@@ -21,6 +22,7 @@ export async function loadMonitoringBootstrap(
       selectedKind: "native",
       selectedCurrency: "ARS",
       initialSeries: null,
+      splitAdjustmentEnabled: isSplitAdjustmentEnabled(),
     };
   }
 
@@ -46,5 +48,6 @@ export async function loadMonitoringBootstrap(
     selectedKind: selection.kind,
     selectedCurrency: defaultCurrency,
     initialSeries,
+    splitAdjustmentEnabled: isSplitAdjustmentEnabled(),
   };
 }
