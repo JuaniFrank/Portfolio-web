@@ -1,4 +1,5 @@
-import type { MonitoringBar, MonitoringCurrency, UiMonitoringSeriesKind } from "./types";
+import { projectTradePrice, type ProjectionMethod, type TradeProjectionContext } from "./trade-projection";
+import type { MonitoringBar } from "./types";
 
 export type TradeSide = "BUY" | "SELL";
 
@@ -18,10 +19,18 @@ export type TradeMarkerInput = {
   fees: number;
 };
 
-export type TradeMarkerSeriesContext = {
-  kind: UiMonitoringSeriesKind;
-  currency: MonitoringCurrency;
-};
+/** Chronological order with BUY before SELL on the same day (a same-day sell can't precede its buy). */
+function compareChronological(
+  a: { tradeDate: string; side: TradeMarkerSide },
+  b: { tradeDate: string; side: TradeMarkerSide }
+): number {
+  const byDate = a.tradeDate.localeCompare(b.tradeDate);
+  if (byDate !== 0) return byDate;
+  return (a.side === "buy" ? 0 : 1) - (b.side === "buy" ? 0 : 1);
+}
+
+/** Projection inputs for the displayed series (the bars are passed separately). */
+export type TradeMarkerContext = Omit<TradeProjectionContext, "bars">;
 
 export type TradeMarkerTrade = {
   id: string;
@@ -32,24 +41,47 @@ export type TradeMarkerTrade = {
   currencyCode: string;
   grossAmount: number;
   fees: number;
-  /** null unless the comparability rule in `isComparable` holds for this trade */
+  /** null when the trade could not be projected or a corporate event followed it */
   changeSinceTradePct: number | null;
 };
 
-export type TradeMarkerSide = "buy" | "sell" | "mixed";
+export type TradeMarkerSide = "buy" | "sell";
 
 export type TradeMarker = {
+  /** Same as the trade id */
+  id: string;
   /** Bar date (YYYY-MM-DD) this marker is snapped to — never the raw trade date */
   barTime: string;
   side: TradeMarkerSide;
-  trades: TradeMarkerTrade[];
-  totals: {
-    totalBuyQuantity: number;
-    totalSellQuantity: number;
-    netQuantity: number;
-    totalGrossAmount: number;
-    totalFees: number;
-  };
+  trade: TradeMarkerTrade;
+  /** Trade price in the displayed series' scale; null when it could not be projected */
+  chartPrice: number | null;
+  /** true when `chartPrice` is null and the marker falls back to date placement */
+  approximate: boolean;
+  projectionMethod: ProjectionMethod | null;
+};
+
+/** A trade as listed: a `TradeMarker` whose bar may be missing (outside the bar range). */
+export type TradeEntry = Omit<TradeMarker, "barTime"> & { barTime: string | null };
+
+/** A trade with its price projected into the displayed series' scale, independent of range. */
+export type ProjectedTrade = {
+  id: string;
+  tradeDate: string;
+  side: TradeMarkerSide;
+  quantity: number;
+  chartPrice: number | null;
+  projectionMethod: ProjectionMethod | null;
+  trade: TradeMarkerInput;
+};
+
+export type PositionSummary = {
+  quantity: number;
+  /** Average cost in chart scale; null when not computable */
+  avgCost: number | null;
+  unrealizedPct: number | null;
+  /** false when a missing projection or a later corporate event blocks the comparison */
+  comparable: boolean;
 };
 
 /**
@@ -70,99 +102,153 @@ function snapToBarDate(tradeDate: string, bars: MonitoringBar[]): string | null 
 }
 
 /**
- * "Change since trade" is only meaningful when the displayed series is the trade's own
- * native currency/instrument — a CEDEAR underlying or theoretical series is a different
- * price scale, and a corporate event after the trade date changes the share count/price
- * basis, so any comparison against it would be misleading.
+ * Project every trade into the displayed series' scale. Unlike markers, this is not clipped
+ * to the visible bars, so position math can use the whole trade history.
  */
-function isComparable(
-  trade: TradeMarkerInput,
-  seriesContext: TradeMarkerSeriesContext,
-  corporateEventDates: string[]
-): boolean {
-  if (seriesContext.kind !== "native") return false;
-  if (trade.currencyCode !== seriesContext.currency) return false;
-  return !corporateEventDates.some((eventDate) => eventDate > trade.tradeDate);
+export function projectTrades(
+  trades: TradeMarkerInput[],
+  ctx: TradeProjectionContext
+): ProjectedTrade[] {
+  return trades
+    .map((trade) => {
+      const { chartPrice, method } = projectTradePrice(trade, ctx);
+      return {
+        id: trade.id,
+        tradeDate: trade.tradeDate,
+        side: trade.type === "BUY" ? ("buy" as const) : ("sell" as const),
+        quantity: trade.quantity,
+        chartPrice,
+        projectionMethod: method,
+        trade,
+      };
+    })
+    .sort(compareChronological);
 }
 
 /**
- * Group a user's BUY/SELL trades for one instrument into per-bar-date markers with
- * tooltip-ready metrics. Marker placement is always by bar date, never by trade price —
- * the displayed series may be in another scale/currency (CEDEAR underlying, USD,
- * unadjusted data912 bars) than the trade itself.
+ * One entry per trade, in chronological order. `barTime` is the bar the trade snaps to, or null
+ * when it falls outside the bar range (no bar to anchor to): such trades still belong in the
+ * trades list and the position math, they just have no chart marker. `projectionBars` (default
+ * `bars`) lets callers project against the full series while anchoring to a visible subset.
+ */
+export function buildTradeEntries(
+  trades: TradeMarkerInput[],
+  bars: MonitoringBar[],
+  ctx: TradeMarkerContext,
+  corporateEventDates: string[] = [],
+  projectionBars: MonitoringBar[] = bars
+): TradeEntry[] {
+  if (trades.length === 0) return [];
+
+  const lastClose = bars.length > 0 ? bars[bars.length - 1]!.close : null;
+  const projected = projectTrades(trades, { ...ctx, bars: projectionBars });
+
+  const entries = projected.map((p): TradeEntry => {
+    const changeSinceTradePct =
+      lastClose !== null && p.chartPrice !== null && !corporateEventDates.some((d) => d > p.tradeDate)
+        ? ((lastClose - p.chartPrice) / p.chartPrice) * 100
+        : null;
+
+    return {
+      id: p.id,
+      barTime: snapToBarDate(p.tradeDate, bars),
+      side: p.side,
+      trade: {
+        id: p.trade.id,
+        tradeDate: p.trade.tradeDate,
+        side: p.trade.type,
+        quantity: p.trade.quantity,
+        price: p.trade.price,
+        currencyCode: p.trade.currencyCode,
+        grossAmount: p.trade.grossAmount,
+        fees: p.trade.fees,
+        changeSinceTradePct,
+      },
+      chartPrice: p.chartPrice,
+      approximate: p.chartPrice === null,
+      projectionMethod: p.projectionMethod,
+    };
+  });
+
+  // `projected` is already sorted by trade date and Array#sort is stable.
+  return entries;
+}
+
+/**
+ * Build one marker per trade that has a bar to anchor to, positioned at the trade's projected
+ * chart price. Trades outside the bar range are not returned (see `buildTradeEntries` for those).
  */
 export function buildTradeMarkers(
   trades: TradeMarkerInput[],
   bars: MonitoringBar[],
-  seriesContext: TradeMarkerSeriesContext,
-  corporateEventDates: string[] = []
+  ctx: TradeMarkerContext,
+  corporateEventDates: string[] = [],
+  projectionBars: MonitoringBar[] = bars
 ): TradeMarker[] {
-  if (trades.length === 0 || bars.length === 0) return [];
+  if (bars.length === 0) return [];
+  return buildTradeEntries(trades, bars, ctx, corporateEventDates, projectionBars)
+    .filter((e): e is TradeMarker => e.barTime !== null)
+    .sort((a, b) => a.barTime.localeCompare(b.barTime));
+}
 
-  const lastClose = bars[bars.length - 1]!.close;
-  const grouped = new Map<string, TradeMarkerTrade[]>();
+const QUANTITY_EPSILON = 1e-9;
 
-  for (const trade of trades) {
-    const barTime = snapToBarDate(trade.tradeDate, bars);
-    if (barTime === null) continue;
+/**
+ * Open-position summary in chart scale using the average-cost method: buys add quantity and
+ * cost at their chart price, sells reduce quantity at the current average (which stays
+ * unchanged), and the state resets when the position closes. A buy without a chart price, or
+ * a corporate event after any trade of the open position, makes the average meaningless:
+ * quantity is still reported but `avgCost`/`unrealizedPct` are null and `comparable` is false.
+ * (Sells never use their own price, so a sell without projection does not block the average.)
+ */
+export function buildPositionSummary(
+  trades: { side: TradeMarkerSide; quantity: number; chartPrice: number | null; tradeDate: string }[],
+  lastClose: number,
+  corporateEventDates: string[] = []
+): PositionSummary {
+  const sorted = [...trades].sort(compareChronological);
 
-    const comparable = isComparable(trade, seriesContext, corporateEventDates);
-    const changeSinceTradePct =
-      comparable && trade.price > 0 ? ((lastClose - trade.price) / trade.price) * 100 : null;
+  let quantity = 0;
+  let cost = 0;
+  let openSince: string | null = null;
+  let missingPrice = false;
 
-    const entry: TradeMarkerTrade = {
-      id: trade.id,
-      tradeDate: trade.tradeDate,
-      side: trade.type,
-      quantity: trade.quantity,
-      price: trade.price,
-      currencyCode: trade.currencyCode,
-      grossAmount: trade.grossAmount,
-      fees: trade.fees,
-      changeSinceTradePct,
-    };
-
-    const existing = grouped.get(barTime);
-    if (existing) {
-      existing.push(entry);
-    } else {
-      grouped.set(barTime, [entry]);
-    }
-  }
-
-  const markers: TradeMarker[] = [];
-  for (const [barTime, groupTrades] of grouped) {
-    const hasBuy = groupTrades.some((t) => t.side === "BUY");
-    const hasSell = groupTrades.some((t) => t.side === "SELL");
-    const side: TradeMarkerSide = hasBuy && hasSell ? "mixed" : hasBuy ? "buy" : "sell";
-
-    let totalBuyQuantity = 0;
-    let totalSellQuantity = 0;
-    let totalGrossAmount = 0;
-    let totalFees = 0;
-    for (const t of groupTrades) {
-      if (t.side === "BUY") {
-        totalBuyQuantity += t.quantity;
-      } else {
-        totalSellQuantity += t.quantity;
+  for (const t of sorted) {
+    if (t.side === "buy") {
+      if (quantity <= QUANTITY_EPSILON) {
+        quantity = 0;
+        cost = 0;
+        openSince = t.tradeDate;
+        missingPrice = false;
       }
-      totalGrossAmount += t.grossAmount;
-      totalFees += t.fees;
+      quantity += t.quantity;
+      if (t.chartPrice === null) missingPrice = true;
+      else cost += t.quantity * t.chartPrice;
+    } else if (quantity > QUANTITY_EPSILON) {
+      const avg = cost / quantity;
+      const sold = Math.min(t.quantity, quantity);
+      quantity -= sold;
+      cost -= sold * avg;
+      if (quantity <= QUANTITY_EPSILON) {
+        quantity = 0;
+        cost = 0;
+        openSince = null;
+        missingPrice = false;
+      }
     }
-
-    markers.push({
-      barTime,
-      side,
-      trades: groupTrades.sort((a, b) => a.tradeDate.localeCompare(b.tradeDate)),
-      totals: {
-        totalBuyQuantity,
-        totalSellQuantity,
-        netQuantity: totalBuyQuantity - totalSellQuantity,
-        totalGrossAmount,
-        totalFees,
-      },
-    });
   }
 
-  return markers.sort((a, b) => a.barTime.localeCompare(b.barTime));
+  if (quantity <= QUANTITY_EPSILON) {
+    return { quantity: 0, avgCost: null, unrealizedPct: null, comparable: true };
+  }
+
+  const brokenByEvent =
+    openSince !== null && corporateEventDates.some((d) => d > openSince!);
+  if (missingPrice || brokenByEvent) {
+    return { quantity, avgCost: null, unrealizedPct: null, comparable: false };
+  }
+
+  const avgCost = cost / quantity;
+  const unrealizedPct = avgCost > 0 ? ((lastClose - avgCost) / avgCost) * 100 : null;
+  return { quantity, avgCost, unrealizedPct, comparable: true };
 }
