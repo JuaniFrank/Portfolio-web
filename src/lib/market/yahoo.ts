@@ -5,7 +5,7 @@ export type YahooDividendEvent = {
   amount: number;
 };
 
-type YahooChartResponse = {
+export type YahooChartResponse = {
   chart?: {
     result?: Array<{
       meta?: {
@@ -14,6 +14,8 @@ type YahooChartResponse = {
         regularMarketPrice?: number;
         chartPreviousClose?: number;
         regularMarketTime?: number;
+        regularMarketDayHigh?: number;
+        regularMarketDayLow?: number;
         exchangeName?: string;
         fullExchangeName?: string;
       };
@@ -188,7 +190,8 @@ function finiteOrNull(value: unknown): number | null {
  *
  * Las ruedas con `close: null` (suspensiones, feriados que Yahoo igual lista) se
  * descartan: es mejor que el consumidor haga forward-fill explícito que inventar
- * un cierre. Si hay timestamps duplicados para el mismo día, gana el último.
+ * un cierre. La excepción es la rueda en curso, que toma el último precio (ver
+ * `parseYahooHistory`). Si hay timestamps duplicados para el mismo día, gana el último.
  *
  * Por defecto `cache: "no-store"` porque esto lo consumen crons, que siempre quieren
  * la última rueda disponible. Una página puede pasar `revalidateSeconds` para cachear la
@@ -219,24 +222,55 @@ export async function fetchYahooHistory(
     throw new Error(`Yahoo history ${symbol}: ${body.chart.error.description ?? "error"}`);
   }
 
+  return parseYahooHistory(symbol, body);
+}
+
+/**
+ * Parseo puro de la respuesta del chart de Yahoo (ver `fetchYahooHistory`).
+ *
+ * La rueda en curso (o recién cerrada) llega con open/high/low/volume pero `close: null`
+ * hasta que Yahoo la consolida, horas después del cierre; el último precio solo está en
+ * `meta.regularMarketPrice`. Esa única rueda — la del día de `regularMarketTime` — se
+ * completa con él (y con el rango del día si falta high/low). Cualquier otra rueda sin
+ * cierre se sigue descartando. Los crons que persisten esto la reescriben dentro de su
+ * ventana de revisión cuando Yahoo publica el cierre definitivo.
+ */
+export function parseYahooHistory(symbol: string, body: YahooChartResponse): FetchHistoryResult {
   const result = body.chart?.result?.[0];
   const timestamps = result?.timestamp ?? [];
   const quote = result?.indicators?.quote?.[0];
+  const meta = result?.meta;
+
+  const lastPrice = finiteOrNull(meta?.regularMarketPrice);
+  const lastTradeTime = finiteOrNull(meta?.regularMarketTime);
+  const lastTradeDay =
+    lastPrice !== null && lastPrice > 0 && lastTradeTime !== null
+      ? toUtcDay(lastTradeTime).getTime()
+      : null;
 
   // Dedupe por día conservando el último valor visto.
   const byDay = new Map<number, YahooHistoryBar>();
   for (let i = 0; i < timestamps.length; i += 1) {
     const ts = timestamps[i];
     if (typeof ts !== "number" || !Number.isFinite(ts)) continue;
-    const close = finiteOrNull(quote?.close?.[i]);
+    const date = toUtcDay(ts);
+    const isCurrentSession = date.getTime() === lastTradeDay;
+
+    let close = finiteOrNull(quote?.close?.[i]);
+    let high = finiteOrNull(quote?.high?.[i]);
+    let low = finiteOrNull(quote?.low?.[i]);
+    if ((close === null || close <= 0) && isCurrentSession) {
+      close = lastPrice;
+      high ??= finiteOrNull(meta?.regularMarketDayHigh);
+      low ??= finiteOrNull(meta?.regularMarketDayLow);
+    }
     if (close === null || close <= 0) continue;
 
-    const date = toUtcDay(ts);
     byDay.set(date.getTime(), {
       date,
       open: finiteOrNull(quote?.open?.[i]),
-      high: finiteOrNull(quote?.high?.[i]),
-      low: finiteOrNull(quote?.low?.[i]),
+      high,
+      low,
       close,
       volume: finiteOrNull(quote?.volume?.[i]),
     });
