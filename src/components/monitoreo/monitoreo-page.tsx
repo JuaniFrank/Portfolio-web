@@ -107,7 +107,6 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
   const loadedSeriesRef = React.useRef(new Map<string, MonitoringSeries>());
   const requestedHistoryRef = React.useRef(new Set<string>());
   const [failedHistoryKeys, setFailedHistoryKeys] = React.useState<ReadonlySet<string>>(new Set());
-  const [todayIso] = React.useState(() => new Date().toISOString().slice(0, 10));
 
   // Trades + corporate event dates for the selected instrument, feeding markers and position.
   const [tradeData, setTradeData] = React.useState<TradeMarkerData | null>(null);
@@ -147,11 +146,11 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
   const activeSeries =
     series && series.instrumentId === selectedId && series.kind === kind ? series : null;
   const historyKey = selectedId ? seriesKey(selectedId, kind, adjusted) : "";
-  const needsHistory = activeSeries !== null && shouldLoadHistory(activeSeries, todayIso);
+  const needsHistory = activeSeries !== null && shouldLoadHistory(activeSeries);
   const historyLoading = needsHistory && !failedHistoryKeys.has(historyKey);
 
-  // Auto history: the cached series renders immediately; when its coverage is insufficient the
-  // full history loads in the background (once per instrument+kind per page session).
+  // Auto history: the cached series renders immediately and the full history (with today's bar)
+  // loads in the background (once per instrument+kind per page session).
   React.useEffect(() => {
     if (!needsHistory || !selectedId) return;
     const requested = requestedHistoryRef.current;
