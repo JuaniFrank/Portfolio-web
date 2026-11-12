@@ -3,6 +3,7 @@ import {
   DATA912_EOD_SOURCE,
   FMP_EOD_SOURCE,
   resolveMonitoringRouting,
+  YAHOO_ADR_EOD_SOURCE,
   YAHOO_EOD_SOURCE,
   YAHOO_UNDERLYING_EOD_SOURCE,
 } from "@/lib/market/provider-routing";
@@ -45,8 +46,12 @@ export async function fetchMonitoringSeries(
   let effectiveProvider = routing.provider;
   let historyStatus: MonitoringHistoryStatus = "cached";
 
+  // The ADR series has no alternate source (its symbol exists only on Yahoo) and the live
+  // fallback below is the LOCAL ARS quote: neither fits a USD ADR series.
+  const isAdr = routing.source === YAHOO_ADR_EOD_SOURCE;
+
   // If no cached bars for the primary source, check known alternate cached sources for the same currency mode
-  if (bars.length === 0) {
+  if (bars.length === 0 && !isAdr) {
     if (input.currency === "ARS") {
       const altSources = [DATA912_EOD_SOURCE, YAHOO_EOD_SOURCE].filter((s) => s !== routing.source);
       for (const alt of altSources) {
@@ -74,7 +79,7 @@ export async function fetchMonitoringSeries(
 
   // If still no cached bars, try live quote fallback
   if (bars.length === 0) {
-    const liveBar = await loadExternalLatestQuote(instrument);
+    const liveBar = isAdr ? null : await loadExternalLatestQuote(instrument);
     if (liveBar) {
       bars = [liveBar];
       historyStatus = "live-fallback";
