@@ -15,13 +15,29 @@ import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
-import { fetchSeries, fetchTrades, postHistory } from "@/lib/monitoreo/activos-client";
+import type { MarketQuote } from "@/lib/monitoreo/load-quote";
+import {
+  convertBasisPrice,
+  defaultBasis,
+  resolveBasisOptions,
+  moneyFactor,
+  toBasisPrice,
+  type PriceBasis,
+} from "@/lib/monitoreo/price-basis";
+import { fetchQuote, fetchSeries, fetchTrades, postHistory } from "@/lib/monitoreo/activos-client";
 import { EMPTY_TRADE_MARKER_DATA, type TradeMarkerData } from "@/lib/monitoreo/trade-marker-data";
 import {
   buildActivosSearch,
   sortInstrumentsPortfolioFirst,
 } from "@/lib/monitoreo/activos-selection";
 import { buildHeaderStats } from "@/lib/monitoreo/asset-stats";
+import {
+  ghostMarkers,
+  newDraft,
+  parseDecimalInput,
+  resolveDrafts,
+  type OrderDraft,
+} from "@/lib/monitoreo/order-drafts";
 import { adrSymbolFor } from "@/lib/market/adr-map";
 import { drawingsStorageKey } from "@/lib/monitoreo/drawings-storage";
 import { useStoredBoolean } from "@/lib/ui/use-stored-boolean";
@@ -45,9 +61,11 @@ import type {
 } from "@/lib/monitoreo/types";
 import { AssetHeaderStats } from "./asset-header-stats";
 import { AssetSelector } from "./asset-selector";
+import { BuySimulator } from "./buy-simulator";
 import { formatTradingDate } from "./format";
 import type { ChartFocusRequest } from "./kline-chart";
 import { PositionPanel } from "./position-panel";
+import { OperationsColumn, type ColumnTab } from "./operations-column";
 import { TradesList } from "./trades-list";
 
 // klinecharts is heavy and only paints once a series is loaded: code-split it (client-only).
@@ -255,6 +273,213 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
     );
   }, [activeSeries, tradeData, tradeAdjustment, tradeEntries]);
 
+  // Order simulator: ephemeral rows (never persisted). Prices and target PPCs are per unit in the
+  // chosen basis (ARS local / USD counterpart) and convert to the chart scale with a live factor;
+  // a row's price follows the basis' market quote until the user types one (`null`). Everything
+  // resets when the instrument or series kind changes; only "Actualizar" overwrites typed prices.
+  // The simulator lives in the trades column: opened once from its footer button, then reachable
+  // through the "Simular" tab. State survives tab switches; hiding the column pauses it.
+  const [simStarted, setSimStarted] = React.useState(false);
+  const [columnTab, setColumnTab] = React.useState<ColumnTab>("trades");
+  const [simNotice, setSimNotice] = React.useState<string | null>(null);
+  const columnAvailable = tradeEntries.length > 0 || tradeData !== null;
+  const columnVisible = columnAvailable && !tradesCollapsed;
+  const simEnabled = simStarted && columnVisible;
+  const [drafts, setDrafts] = React.useState<OrderDraft[]>(() => [newDraft("o0")]);
+  const [draftSeq, setDraftSeq] = React.useState(1);
+  const [activeDraftId, setActiveDraftId] = React.useState<string | null>(null);
+  // Row whose price is being picked by clicking the chart
+  const [pickingId, setPickingId] = React.useState<string | null>(null);
+  const [feeText, setFeeText] = React.useState("");
+  const [simBasisChoice, setSimBasisChoice] = React.useState<PriceBasis | null>(null);
+  const simScopeKey = `${selectedId}:${kind}`;
+  const [simScope, setSimScope] = React.useState(simScopeKey);
+  const [simQuoteState, setSimQuoteState] = React.useState<{
+    instrumentId: string | null;
+    byKind: Partial<Record<UiMonitoringSeriesKind, MarketQuote>>;
+  }>({ instrumentId: null, byKind: {} });
+  const [simRefreshing, setSimRefreshing] = React.useState(false);
+  const simRefreshRef = React.useRef<AbortController | null>(null);
+  if (simScope !== simScopeKey) {
+    setSimScope(simScopeKey);
+    setDrafts([newDraft("o0")]);
+    setDraftSeq(1);
+    setActiveDraftId(null);
+    setPickingId(null);
+    setSimBasisChoice(null);
+    setSimRefreshing(false);
+    setSimNotice(null);
+  }
+
+  const simLastClose = activeSeries?.bars[activeSeries.bars.length - 1]?.close ?? null;
+  const simQuotes = simQuoteState.instrumentId === selectedId ? simQuoteState.byKind : {};
+  const simQuotePrices = Object.fromEntries(
+    Object.entries(simQuotes).map(([k, q]) => [k, q.price])
+  ) as Partial<Record<UiMonitoringSeriesKind, number | null>>;
+  const simBases = selectedInstrument
+    ? resolveBasisOptions({
+        instrument: selectedInstrument,
+        chartKind: kind,
+        quotes: simQuotePrices,
+        chartLastClose: simLastClose,
+      })
+    : [];
+  // Series kinds to quote: both bases when there is a selector, else just the chart kind.
+  const simKindsKey = simBases.length > 0 ? simBases.map((o) => o.kind).join(",") : kind;
+  const simBasis =
+    simBases.find((o) => o.basis === (simBasisChoice ?? defaultBasis(kind)) && o.available) ??
+    simBases.find((o) => o.basis === defaultBasis(kind)) ??
+    null;
+  const simOther = simBases.find((o) => o !== simBasis) ?? null;
+
+  // Prefill: quote the needed kinds (deduped) while the simulator is open. Stale requests are
+  // aborted when the instrument changes; results only feed the prices that are untouched.
+  React.useEffect(() => {
+    if (!simEnabled || !selectedId) return;
+    const controller = new AbortController();
+    for (const quoteKind of simKindsKey.split(",") as UiMonitoringSeriesKind[]) {
+      fetchQuote(selectedId, quoteKind, controller.signal).then((res) => {
+        if (controller.signal.aborted) return;
+        const quote: MarketQuote = "error" in res ? { price: null } : res;
+        setSimQuoteState((prev) => ({
+          instrumentId: selectedId,
+          byKind: { ...(prev.instrumentId === selectedId ? prev.byKind : {}), [quoteKind]: quote },
+        }));
+      });
+    }
+    return () => {
+      controller.abort();
+      simRefreshRef.current?.abort();
+      // An aborted refresh never reaches its own reset: clear the spinner here.
+      setSimRefreshing(false);
+    };
+  }, [simEnabled, selectedId, simKindsKey]);
+
+  const refreshSimQuote = () => {
+    if (!selectedId) return;
+    simRefreshRef.current?.abort();
+    const controller = new AbortController();
+    simRefreshRef.current = controller;
+    const quoteKinds = simKindsKey.split(",") as UiMonitoringSeriesKind[];
+    setSimRefreshing(true);
+    Promise.all(quoteKinds.map((k) => fetchQuote(selectedId, k, controller.signal))).then(
+      (results) => {
+        if (controller.signal.aborted) return;
+        setSimRefreshing(false);
+        const fresh: Partial<Record<UiMonitoringSeriesKind, MarketQuote>> = {};
+        results.forEach((res, i) => {
+          fresh[quoteKinds[i]!] = "error" in res ? { price: null } : res;
+        });
+        setSimQuoteState((prev) => ({
+          instrumentId: selectedId,
+          byKind: { ...(prev.instrumentId === selectedId ? prev.byKind : {}), ...fresh },
+        }));
+        // Explicit request: replace whatever is typed (a failed fetch keeps the typed prices).
+        const basisKind = simBasis?.kind ?? kind;
+        if (fresh[basisKind]?.price != null) {
+          setDrafts((prev) => prev.map((d) => ({ ...d, priceText: null })));
+        }
+      }
+    );
+  };
+
+  const changeSimBasis = (next: PriceBasis) => {
+    if (!simBasis || next === simBasis.basis) return;
+    const target = simBases.find((o) => o.basis === next && o.available);
+    if (!target) return;
+    // Typed prices and target PPCs are per unit in the basis: re-express them in the new one
+    // (amounts are money and don't change). A number that can't be converted blocks the switch
+    // instead of silently turning into "follow the market" or keeping a wrong-currency value.
+    const convertText = (text: string): string | null | undefined => {
+      const typed = parseDecimalInput(text);
+      if (!Number.isFinite(typed) || typed <= 0) return text; // not a number: leave as typed
+      const converted = convertBasisPrice(typed, simBasis.factor, target.factor);
+      return converted === null ? undefined : String(Number(converted.toFixed(4)));
+    };
+    const next_ = drafts.map((d) => ({
+      ...d,
+      priceText: d.priceText === null ? null : convertText(d.priceText),
+      targetText: d.targetText === "" ? "" : convertText(d.targetText),
+    }));
+    if (next_.some((d) => d.priceText === undefined || d.targetText === undefined)) {
+      setSimNotice(
+        "No se pudo cambiar la base: falta la cotización para convertir los precios escritos. Actualizá el precio o borrá esos valores."
+      );
+      return;
+    }
+    setDrafts(next_ as OrderDraft[]);
+    setSimNotice(null);
+    setSimBasisChoice(next);
+  };
+
+  const updateDraft = (id: string, patch: Partial<OrderDraft>) =>
+    setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+  const addDraft = () => {
+    const id = `o${draftSeq}`;
+    setDraftSeq(draftSeq + 1);
+    // New orders default to the opposite side of the last one is NOT assumed: plain buy.
+    setDrafts((prev) => [...prev, newDraft(id)]);
+    setActiveDraftId(id);
+  };
+  const removeDraft = (id: string) => {
+    setDrafts((prev) => (prev.length > 1 ? prev.filter((d) => d.id !== id) : prev));
+    setPickingId((prev) => (prev === id ? null : prev));
+  };
+  const resetDrafts = () => {
+    setDrafts([newDraft("o0")]);
+    setDraftSeq(1);
+    setActiveDraftId(null);
+    setPickingId(null);
+  };
+  const handlePickPrice = (chartPrice: number) => {
+    if (pickingId && simFactor) {
+      updateDraft(pickingId, { priceText: String(Number(toBasisPrice(chartPrice, simFactor).toFixed(4))) });
+    }
+    setPickingId(null);
+  };
+
+  const simQuote = (simBasis ? simQuotes[simBasis.kind] : simQuotes[kind]) ?? null;
+  const simMarketPrice = simBasis ? simBasis.marketPrice : (simQuote?.price ?? simLastClose);
+  const simFactor = simBasis ? simBasis.factor : 1;
+  const simEquivalentMarketPrice =
+    simBasis && simOther && simMarketPrice !== null && simMarketPrice > 0
+      ? convertBasisPrice(simMarketPrice, simBasis.factor, simOther.factor)
+      : null;
+  const simReferences = {
+    market: simMarketPrice,
+    lastClose: simLastClose !== null && simFactor ? toBasisPrice(simLastClose, simFactor) : null,
+    avgCost: position?.avgCost != null && simFactor ? toBasisPrice(position.avgCost, simFactor) : null,
+  };
+  // Money in the instrument's own currency (pesos per unit paid); USD views need the native quote.
+  const simMoneyFactor = moneyFactor(kind, simQuotePrices, simLastClose);
+  const simMoneyCurrency: MonitoringCurrency = kind === "adr" || kind === "cedear-underlying" ? "ARS" : currency;
+  const parsedFee = parseDecimalInput(feeText);
+  const simFeePct = Number.isFinite(parsedFee) && parsedFee > 0 ? Math.min(parsedFee, 100) : 0;
+  // "Resultado vs. último": live quote of the chart kind when known, else its last close.
+  const simReference = (simQuotes[kind]?.price ?? null) ?? simLastClose;
+  const { rows: simRows, result: simResult } = simEnabled
+    ? resolveDrafts(position, drafts, {
+        defaultBasisPrice: simMarketPrice,
+        factor: simFactor,
+        moneyFactor: simMoneyFactor,
+        feePct: simFeePct,
+        referencePrice: simReference,
+      })
+    : { rows: [], result: null };
+  // Active on the chart (line + ghost markers) while the simulation has valid orders, whichever
+  // tab is showing, so the user can compare against the real trades. React Compiler keeps the
+  // array reference stable between unrelated renders.
+  const simChartOrders = simResult
+    ? ghostMarkers(
+        simRows.flatMap((r) =>
+          r.step ? [{ id: r.id, side: r.step.side, price: r.step.price, quantity: r.step.quantity }] : []
+        )
+      )
+    : [];
+  const simQuoteLoading =
+    simRefreshing ||
+    (simEnabled && simKindsKey.split(",").some((k) => simQuotes[k as UiMonitoringSeriesKind] === undefined));
+
   const headerStats = React.useMemo(
     () => buildHeaderStats(activeSeries?.bars ?? [], displayedBars),
     [activeSeries, displayedBars]
@@ -378,8 +603,8 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
       : kind === "adr"
         ? "Equivalente ADR"
         : "Equivalente en el gráfico";
-  const showTradesList = tradeEntries.length > 0;
-  const tradesVisible = showTradesList && !tradesCollapsed;
+  const showTradesList = columnAvailable;
+  const tradesVisible = columnVisible;
   const unavailable = activeSeries?.historyStatus === "unavailable" || failedHistoryKeys.has(historyKey);
 
   const segmentButton = (active: boolean) =>
@@ -544,7 +769,10 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
           {showTradesList && (
             <button
               type="button"
-              onClick={() => setTradesCollapsed(!tradesCollapsed)}
+              onClick={() => {
+                setTradesCollapsed(!tradesCollapsed);
+                setPickingId(null);
+              }}
               aria-pressed={!tradesCollapsed}
               title={tradesCollapsed ? "Mostrar tus operaciones" : "Ocultar tus operaciones"}
               className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/90 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:text-zinc-100"
@@ -585,7 +813,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
       <div
         className={
           tradesVisible
-            ? "grid min-h-0 gap-3 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-[minmax(0,1fr)]"
+            ? "grid min-h-0 gap-3 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-[minmax(0,1fr)]"
             : "grid min-h-0 gap-3 lg:flex-1 lg:grid-rows-[minmax(0,1fr)]"
         }
       >
@@ -628,6 +856,11 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
               drawingsKey={drawingsStorageKey(selectedInstrument?.ticker ?? "", kind)}
               markers={chartMarkers}
               avgCost={position?.avgCost ?? null}
+              simulatedAvgCost={simResult?.totals.avgCost ?? null}
+              simulatedOrders={simChartOrders}
+              pickMode={pickingId !== null}
+              onPickPrice={handlePickPrice}
+              onPickCancel={() => setPickingId(null)}
               activeMarkerId={activeMarkerId}
               onMarkerHover={setActiveMarkerId}
               focusRequest={focusRequest}
@@ -637,15 +870,71 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
         </div>
 
         {tradesVisible && (
-          <div className="h-[320px] min-h-0 lg:h-auto">
-            <TradesList
-              entries={tradeEntries}
-              chartCurrency={currency}
-              scaleLabel={scaleLabel}
-              activeId={activeMarkerId}
-              onHover={setActiveMarkerId}
-              onSelect={handleSelectTrade}
-            />
+          <div className="h-[420px] min-h-0 lg:h-auto">
+            <OperationsColumn
+              tab={simStarted ? columnTab : "trades"}
+              onTabChange={(tab) => {
+                setColumnTab(tab);
+                setPickingId(null);
+              }}
+              tradesCount={tradeEntries.length}
+              simStarted={simStarted}
+              simulating={simResult !== null}
+              onStartSimulation={() => {
+                setSimStarted(true);
+                setColumnTab("sim");
+              }}
+            >
+              {simStarted && columnTab === "sim" ? (
+                <BuySimulator
+                  scopeKey={simScopeKey}
+                  notice={simNotice}
+                  drafts={drafts}
+                  rows={simRows}
+                  onDraftChange={updateDraft}
+                  onAddDraft={addDraft}
+                  onRemoveDraft={removeDraft}
+                  onReset={resetDrafts}
+                  activeDraftId={activeDraftId}
+                  onActivateDraft={setActiveDraftId}
+                  pickingId={pickingId}
+                  onTogglePick={(id) => setPickingId((prev) => (prev === id ? null : id))}
+                  feeText={feeText}
+                  onFeeChange={setFeeText}
+                  feePct={simFeePct}
+                  bases={simBases}
+                  basis={simBasis}
+                  otherBasis={simOther}
+                  onBasisChange={changeSimBasis}
+                  unitsLabel={selectedInstrument?.type === "CEDEAR" ? "CEDEARs" : "acciones"}
+                  quote={simQuote}
+                  quoteLoading={simQuoteLoading}
+                  marketPrice={simMarketPrice}
+                  equivalentMarketPrice={simEquivalentMarketPrice}
+                  references={simReferences}
+                  onRefreshQuote={refreshSimQuote}
+                  position={position}
+                  result={simResult}
+                  referencePrice={simReference}
+                  currency={currency}
+                  moneyCurrency={simMoneyCurrency}
+                  moneyFactor={simMoneyFactor}
+                />
+              ) : tradeEntries.length > 0 ? (
+                <TradesList
+                  entries={tradeEntries}
+                  chartCurrency={currency}
+                  scaleLabel={scaleLabel}
+                  activeId={activeMarkerId}
+                  onHover={setActiveMarkerId}
+                  onSelect={handleSelectTrade}
+                />
+              ) : (
+                <p className="px-3 py-4 text-xs text-zinc-500">
+                  Todavía no tenés operaciones en este activo. Podés simular una compra igual.
+                </p>
+              )}
+            </OperationsColumn>
           </div>
         )}
       </div>
