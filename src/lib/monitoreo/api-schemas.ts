@@ -6,7 +6,7 @@ export const seriesInputSchema = z.object({
   currency: z.enum(["ARS", "USD"]).default("ARS"),
   range: z.enum(["1M", "3M", "6M", "1Y", "ALL"]).default("ALL"),
   chartType: z.enum(["line", "candles"]).default("line"),
-  kind: z.enum(["native", "cedear-underlying", "cedear-theoretical"]).default("native"),
+  kind: z.enum(["native", "cedear-underlying", "cedear-theoretical", "adr"]).default("native"),
   /** Split-adjusted ("1", true; default) or as stored ("0", false). Ignored when the server switch is off. */
   adjusted: z
     .union([z.boolean(), z.enum(["0", "1"])])

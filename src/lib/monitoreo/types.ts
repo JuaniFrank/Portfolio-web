@@ -10,6 +10,8 @@ export type MonitoringSeriesKind =
   | "native"
   | "cedear-underlying"
   | "cedear-theoretical"
+  /** US ADR (Yahoo, USD) of an Argentine stock */
+  | "adr"
   | "spot";
 
 /** The subset a user can actually pick in the monitoring UI — "spot" is an
