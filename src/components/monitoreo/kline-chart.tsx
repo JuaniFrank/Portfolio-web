@@ -48,6 +48,7 @@ const TOOLTIP_EDGE_MARGIN_PX = 60;
 /** Price-anchored markers outside this inset are clamped to the pane edge. */
 const EDGE_PADDING_PX = 10;
 const AVG_COST_COLOR = "#fbbf24";
+const SIMULATED_AVG_COST_COLOR = "#38bdf8";
 
 const MAIN_PANE_INDICATORS = ["MA", "EMA", "BOLL", "SAR"] as const;
 const SUB_PANE_INDICATORS = ["VOL", "MACD", "RSI", "KDJ"] as const;
@@ -74,6 +75,20 @@ interface MarkerPosition {
   tooltipSide: "left" | "right";
 }
 
+/** A simulated (what-if) order drawn as a ghost marker on the last bar, in chart scale. */
+export interface SimulatedOrderMarker {
+  id: string;
+  side: TradeMarkerSide;
+  price: number;
+  quantity: number;
+}
+
+interface SimMarkerPosition {
+  order: SimulatedOrderMarker;
+  x: number;
+  y: number;
+}
+
 interface OverlayLayout {
   /** Plot-area size (excludes the price axis) */
   width: number;
@@ -84,9 +99,21 @@ interface OverlayLayout {
   avgCostY: number | null;
   /** Set when the average cost is outside the pane and its line was clamped to that edge. */
   avgCostEdge: "top" | "bottom" | null;
+  /** Same as above for the simulated (what-if) average cost */
+  simulatedAvgCostY: number | null;
+  simulatedAvgCostEdge: "top" | "bottom" | null;
+  simOrders: SimMarkerPosition[];
 }
 
-const EMPTY_LAYOUT: OverlayLayout = { width: 0, height: 0, barWidth: 0, markers: [], avgCostY: null, avgCostEdge: null };
+const EMPTY_LAYOUT: OverlayLayout = { width: 0, height: 0, barWidth: 0, markers: [],
+  avgCostY: null,
+  avgCostEdge: null,
+  simulatedAvgCostY: null,
+  simulatedAvgCostEdge: null,
+  simOrders: [],
+};
+
+const EMPTY_SIMULATED_ORDERS: SimulatedOrderMarker[] = [];
 
 /** Asks the chart to bring a trade's bar into view; `seq` makes repeated clicks re-trigger. */
 export interface ChartFocusRequest {
@@ -104,6 +131,14 @@ interface KLineChartProps {
   markers: TradeMarker[];
   /** Average cost in chart scale; draws a dashed "PPC" line when set */
   avgCost?: number | null;
+  /** Average cost after a simulated buy; draws a second dashed "PPC sim." line when set */
+  simulatedAvgCost?: number | null;
+  /** Simulated orders, drawn as ghost markers on the last bar */
+  simulatedOrders?: SimulatedOrderMarker[];
+  /** While true a click on the main pane reports its price (chart scale) instead of panning */
+  pickMode?: boolean;
+  onPickPrice?: (chartPrice: number) => void;
+  onPickCancel?: () => void;
   /** Marker highlighted from outside (e.g. the hovered row of the trades list) */
   activeMarkerId?: string | null;
   onMarkerHover?: (id: string | null) => void;
@@ -222,6 +257,11 @@ export function KLineChart({
   drawingsKey,
   markers,
   avgCost = null,
+  simulatedAvgCost = null,
+  simulatedOrders = EMPTY_SIMULATED_ORDERS,
+  pickMode = false,
+  onPickPrice,
+  onPickCancel,
   activeMarkerId = null,
   onMarkerHover,
   focusRequest = null,
@@ -236,6 +276,11 @@ export function KLineChart({
   const markersRef = React.useRef<TradeMarker[]>(markers);
   const chartTypeRef = React.useRef<MonitoringChartType>(chartType);
   const avgCostRef = React.useRef<number | null>(avgCost);
+  const simulatedAvgCostRef = React.useRef<number | null>(simulatedAvgCost);
+  const simulatedOrdersRef = React.useRef<SimulatedOrderMarker[]>(simulatedOrders);
+  const pickModeRef = React.useRef(pickMode);
+  const [pickHover, setPickHover] = React.useState<{ y: number; price: number } | null>(null);
+  const [simHoverId, setSimHoverId] = React.useState<string | null>(null);
   const rafRef = React.useRef<number | null>(null);
 
   const [chartReady, setChartReady] = React.useState(false);
@@ -355,6 +400,7 @@ export function KLineChart({
   }, [removeMeasure]);
 
   const toggleMeasure = () => {
+    if (pickMode) onPickCancel?.();
     if (measureActive) {
       removeMeasure();
       return;
@@ -365,6 +411,7 @@ export function KLineChart({
 
   const startDrawing = (tool: DrawingToolName | null) => {
     const chart = chartRef.current;
+    if (pickMode) onPickCancel?.();
     cancelDrawing();
     removeMeasure();
     if (!chart || tool === null) return;
@@ -509,6 +556,7 @@ export function KLineChart({
         event.preventDefault();
         chartRef.current?.removeOverlay({ id: selectedIdRef.current });
       } else if (event.key === "Escape") {
+        if (pickModeRef.current) return; // handled by the pick-mode listener below
         if (measureIdRef.current) removeMeasure();
         else if (drawingIdRef.current) cancelDrawing();
         else if (pseudoFullscreen) setPseudoFullscreen(false);
@@ -600,20 +648,40 @@ export function KLineChart({
       markers.push({ marker, x, y, edge, tooltipSide: fitsRight ? "right" : "left" });
     }
 
-    let avgCostY: number | null = null;
-    let avgCostEdge: OverlayLayout["avgCostEdge"] = null;
-    const avg = avgCostRef.current;
     const lastBar = barsRef.current[barsRef.current.length - 1];
-    if (avg !== null && lastBar) {
-      const point = toPoint(barTimestampMs(lastBar.time), avg);
-      if (point) {
-        if (point.y < EDGE_PADDING_PX) avgCostEdge = "top";
-        else if (point.y > height - EDGE_PADDING_PX) avgCostEdge = "bottom";
-        avgCostY = clampY(point.y);
+    // Horizontal guide for a price: its clamped y plus the edge it was pinned to, if any.
+    const guideFor = (price: number | null): { y: number | null; edge: OverlayLayout["avgCostEdge"] } => {
+      if (price === null || !lastBar) return { y: null, edge: null };
+      const point = toPoint(barTimestampMs(lastBar.time), price);
+      if (!point) return { y: null, edge: null };
+      const edge =
+        point.y < EDGE_PADDING_PX ? "top" : point.y > height - EDGE_PADDING_PX ? "bottom" : null;
+      return { y: clampY(point.y), edge };
+    };
+    const avg = guideFor(avgCostRef.current);
+    const sim = guideFor(simulatedAvgCostRef.current);
+
+    const simOrders: SimMarkerPosition[] = [];
+    if (lastBar) {
+      const lastTimestamp = barTimestampMs(lastBar.time);
+      for (const order of simulatedOrdersRef.current) {
+        const point = toPoint(lastTimestamp, order.price);
+        if (!point || point.x < 0 || point.x > width) continue;
+        simOrders.push({ order, x: point.x, y: clampY(point.y) });
       }
     }
 
-    setLayout({ width, height, barWidth, markers, avgCostY, avgCostEdge });
+    setLayout({
+      width,
+      height,
+      barWidth,
+      markers,
+      avgCostY: avg.y,
+      avgCostEdge: avg.edge,
+      simulatedAvgCostY: sim.y,
+      simulatedAvgCostEdge: sim.edge,
+      simOrders,
+    });
   }, []);
 
   const schedulePositionUpdate = React.useCallback(() => {
@@ -743,6 +811,41 @@ export function KLineChart({
     avgCostRef.current = avgCost;
     schedulePositionUpdate();
   }, [avgCost, schedulePositionUpdate]);
+
+  // Same for the simulated average-cost line.
+  React.useEffect(() => {
+    simulatedAvgCostRef.current = simulatedAvgCost;
+    schedulePositionUpdate();
+  }, [simulatedAvgCost, schedulePositionUpdate]);
+
+  // Ghost markers of the simulated orders.
+  React.useEffect(() => {
+    simulatedOrdersRef.current = simulatedOrders;
+    schedulePositionUpdate();
+  }, [simulatedOrders, schedulePositionUpdate]);
+
+  // Pick mode: the overlay below swallows the pointer (no drawing or panning meanwhile), starting a
+  // drawing tool or the ruler cancels it, and Esc cancels it too.
+  React.useEffect(() => {
+    pickModeRef.current = pickMode;
+    if (!pickMode) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onPickCancel?.();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pickMode, onPickCancel]);
+
+  const priceAtPointer = (event: React.MouseEvent<HTMLDivElement>) => {
+    const chart = chartRef.current;
+    if (!chart) return null;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const y = event.clientY - rect.top;
+    const raw = chart.convertFromPixel([{ y }], { paneId: MAIN_PANE_ID });
+    const point = Array.isArray(raw) ? raw[0] : raw;
+    const price = point?.value;
+    return typeof price === "number" && Number.isFinite(price) && price > 0 ? { y, price } : null;
+  };
 
   // Scroll the requested trade's bar into view (centred) when it is outside the visible range.
   // The request stays pending until it is applied: when the page widens the range in the same
@@ -1025,6 +1128,18 @@ export function KLineChart({
               opacity={layout.avgCostEdge ? 0.4 : 0.8}
             />
           )}
+          {layout.simulatedAvgCostY !== null && (
+            <line
+              x1={0}
+              x2={layout.width}
+              y1={layout.simulatedAvgCostY}
+              y2={layout.simulatedAvgCostY}
+              stroke={SIMULATED_AVG_COST_COLOR}
+              strokeWidth={1}
+              strokeDasharray="6 4"
+              opacity={layout.simulatedAvgCostEdge ? 0.4 : 0.8}
+            />
+          )}
           {highlighted && highlighted.marker.chartPrice !== null && !highlighted.edge && (
             <line
               x1={highlighted.x}
@@ -1052,6 +1167,24 @@ export function KLineChart({
             {layout.avgCostEdge === "top" && <ArrowUp className="h-3 w-3" aria-hidden />}
             {layout.avgCostEdge === "bottom" && <ArrowDown className="h-3 w-3" aria-hidden />}
             PPC {formatPrice(avgCost)}
+          </div>
+        )}
+
+        {layout.simulatedAvgCostY !== null && simulatedAvgCost !== null && (
+          <div
+            className="pointer-events-none absolute z-[6] inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold text-zinc-950"
+            style={{
+              left: layout.width - 4,
+              top: layout.simulatedAvgCostY,
+              // Below the line (the real PPC label sits above its own), except at the bottom edge.
+              transform:
+                layout.simulatedAvgCostEdge === "bottom" ? "translate(-100%, -105%)" : "translate(-100%, 5%)",
+              backgroundColor: SIMULATED_AVG_COST_COLOR,
+            }}
+          >
+            {layout.simulatedAvgCostEdge === "top" && <ArrowUp className="h-3 w-3" aria-hidden />}
+            {layout.simulatedAvgCostEdge === "bottom" && <ArrowDown className="h-3 w-3" aria-hidden />}
+            PPC sim. {formatPrice(simulatedAvgCost)}
           </div>
         )}
 
@@ -1083,7 +1216,9 @@ export function KLineChart({
                 type="button"
                 className={cn(
                   "absolute flex items-center justify-center",
-                  activeTool === null && !measureActive ? "pointer-events-auto" : "pointer-events-none"
+                  activeTool === null && !measureActive && !pickMode
+                    ? "pointer-events-auto"
+                    : "pointer-events-none"
                 )}
                 style={{
                   left: x,
@@ -1113,6 +1248,82 @@ export function KLineChart({
             );
           })}
         </div>
+
+        {/* Simulated orders: outlined, dashed ghost glyphs on the last bar */}
+        <div className="pointer-events-none absolute inset-0 z-[11]">
+          {layout.simOrders.map(({ order, x, y }, index) => {
+            const meta = markerSideMeta(order.side);
+            const size = Math.max(10, Math.min(14, layout.barWidth));
+            const hovered = simHoverId === order.id;
+            return (
+              <div
+                key={order.id}
+                className={cn(
+                  "absolute flex items-center justify-center",
+                  activeTool === null && !measureActive && !pickMode
+                    ? "pointer-events-auto"
+                    : "pointer-events-none"
+                )}
+                style={{ left: x, top: y, width: 16, height: 16, transform: "translate(-50%, -50%)" }}
+                onMouseEnter={() => setSimHoverId(order.id)}
+                onMouseLeave={() => setSimHoverId((prev) => (prev === order.id ? null : prev))}
+                aria-label={`Orden simulada ${index + 1}`}
+              >
+                <svg viewBox="0 0 10 10" width={size} height={size} style={{ overflow: "visible" }} aria-hidden>
+                  <polygon
+                    points={order.side === "buy" ? "5,0.5 9.5,9.5 0.5,9.5" : "0.5,0.5 9.5,0.5 5,9.5"}
+                    fill={`${meta.color}33`}
+                    stroke={SIMULATED_AVG_COST_COLOR}
+                    strokeWidth={1.4}
+                    strokeDasharray="2 1.5"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                {hovered && (
+                  <span
+                    className="absolute right-full mr-2 whitespace-nowrap rounded-md border border-zinc-800 bg-zinc-950/95 px-2 py-1 font-mono text-[10px] text-zinc-200 shadow-lg"
+                    style={{ top: "50%", transform: "translateY(-50%)" }}
+                  >
+                    <span className="mr-1 text-sky-300">Simulada</span>
+                    <span style={{ color: meta.color }}>{meta.label}</span>{" "}
+                    {order.quantity.toLocaleString("es-AR")} @ {formatPrice(order.price)}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {pickMode && (
+          <div
+            className="absolute left-0 top-0 z-[12] w-full cursor-crosshair"
+            style={{ height: layout.height || "100%" }}
+            onPointerMove={(event) => setPickHover(priceAtPointer(event))}
+            onPointerLeave={() => setPickHover(null)}
+            onClick={(event) => {
+              const picked = priceAtPointer(event);
+              if (picked) onPickPrice?.(picked.price);
+            }}
+          >
+            {pickHover && (
+              <>
+                <div
+                  className="pointer-events-none absolute left-0 w-full border-t border-dashed border-sky-400/80"
+                  style={{ top: pickHover.y }}
+                />
+                <div
+                  className="pointer-events-none absolute rounded-sm bg-sky-400 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-zinc-950"
+                  style={{ left: layout.width, top: pickHover.y, transform: "translateY(-50%)" }}
+                >
+                  {formatPrice(pickHover.price)}
+                </div>
+              </>
+            )}
+            <div className="pointer-events-none absolute left-2 top-2 rounded-md border border-sky-800/60 bg-zinc-950/90 px-2 py-1 text-[11px] text-sky-200">
+              Hacé clic en el gráfico para elegir el precio · Esc para cancelar
+            </div>
+          </div>
+        )}
 
         {highlighted && (
           <TradeMarkerTooltip
