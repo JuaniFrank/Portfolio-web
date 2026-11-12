@@ -1,3 +1,4 @@
+import { adrSymbolFor } from "@/lib/market/adr-map";
 import type { InstrumentType, Settlement } from "@/lib/generated/prisma";
 import type {
   MonitoringAdjustmentPolicy,
@@ -10,6 +11,8 @@ export const DATA912_LIVE_SOURCE = "data912-live";
 export const YAHOO_EOD_SOURCE = "yahoo-eod";
 export const YAHOO_UNDERLYING_EOD_SOURCE = "yahoo-underlying-eod";
 export const FMP_EOD_SOURCE = "fmp-eod";
+/** US ADR of an Argentine stock, stored under the LOCAL instrument id (never clashes with its own series). */
+export const YAHOO_ADR_EOD_SOURCE = "yahoo-adr-eod";
 
 export const MONITORING_SOURCES = [
   DATA912_EOD_SOURCE,
@@ -17,6 +20,7 @@ export const MONITORING_SOURCES = [
   YAHOO_EOD_SOURCE,
   YAHOO_UNDERLYING_EOD_SOURCE,
   FMP_EOD_SOURCE,
+  YAHOO_ADR_EOD_SOURCE,
 ] as const;
 
 export type MonitoringSource = (typeof MONITORING_SOURCES)[number];
@@ -93,6 +97,21 @@ export function resolveMonitoringRouting(
       currency: "USD",
       adjustmentPolicy: "raw",
     };
+  }
+
+  // ADR mode (USD): the US listing of an Argentine stock. Without an ADR it degrades to the
+  // native local routing below.
+  if (isStockAr && seriesKind === "adr") {
+    const adrSymbol = adrSymbolFor(instrument.ticker);
+    if (adrSymbol) {
+      return {
+        provider: "yahoo",
+        source: YAHOO_ADR_EOD_SOURCE,
+        externalSymbol: adrSymbol,
+        currency: "USD",
+        adjustmentPolicy: "raw",
+      };
+    }
   }
 
   // CEDEAR Theoretical mode

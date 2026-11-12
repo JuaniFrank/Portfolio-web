@@ -108,4 +108,39 @@ describe("resolveMonitoringRouting", () => {
       expect(result).toMatchObject({ provider: "yahoo", externalSymbol: "AAPL", currency: "USD" });
     });
   });
+
+  describe("adr kind", () => {
+    const stockAr = { ...base, type: "STOCK_AR" as const };
+
+    it("routes an Argentine stock with an ADR to its Yahoo ADR symbol in USD", () => {
+      expect(resolveMonitoringRouting({ ...stockAr, ticker: "YPFD" }, "adr")).toEqual({
+        provider: "yahoo",
+        source: "yahoo-adr-eod",
+        externalSymbol: "YPF",
+        currency: "USD",
+        adjustmentPolicy: "raw",
+      });
+    });
+
+    it("ignores the preferYahoo flag and the FMP key (the ADR is always Yahoo)", () => {
+      expect(resolveMonitoringRouting({ ...stockAr, ticker: "GGAL" }, "adr", true)).toMatchObject({
+        provider: "yahoo",
+        externalSymbol: "GGAL",
+      });
+    });
+
+    it("falls back to the native local routing when the stock has no ADR", () => {
+      expect(resolveMonitoringRouting({ ...stockAr, ticker: "ALUA" }, "adr")).toMatchObject({
+        provider: "data912",
+        externalSymbol: "ALUA",
+        currency: "ARS",
+      });
+    });
+
+    it("does not apply to non-stock instruments", () => {
+      expect(
+        resolveMonitoringRouting({ ...base, ticker: "GGAL", type: "CEDEAR" }, "adr")
+      ).toMatchObject({ provider: "data912", currency: "ARS" });
+    });
+  });
 });
