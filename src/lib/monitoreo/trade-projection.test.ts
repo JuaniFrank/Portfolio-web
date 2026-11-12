@@ -116,6 +116,55 @@ describe("monitoreo/trade-projection", () => {
     });
   });
 
+  describe("adr", () => {
+    const ctx: TradeProjectionContext = {
+      kind: "adr",
+      currency: "USD",
+      bars: [bar("2026-03-06", 20), bar("2026-03-09", 24)],
+      nativeArsCloses: [
+        { date: "2026-03-06", close: 6000 },
+        { date: "2026-03-09", close: 8000 },
+      ],
+      cclByDate: [{ date: "2026-03-09", rate: 1000 }],
+    };
+
+    it("scales the local ARS price by adr/local closes of the trade date", () => {
+      // 4000 * (24 / 8000) = 12
+      const r = projectTradePrice({ ...arsTrade, price: 4000 }, ctx);
+      expect(r.method).toBe("underlying-factor");
+      expect(r.chartPrice).toBeCloseTo(12, 8);
+    });
+
+    it("lands a trade at the local close exactly on the ADR close", () => {
+      expect(projectTradePrice({ ...arsTrade, price: 8000 }, ctx).chartPrice).toBeCloseTo(24, 8);
+    });
+
+    it("uses the latest earlier bars for a weekend trade date", () => {
+      const r = projectTradePrice({ tradeDate: "2026-03-08", price: 3000, currencyCode: "ARS" }, ctx);
+      // factor from 03-06: 20 / 6000 -> 10
+      expect(r.chartPrice).toBeCloseTo(10, 8);
+    });
+
+    it("converts a USD trade to ARS with CCL first and returns null without it", () => {
+      // 10 USD * 1000 = 10000 ARS * (24 / 8000) = 30
+      expect(projectTradePrice(usdTrade, ctx).chartPrice).toBeCloseTo(30, 8);
+      expect(projectTradePrice(usdTrade, { ...ctx, cclByDate: [] })).toEqual({
+        chartPrice: null,
+        method: null,
+      });
+    });
+
+    it("returns null beyond the lookback or without local closes", () => {
+      expect(
+        projectTradePrice({ tradeDate: "2026-03-15", price: 4000, currencyCode: "ARS" }, ctx)
+      ).toEqual({ chartPrice: null, method: null });
+      expect(projectTradePrice(arsTrade, { ...ctx, nativeArsCloses: [] })).toEqual({
+        chartPrice: null,
+        method: null,
+      });
+    });
+  });
+
   it("returns null for cedear-theoretical", () => {
     expect(projectTradePrice(arsTrade, { ...baseCtx, kind: "cedear-theoretical" })).toEqual({
       chartPrice: null,

@@ -144,7 +144,9 @@ export function projectPreparedTradePrice(
     return MISSING;
   }
 
-  if (ctx.kind === "cedear-underlying") {
+  // Same-day factor: the displayed foreign series (CEDEAR underlying or the ADR of a local
+  // stock) over the instrument's own ARS close of that day.
+  if (ctx.kind === "cedear-underlying" || ctx.kind === "adr") {
     let priceArs: number;
     if (trade.currencyCode === "ARS") {
       priceArs = trade.price;
