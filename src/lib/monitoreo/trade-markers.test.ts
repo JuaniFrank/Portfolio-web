@@ -355,3 +355,38 @@ describe("monitoreo/trade-markers buildPositionSummary across a split", () => {
     expect(s.avgCost).toBeCloseTo(56.6666667, 5);
   });
 });
+
+describe("monitoreo/trade-markers on the ADR view", () => {
+  const adrContext: TradeMarkerContext = {
+    kind: "adr",
+    currency: "USD",
+    nativeArsCloses: [
+      { date: "2026-03-06", close: 6000 },
+      { date: "2026-03-09", close: 8000 },
+    ],
+    cclByDate: [],
+  };
+  const adrBars = [bar("2026-03-06", 20), bar("2026-03-09", 24), bar("2026-03-10", 30)];
+
+  it("anchors trades on the ADR price of their date and derives the PPC in USD", () => {
+    const trades = [
+      trade({ id: "a", tradeDate: "2026-03-06", price: 6000, quantity: 10 }),
+      trade({ id: "b", tradeDate: "2026-03-09", price: 8000, quantity: 10 }),
+    ];
+    const entries = buildTradeEntries(trades, adrBars, adrContext);
+    expect(entries.map((e) => e.chartPrice)).toEqual([20, 24].map((v) => expect.closeTo(v, 8)));
+    expect(entries.every((e) => e.projectionMethod === "underlying-factor")).toBe(true);
+
+    const position = buildPositionSummary(
+      entries.map((e) => ({
+        side: e.side,
+        quantity: e.trade.quantity,
+        chartPrice: e.chartPrice,
+        tradeDate: e.trade.tradeDate,
+      })),
+      30
+    );
+    expect(position.avgCost).toBeCloseTo(22, 8);
+    expect(position.unrealizedPct).toBeCloseTo(((30 - 22) / 22) * 100, 8);
+  });
+});
