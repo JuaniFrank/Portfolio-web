@@ -37,6 +37,7 @@ describe("monitoreo/split-adjustment", () => {
       expect(adjustmentModeForSource("fmp-eod")).toBe("underlying-splits");
       expect(adjustmentModeForSource("yahoo-eod")).toBe("provider");
       expect(adjustmentModeForSource("yahoo-underlying-eod")).toBe("provider");
+      expect(adjustmentModeForSource("yahoo-adr-eod")).toBe("provider");
       expect(adjustmentModeForSource("cedear-theoretical")).toBe("none");
     });
   });

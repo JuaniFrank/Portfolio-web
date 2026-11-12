@@ -6,6 +6,7 @@ import {
   DATA912_LIVE_SOURCE,
   FMP_EOD_SOURCE,
   YAHOO_EOD_SOURCE,
+  YAHOO_ADR_EOD_SOURCE,
   YAHOO_UNDERLYING_EOD_SOURCE,
 } from "@/lib/market/provider-routing";
 import type { AdjustmentEvent, MonitoringAdjustmentPolicy, MonitoringBar } from "./types";
@@ -35,6 +36,7 @@ export function adjustmentModeForSource(source: string): AdjustmentMode {
       return "underlying-splits";
     case YAHOO_EOD_SOURCE:
     case YAHOO_UNDERLYING_EOD_SOURCE:
+    case YAHOO_ADR_EOD_SOURCE:
       return "provider";
     default:
       return "none";
