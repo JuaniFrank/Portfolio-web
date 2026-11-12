@@ -22,9 +22,16 @@ type Data912RawItem = {
   [key: string]: unknown;
 };
 
+export type Data912LiveOptions = {
+  /** Skip the 60 s fetch cache (explicit "refresh"); default behaviour is unchanged */
+  fresh?: boolean;
+  signal?: AbortSignal;
+};
+
 export async function fetchLiveQuoteFromData912(
   ticker: string,
-  type: InstrumentType
+  type: InstrumentType,
+  options: Data912LiveOptions = {}
 ): Promise<Data912LiveQuote | null> {
   const endpoint =
     type === "CEDEAR"
@@ -33,8 +40,11 @@ export async function fetchLiveQuoteFromData912(
 
   try {
     const res = await fetch(endpoint, {
-      next: { revalidate: REVALIDATE_SECONDS, tags: ["data912-live"] },
+      ...(options.fresh
+        ? { cache: "no-store" as const }
+        : { next: { revalidate: REVALIDATE_SECONDS, tags: ["data912-live"] } }),
       headers: { Accept: "application/json" },
+      signal: options.signal,
     });
 
     if (!res.ok) return null;
