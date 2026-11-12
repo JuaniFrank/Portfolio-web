@@ -104,12 +104,23 @@ export type YahooQuote = {
   exchange: string | null;
 };
 
-export async function fetchYahooQuote(symbol: string): Promise<YahooQuote> {
+/**
+ * Última cotización. Por defecto pasa por la caché de datos de Next (5 min), que sirve el
+ * valor vencido mientras revalida: después de un rato sin uso, la primera lectura puede traer
+ * el precio de ayer. `fresh: true` la saltea, para quien ya acota la frecuencia por su cuenta
+ * (p. ej. un reporte cacheado por ventana de tiempo).
+ */
+export async function fetchYahooQuote(
+  symbol: string,
+  options: { fresh?: boolean } = {}
+): Promise<YahooQuote> {
   const url = `${BASE_URL}/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
-  const res = await fetch(url, {
-    headers: COMMON_HEADERS,
-    next: { revalidate: 60 * 5 },
-  });
+  const res = await fetch(
+    url,
+    options.fresh
+      ? { headers: COMMON_HEADERS, cache: "no-store" }
+      : { headers: COMMON_HEADERS, next: { revalidate: 60 * 5 } }
+  );
 
   if (!res.ok) throw new Error(`Yahoo quote ${symbol}: HTTP ${res.status}`);
   const body = (await res.json()) as YahooChartResponse;

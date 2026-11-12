@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { parseYahooHistory } from "./yahoo";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchYahooQuote, parseYahooHistory } from "./yahoo";
 
 // Shape of Yahoo's v8 chart response for SPY on 2026-11-05 after the close: today's bar comes
 // with open/high/low/volume but `close: null` until Yahoo consolidates it; the last trade is
@@ -83,5 +83,40 @@ describe("parseYahooHistory", () => {
 
   it("reads the currency", () => {
     expect(parseYahooHistory("SPY", body({})).currency).toBe("USD");
+  });
+});
+
+describe("fetchYahooQuote cache policy", () => {
+  function stubFetch() {
+    const calls: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        calls.push({ ...init });
+        return new Response(
+          JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 201.5, currency: "USD" } }] } }),
+          { status: 200 }
+        );
+      })
+    );
+    return calls;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("bypasses the data cache when fresh is requested", async () => {
+    const calls = stubFetch();
+    const quote = await fetchYahooQuote("PM", { fresh: true });
+
+    expect(quote.price).toBe(201.5);
+    expect(calls[0]).toMatchObject({ cache: "no-store" });
+    expect(calls[0]).not.toHaveProperty("next");
+  });
+
+  it("keeps the 5-minute revalidation by default", async () => {
+    const calls = stubFetch();
+    await fetchYahooQuote("PM");
+
+    expect(calls[0]).toMatchObject({ next: { revalidate: 300 } });
   });
 });
