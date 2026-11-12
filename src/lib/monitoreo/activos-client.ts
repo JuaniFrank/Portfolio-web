@@ -1,6 +1,7 @@
 import type { SeriesInput } from "@/lib/monitoreo/api-schemas";
+import type { MarketQuote } from "@/lib/monitoreo/load-quote";
 import type { TradeMarkerData } from "@/lib/monitoreo/trade-marker-data";
-import type { MonitoringSeries } from "@/lib/monitoreo/types";
+import type { MonitoringSeries, UiMonitoringSeriesKind } from "@/lib/monitoreo/types";
 
 /**
  * Browser-side calls to the /api/activos route handlers. They return `{ error }` instead of
@@ -58,4 +59,15 @@ export function postHistory(input: SeriesInput): Promise<ApiResult<MonitoringSer
 
 export function fetchTrades(instrumentId: string): Promise<ApiResult<TradeMarkerData>> {
   return request(`/api/activos/trades?${new URLSearchParams({ instrumentId }).toString()}`);
+}
+
+/** Live market price in the chart scale of `kind`; read-only on the server. */
+export function fetchQuote(
+  instrumentId: string,
+  kind: UiMonitoringSeriesKind,
+  signal?: AbortSignal
+): Promise<ApiResult<MarketQuote>> {
+  return request(`/api/activos/quote?${new URLSearchParams({ instrumentId, kind }).toString()}`, {
+    signal,
+  });
 }

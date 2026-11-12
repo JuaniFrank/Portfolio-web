@@ -21,3 +21,9 @@ export type ParsedSeriesInput = z.output<typeof seriesInputSchema>;
 export const tradesInputSchema = z.object({
   instrumentId: z.string().min(1),
 });
+
+/** Query of the quote endpoint (/api/activos/quote). */
+export const quoteInputSchema = z.object({
+  instrumentId: z.string().min(1),
+  kind: z.enum(["native", "cedear-underlying", "cedear-theoretical", "adr"]).default("native"),
+});
