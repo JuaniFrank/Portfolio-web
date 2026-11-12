@@ -22,6 +22,7 @@ import {
   sortInstrumentsPortfolioFirst,
 } from "@/lib/monitoreo/activos-selection";
 import { buildHeaderStats } from "@/lib/monitoreo/asset-stats";
+import { adrSymbolFor } from "@/lib/market/adr-map";
 import { drawingsStorageKey } from "@/lib/monitoreo/drawings-storage";
 import { useStoredBoolean } from "@/lib/ui/use-stored-boolean";
 import { shouldLoadHistory } from "@/lib/monitoreo/history-policy";
@@ -62,7 +63,7 @@ interface MonitoreoPageProps {
 }
 
 function currencyForKind(kind: UiMonitoringSeriesKind): MonitoringCurrency {
-  return kind === "cedear-underlying" ? "USD" : "ARS";
+  return kind === "cedear-underlying" || kind === "adr" ? "USD" : "ARS";
 }
 
 const seriesKey = (instrumentId: string, kind: UiMonitoringSeriesKind, adjusted: boolean) =>
@@ -246,7 +247,9 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
         tradeDate: e.trade.tradeDate,
       })),
       lastClose,
-      tradeAdjustment.gatingEventDates,
+      // The ADR same-day factor takes both closes from the trade date, so later local
+      // events do not break comparability.
+      activeSeries.kind === "adr" ? [] : tradeAdjustment.gatingEventDates,
       // Trade prices are divided by later events only on native series: bring quantities along.
       activeSeries.kind === "native" ? tradeAdjustment.adjustmentEvents : undefined
     );
@@ -315,7 +318,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
     syncUrl(id, nextKind);
   };
 
-  const handleToggleCedearMode = (targetKind: UiMonitoringSeriesKind) => {
+  const handleToggleKind = (targetKind: UiMonitoringSeriesKind) => {
     if (!selectedId || targetKind === kind) return;
     setKind(targetKind);
     showSeries(selectedId, targetKind);
@@ -366,7 +369,15 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
   }
 
   const isCedear = selectedInstrument?.isCedear ?? false;
-  const scaleLabel = kind === "cedear-underlying" ? "Equivalente subyacente" : "Equivalente en el gráfico";
+  // Argentine stocks with a US ADR can switch to it (USD, Yahoo); CEDEARs keep their own toggle.
+  const adrSymbol =
+    selectedInstrument?.type === "STOCK_AR" ? adrSymbolFor(selectedInstrument.ticker) : null;
+  const scaleLabel =
+    kind === "cedear-underlying"
+      ? "Equivalente subyacente"
+      : kind === "adr"
+        ? "Equivalente ADR"
+        : "Equivalente en el gráfico";
   const showTradesList = tradeEntries.length > 0;
   const tradesVisible = showTradesList && !tradesCollapsed;
   const unavailable = activeSeries?.historyStatus === "unavailable" || failedHistoryKeys.has(historyKey);
@@ -411,7 +422,7 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
           <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs">
             <button
               type="button"
-              onClick={() => handleToggleCedearMode("cedear-underlying")}
+              onClick={() => handleToggleKind("cedear-underlying")}
               disabled={isPending}
               className={segmentButton(kind === "cedear-underlying")}
             >
@@ -419,11 +430,33 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
             </button>
             <button
               type="button"
-              onClick={() => handleToggleCedearMode("native")}
+              onClick={() => handleToggleKind("native")}
               disabled={isPending}
               className={segmentButton(kind === "native")}
             >
               ARS CEDEAR
+            </button>
+          </div>
+        )}
+
+        {adrSymbol && (
+          <div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => handleToggleKind("native")}
+              disabled={isPending}
+              className={segmentButton(kind === "native")}
+            >
+              ARS local
+            </button>
+            <button
+              type="button"
+              onClick={() => handleToggleKind("adr")}
+              disabled={isPending}
+              title={`ADR ${adrSymbol} en USD`}
+              className={segmentButton(kind === "adr")}
+            >
+              USD ADR
             </button>
           </div>
         )}
@@ -578,8 +611,9 @@ export function MonitoreoPage({ initialData }: MonitoreoPageProps) {
                   </p>
                   <p className="max-w-sm text-xs text-zinc-500">
                     No encontramos cotizaciones para este activo
-                    {isCedear && kind === "cedear-underlying" ? " en su versión subyacente" : ""}.
-                    {isCedear ? " Probá con la otra vista o " : " Probá "}
+                    {isCedear && kind === "cedear-underlying" ? " en su versión subyacente" : ""}
+                    {kind === "adr" ? " en su versión ADR" : ""}.
+                    {isCedear || adrSymbol ? " Probá con la otra vista o " : " Probá "}
                     con otro activo.
                   </p>
                 </>
