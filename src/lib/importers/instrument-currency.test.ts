@@ -5,6 +5,7 @@ import {
   denominationsFromRows,
   instrumentCurrencyForRow,
   instrumentScopeKey,
+  mergeCatalogDenominations,
 } from "./instrument-currency";
 
 const cedearScope = { ticker: "AAPL", instrumentType: InstrumentType.CEDEAR, venueCode: "BYMA" };
@@ -74,5 +75,78 @@ describe("instrumentCurrencyForRow", () => {
 
   it("falls back to the row's own currency when nothing states the denomination", () => {
     expect(instrumentCurrencyForRow(dividendPaidInUsd, undefined)).toBe("USD");
+  });
+});
+
+describe("fixed income keeps one instrument across trade currencies", () => {
+  const onScope = { ticker: "MCC3O", instrumentType: InstrumentType.ON, venueCode: "BYMA" };
+  const onBuyInUsd = { ...onScope, type: TransactionType.BUY, currencyCode: "USD" };
+  const onSellInArs = { ...onScope, type: TransactionType.SELL, currencyCode: "ARS" };
+
+  it("an ON sold in pesos resolves to the dollar instrument it was bought in", () => {
+    expect(instrumentCurrencyForRow(onSellInArs, "USD")).toBe("USD");
+  });
+
+  it("applies to every fixed-income type", () => {
+    for (const instrumentType of [InstrumentType.BOND_AR, InstrumentType.LETRA]) {
+      expect(instrumentCurrencyForRow({ ...onSellInArs, instrumentType }, "USD")).toBe("USD");
+    }
+  });
+
+  it("an ON trade with no known denomination keeps its own currency", () => {
+    expect(instrumentCurrencyForRow(onSellInArs, undefined)).toBe("ARS");
+  });
+
+  it("a batch with a USD buy and an ARS sell of the same ON states one denomination", () => {
+    const denominations = denominationsFromRows([onBuyInUsd, onSellInArs]);
+    const scopeCurrency = denominations.get(instrumentScopeKey(onScope));
+
+    expect(instrumentCurrencyForRow(onBuyInUsd, scopeCurrency)).toBe("USD");
+    expect(instrumentCurrencyForRow(onSellInArs, scopeCurrency)).toBe("USD");
+  });
+});
+
+describe("mergeCatalogDenominations", () => {
+  const onScope = { ticker: "MCC3O", instrumentType: InstrumentType.ON, venueCode: "BYMA" };
+
+  it("the existing ON outvotes the currency of a later sell in the batch", () => {
+    const batch = new Map([[instrumentScopeKey(onScope), "ARS"]]);
+
+    const merged = mergeCatalogDenominations(batch, [{ ...onScope, currencyCode: "USD" }]);
+
+    expect(merged.get(instrumentScopeKey(onScope))).toBe("USD");
+  });
+
+  it("for equities the trades in the batch still win over the catalog", () => {
+    const batch = new Map([[instrumentScopeKey(cedearScope), "ARS"]]);
+
+    const merged = mergeCatalogDenominations(batch, [{ ...cedearScope, currencyCode: "USD" }]);
+
+    expect(merged.get(instrumentScopeKey(cedearScope))).toBe("ARS");
+  });
+
+  it("fills a scope the batch says nothing about", () => {
+    const merged = mergeCatalogDenominations(new Map(), [{ ...cedearScope, currencyCode: "ARS" }]);
+
+    expect(merged.get(instrumentScopeKey(cedearScope))).toBe("ARS");
+  });
+
+  it("trusts no catalog currency when the scope already holds two", () => {
+    const batch = new Map([[instrumentScopeKey(onScope), "ARS"]]);
+
+    const merged = mergeCatalogDenominations(batch, [
+      { ...onScope, currencyCode: "USD" },
+      { ...onScope, currencyCode: "ARS" },
+    ]);
+
+    expect(merged.get(instrumentScopeKey(onScope))).toBe("ARS");
+  });
+
+  it("does not mutate the batch map", () => {
+    const batch = new Map<string, string>();
+
+    mergeCatalogDenominations(batch, [{ ...onScope, currencyCode: "USD" }]);
+
+    expect(batch.size).toBe(0);
   });
 });
