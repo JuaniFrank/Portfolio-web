@@ -13,6 +13,7 @@ import {
   denominationsFromRows,
   instrumentCurrencyForRow,
   instrumentScopeKey,
+  mergeCatalogDenominations,
   type DenominationRow,
 } from "./instrument-currency";
 
@@ -85,8 +86,8 @@ async function resolveInstrumentsBatch(
   }
 
   const idByKey = new Map<string, string>();
-  const currencyByScope = denominationsFromRows(candidates);
-  if (candidates.length === 0) return { idByKey, currencyByScope };
+  const batchCurrencyByScope = denominationsFromRows(candidates);
+  if (candidates.length === 0) return { idByKey, currencyByScope: batchCurrencyByScope };
 
   const tickers = [...new Set(candidates.map((c) => c.ticker))];
   const existing = await db.instrument.findMany({ where: { ticker: { in: tickers } } });
@@ -102,22 +103,18 @@ async function resolveInstrumentsBatch(
     );
   }
 
-  // A catalog row states its own denomination, but only trust it when the scope
-  // holds exactly one — otherwise a phantom row from a past import could outvote
-  // the trades in this batch, which already won above.
-  const catalogCurrencies = new Map<string, Set<string>>();
-  for (const inst of existing) {
-    const scope = instrumentScopeKey({
+  // A catalog row states its own denomination (trusted only when its scope holds
+  // exactly one). For fixed income it outvotes the batch, so a sale paid in another
+  // currency lands on the instrument it closes.
+  const currencyByScope = mergeCatalogDenominations(
+    batchCurrencyByScope,
+    existing.map((inst) => ({
       ticker: inst.ticker,
       instrumentType: inst.type,
       venueCode: inst.venueCode,
-    });
-    catalogCurrencies.set(scope, (catalogCurrencies.get(scope) ?? new Set()).add(inst.currencyCode));
-  }
-  for (const [scope, currencies] of catalogCurrencies) {
-    if (currencyByScope.has(scope) || currencies.size !== 1) continue;
-    currencyByScope.set(scope, [...currencies][0]!);
-  }
+      currencyCode: inst.currencyCode,
+    }))
+  );
 
   const wanted = new Map<
     string,
