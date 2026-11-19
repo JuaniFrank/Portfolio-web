@@ -15,3 +15,14 @@ export function userReportTag(userId: string): string {
 export function reportTagsFor(userId: string): string[] {
   return [userReportTag(userId), ALL_REPORTS_TAG];
 }
+
+/**
+ * Time window of a cached report, as a cache key part. `unstable_cache` serves an expired
+ * entry while it revalidates in the background (stale-while-revalidate), so after an idle
+ * period the first visit would get the previous visit's report — prices included, possibly
+ * from the day before. Keying by window makes the TTL hard: an entry from an earlier window
+ * is never read again and the first visit of a new window computes a fresh report.
+ */
+export function reportCacheBucket(nowMs: number, windowSeconds: number): string {
+  return String(Math.floor(nowMs / (windowSeconds * 1000)));
+}
