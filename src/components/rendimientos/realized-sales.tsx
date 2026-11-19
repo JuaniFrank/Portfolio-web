@@ -31,12 +31,28 @@ function formatOriginalPrice(value: number | null, basis: "USD" | "ARS"): string
   return value === null ? EMPTY_VALUE : formatMoney(value, basis);
 }
 
-/** Señal de re-entrada: la acción original hoy cotiza por debajo de donde la vendiste. */
-function ReentryBadge({ pctVsSale }: { pctVsSale: number | null }) {
+const VS_SALE_TONES = {
+  below: {
+    title: "La acción original cotiza hoy por debajo del cierre del día en que vendiste: posible re-entrada",
+    className: "border-sky-500/30 bg-sky-500/10 text-sky-400",
+  },
+  above: {
+    title:
+      "La acción original cotiza hoy por encima del cierre del día en que vendiste: es el rendimiento que dejaste de ganar al vender",
+    className: "border-amber-500/30 bg-amber-500/10 text-amber-400",
+  },
+} as const;
+
+/**
+ * Precio actual de la acción original contra el cierre del día de la venta. Debajo es una
+ * señal de re-entrada; arriba, el rendimiento perdido por haber vendido.
+ */
+function VsSaleBadge({ pctVsSale }: { pctVsSale: number }) {
+  const tone = VS_SALE_TONES[pctVsSale < 0 ? "below" : "above"];
   return (
     <span
-      title="La acción original cotiza hoy por debajo del cierre del día en que vendiste"
-      className="mt-0.5 flex w-fit items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 text-[9px] font-medium uppercase tracking-wide text-sky-400 ml-auto"
+      title={tone.title}
+      className={`mt-0.5 ml-auto flex w-fit items-center rounded-full border px-1.5 text-[9px] font-medium uppercase tracking-wide ${tone.className}`}
     >
       {formatSignedPercentOrEmpty(pctVsSale)} vs tu venta
     </span>
@@ -130,7 +146,7 @@ export function RealizedSales({
                 </Th>
                 <Th
                   align="right"
-                  hint="Precio actual de la acción original, en su moneda de origen. La etiqueta aparece cuando hoy cotiza por debajo del cierre del día en que vendiste."
+                  hint="Precio actual de la acción original, en su moneda de origen. La etiqueta la compara con el cierre del día en que vendiste: en celeste si hoy cotiza más abajo (posible re-entrada), en ámbar si cotiza más arriba (rendimiento que dejaste de ganar)."
                 >
                   Actual orig.
                 </Th>
@@ -198,7 +214,9 @@ export function RealizedSales({
                     </Td>
                     <Td align="right" className="text-zinc-200">
                       {original ? formatOriginalPrice(original.currentPrice, original.basis) : EMPTY_VALUE}
-                      {original?.belowSale ? <ReentryBadge pctVsSale={original.pctVsSale} /> : null}
+                      {original?.pctVsSale != null && original.pctVsSale !== 0 ? (
+                        <VsSaleBadge pctVsSale={original.pctVsSale} />
+                      ) : null}
                       {original &&
                       hasReachedTarget(targets[sale.instrumentId] ?? [], original.currentPrice, original.basis) ? (
                         <TargetReachedBadge />
