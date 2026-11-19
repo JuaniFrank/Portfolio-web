@@ -3,7 +3,7 @@ import { loadPortfolioEvolution } from "@/lib/dashboard/evolution-data";
 import type { PortfolioEvolution } from "@/lib/dashboard/evolution";
 import { buildPerformanceReport } from "@/lib/rendimientos/series";
 import type { PerformanceReport } from "@/lib/rendimientos/types";
-import { ALL_REPORTS_TAG, reportTagsFor, userReportTag } from "./report-tags";
+import { ALL_REPORTS_TAG, reportCacheBucket, reportTagsFor, userReportTag } from "./report-tags";
 
 /**
  * Per-user cache for the heavy /rendimientos computations.
@@ -15,6 +15,10 @@ import { ALL_REPORTS_TAG, reportTagsFor, userReportTag } from "./report-tags";
  *
  * Both results are plain JSON (strings/numbers/null, no Decimal or Date), so the JSON
  * round-trip the cache performs is lossless. A throwing loader is never cached.
+ *
+ * The key carries the current time window (`reportCacheBucket`) so the TTL is hard: without
+ * it, an expired entry is still served once while it revalidates, which showed the previous
+ * day's prices on the first visit after an idle period.
  */
 const REPORT_REVALIDATE_SECONDS = 300;
 
@@ -25,7 +29,13 @@ export function getCachedPerformanceReport(
 ): Promise<PerformanceReport> {
   return unstable_cache(
     () => buildPerformanceReport({ portfolioIds: [portfolioId], portfolioName }),
-    ["rendimientos-report", userId, portfolioId, portfolioName],
+    [
+      "rendimientos-report",
+      userId,
+      portfolioId,
+      portfolioName,
+      reportCacheBucket(Date.now(), REPORT_REVALIDATE_SECONDS),
+    ],
     { revalidate: REPORT_REVALIDATE_SECONDS, tags: reportTagsFor(userId) }
   )();
 }
@@ -36,7 +46,12 @@ export function getCachedPortfolioEvolution(
 ): Promise<PortfolioEvolution> {
   return unstable_cache(
     () => loadPortfolioEvolution([portfolioId]),
-    ["rendimientos-evolution", userId, portfolioId],
+    [
+      "rendimientos-evolution",
+      userId,
+      portfolioId,
+      reportCacheBucket(Date.now(), REPORT_REVALIDATE_SECONDS),
+    ],
     { revalidate: REPORT_REVALIDATE_SECONDS, tags: reportTagsFor(userId) }
   )();
 }

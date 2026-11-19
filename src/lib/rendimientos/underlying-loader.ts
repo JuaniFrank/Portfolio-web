@@ -67,7 +67,9 @@ export async function loadUnderlyingMarket(
       const from = new Date(startOfDay(firstTrade) - HISTORY_MARGIN_DAYS * MS_PER_DAY);
       const [history, quote] = await Promise.allSettled([
         fetchYahooHistory(symbol, { from, to }, { revalidateSeconds: HISTORY_REVALIDATE_SECONDS }),
-        fetchYahooQuote(symbol),
+        // Fresh: the report around this is cached by time window, which already bounds how
+        // often this runs; the data cache would add a second, stale-while-revalidate layer.
+        fetchYahooQuote(symbol, { fresh: true }),
       ]);
 
       // Solo USD: una cotización en otra moneda no es comparable con el costo en dólares.
